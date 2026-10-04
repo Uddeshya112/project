@@ -168,7 +168,7 @@ async function runTestSuite() {
     const res = await fetch(`${BASE_URL}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'nonexistent.user@thapar.edu', password: 'Thapar2026!' }),
+      body: JSON.stringify({ email: 'nonexistent.user@thapar.edu', password: 'ThaparInstitute@2026!' }),
     });
     const data = await res.json();
     assert(res.status === 401 && data.success === false, 'Auth API', 'Nonexistent user returns HTTP 401 with generic message');
@@ -182,7 +182,7 @@ async function runTestSuite() {
     const res = await fetch(`${BASE_URL}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'kn.murthy@thapar.edu', password: 'Thapar2026!' }),
+      body: JSON.stringify({ email: 'kn.murthy@thapar.edu', password: 'ThaparInstitute@2026!' }),
     });
     const data = await res.json();
     coordinatorToken = data.token;
@@ -205,7 +205,7 @@ async function runTestSuite() {
     const res = await fetch(`${BASE_URL}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'aarav.m@thapar.edu', password: 'Thapar2026!' }),
+      body: JSON.stringify({ email: 'aarav.m@thapar.edu', password: 'ThaparInstitute@2026!' }),
     });
     const data = await res.json();
     studentToken = data.token;

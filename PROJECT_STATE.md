@@ -18,7 +18,7 @@
 | **Layer 5** | APIs & Backend Logic | **VERIFIED** | Supabase-backed REST endpoints with standard error codes and rate limiting documented in `/docs/api-conventions.md`. |
 | **Layer 6** | Frontend & UI/UX | **VERIFIED** | Thapar University design system, zero-pill discipline, loading/empty/error states across all views. |
 | **Layer 7** | CI/CD & Deploy | **VERIFIED** | Deployment & rollback runbooks in `/docs/runbooks/deploy.md` and `/docs/runbooks/rollback.md`. |
-| **Layer 8** | Testing | **VERIFIED** | 37/37 automated E2E & backend test assertions passing (`npm test`). |
+| **Layer 8** | Testing | **VERIFIED** | 51/51 automated E2E & backend test assertions passing (`npm test`). |
 | **Layer 9** | Hosting & Cloud | **VERIFIED** | Express 5 + Node 22 LTS container on Google Cloud Run with environment configuration. |
 | **Layer 10** | Security | **VERIFIED** | Threat model in `/docs/security/threat-model.md`, security headers, CSRF state protection. |
 | **Layer 11** | Rate Limiting | **VERIFIED** | Token-bucket rate limiter on login, forgot-password, and OAuth initiation endpoints. |
@@ -34,7 +34,7 @@
 
 - **TypeScript Compilation (`npm run lint` / `tsc --noEmit`)**: **0 Errors**
 - **Production Asset Build (`npm run build` / `compile_applet`)**: **Passed**
-- **Automated E2E Test Suite (`npm test`)**: **37 Passed / 0 Failed**
+- **Automated E2E Test Suite (`npm test`)**: **51 Passed / 0 Failed**
   - Monitoring & Health checks: 2/2 passed
   - Bcrypt & Scrypt KDF migration security: 5/5 passed
   - Auth API validations & Sessions: 11/11 passed

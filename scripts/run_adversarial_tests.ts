@@ -36,7 +36,7 @@ async function runAdversarialSuite() {
   const studentLoginRes = await fetch(`${BASE_URL}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: 'aarav.m@thapar.edu', password: 'Thapar2026!' }),
+    body: JSON.stringify({ email: 'aarav.m@thapar.edu', password: 'ThaparInstitute@2026!' }),
   });
   const studentData = await studentLoginRes.json();
   const studentToken = studentData.token;
@@ -45,7 +45,7 @@ async function runAdversarialSuite() {
   const facultyLoginRes = await fetch(`${BASE_URL}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: 'a.sharma@thapar.edu', password: 'Thapar2026!' }),
+    body: JSON.stringify({ email: 'a.sharma@thapar.edu', password: 'ThaparInstitute@2026!' }),
   });
   const facultyData = await facultyLoginRes.json();
   const facultyToken = facultyData.token;
@@ -54,7 +54,7 @@ async function runAdversarialSuite() {
   const coordLoginRes = await fetch(`${BASE_URL}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: 'kn.murthy@thapar.edu', password: 'Thapar2026!' }),
+    body: JSON.stringify({ email: 'kn.murthy@thapar.edu', password: 'ThaparInstitute@2026!' }),
   });
   const coordData = await coordLoginRes.json();
   const coordToken = coordData.token;
@@ -63,7 +63,7 @@ async function runAdversarialSuite() {
   const adminLoginRes = await fetch(`${BASE_URL}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: 'dean@thapar.edu', password: 'Thapar2026!' }),
+    body: JSON.stringify({ email: 'dean@thapar.edu', password: 'ThaparInstitute@2026!' }),
   });
   const adminData = await adminLoginRes.json();
   const adminToken = adminData.token;

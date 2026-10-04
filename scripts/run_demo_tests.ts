@@ -112,12 +112,12 @@ async function runDemoAudit() {
   }
 
   // 3. Bcrypt Password Verification with Standard Password
-  console.log('\n--- 3. Testing Standard Credentials Login (Demo@2026!) ---');
+  console.log('\n--- 3. Testing Standard Credentials Login (ThaparDemo@2026Test!) ---');
   const standardLoginRes = await request('POST', '/api/auth/login', {
     email: 'coordinator.demo@demo.thapar.local',
-    password: 'Demo@2026!',
+    password: 'ThaparDemo@2026Test!',
   });
-  assert(standardLoginRes.status === 200, 'Coordinator demo logs in with password Demo@2026! via /api/auth/login');
+  assert(standardLoginRes.status === 200, 'Coordinator demo logs in with password ThaparDemo@2026Test! via /api/auth/login');
   assert(standardLoginRes.body?.user?.isDemoUser === true, 'Returned user object maintains isDemoUser=true');
 
   const wrongPassRes = await request('POST', '/api/auth/login', {
@@ -178,9 +178,9 @@ async function runDemoAudit() {
   // Verify that Demo password is intact after reset
   const afterResetLogin = await request('POST', '/api/auth/login', {
     email: 'coordinator.demo@demo.thapar.local',
-    password: 'Demo@2026!',
+    password: 'ThaparDemo@2026Test!',
   });
-  assert(afterResetLogin.status === 200, 'Coordinator demo can log in with Demo@2026! after dataset reset');
+  assert(afterResetLogin.status === 200, 'Coordinator demo can log in with ThaparDemo@2026Test! after dataset reset');
 
   console.log('\n================================================================');
   console.log('DEMO AUDIT RESULT: ALL TESTS PASSED');

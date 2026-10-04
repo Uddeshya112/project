@@ -173,7 +173,7 @@ const usersDatabase: Map<string, StoredUser> = new Map([
       id: 'usr-murthy',
       name: 'Dr. K. N. Murthy',
       email: 'kn.murthy@thapar.edu',
-      passwordHash: hashPasswordBcrypt('Thapar2026!'),
+      passwordHash: hashPasswordBcrypt('ThaparInstitute@2026!'),
       roleId: 'role-coordinator',
       roleCode: 'COORDINATOR',
       roleName: 'Timetable Coordinator',
@@ -191,7 +191,7 @@ const usersDatabase: Map<string, StoredUser> = new Map([
       id: 'usr-sharma',
       name: 'Prof. Arvind Sharma',
       email: 'a.sharma@thapar.edu',
-      passwordHash: hashPasswordBcrypt('Thapar2026!'),
+      passwordHash: hashPasswordBcrypt('ThaparInstitute@2026!'),
       roleId: 'role-faculty',
       roleCode: 'FACULTY',
       roleName: 'Faculty Member',
@@ -209,7 +209,7 @@ const usersDatabase: Map<string, StoredUser> = new Map([
       id: 'usr-gupta',
       name: 'Dr. Priya Gupta',
       email: 'p.gupta@thapar.edu',
-      passwordHash: hashPasswordBcrypt('Thapar2026!'),
+      passwordHash: hashPasswordBcrypt('ThaparInstitute@2026!'),
       roleId: 'role-faculty',
       roleCode: 'FACULTY',
       roleName: 'Faculty Member',
@@ -227,7 +227,7 @@ const usersDatabase: Map<string, StoredUser> = new Map([
       id: 'usr-roy',
       name: 'Prof. Sunita Roy',
       email: 's.roy@thapar.edu',
-      passwordHash: hashPasswordBcrypt('Thapar2026!'),
+      passwordHash: hashPasswordBcrypt('ThaparInstitute@2026!'),
       roleId: 'role-hod',
       roleCode: 'HOD',
       roleName: 'Head of Department',
@@ -245,7 +245,7 @@ const usersDatabase: Map<string, StoredUser> = new Map([
       id: 'usr-dean',
       name: 'Dr. Vikram Sengupta',
       email: 'dean@thapar.edu',
-      passwordHash: hashPasswordBcrypt('Thapar2026!'),
+      passwordHash: hashPasswordBcrypt('ThaparInstitute@2026!'),
       roleId: 'role-admin',
       roleCode: 'COLLEGE_ADMIN',
       roleName: 'College Admin / Dean',
@@ -263,7 +263,7 @@ const usersDatabase: Map<string, StoredUser> = new Map([
       id: 'usr-aarav',
       name: 'Aarav Mehta',
       email: 'aarav.m@thapar.edu',
-      passwordHash: hashPasswordBcrypt('Thapar2026!'),
+      passwordHash: hashPasswordBcrypt('ThaparInstitute@2026!'),
       roleId: 'role-student',
       roleCode: 'STUDENT',
       roleName: 'Student',
@@ -281,7 +281,7 @@ const usersDatabase: Map<string, StoredUser> = new Map([
       id: 'usr-demo-coordinator',
       name: 'Prof. Rajesh K. Demo (Coordinator)',
       email: 'coordinator.demo@demo.thapar.local',
-      passwordHash: hashPasswordBcrypt('Demo@2026!'),
+      passwordHash: hashPasswordBcrypt('ThaparDemo@2026Test!'),
       roleId: 'role-coordinator',
       roleCode: 'COORDINATOR',
       roleName: 'Timetable Coordinator',
@@ -300,7 +300,7 @@ const usersDatabase: Map<string, StoredUser> = new Map([
       id: 'usr-demo-faculty',
       name: 'Dr. Neha Agarwal (Faculty)',
       email: 'faculty.demo@demo.thapar.local',
-      passwordHash: hashPasswordBcrypt('Demo@2026!'),
+      passwordHash: hashPasswordBcrypt('ThaparDemo@2026Test!'),
       roleId: 'role-faculty',
       roleCode: 'FACULTY',
       roleName: 'Faculty Member',
@@ -319,7 +319,7 @@ const usersDatabase: Map<string, StoredUser> = new Map([
       id: 'usr-demo-student',
       name: 'Rohan Sharma (Student)',
       email: 'student.demo@demo.thapar.local',
-      passwordHash: hashPasswordBcrypt('Demo@2026!'),
+      passwordHash: hashPasswordBcrypt('ThaparDemo@2026Test!'),
       roleId: 'role-student',
       roleCode: 'STUDENT',
       roleName: 'Student',
@@ -338,7 +338,7 @@ const usersDatabase: Map<string, StoredUser> = new Map([
       id: 'usr-demo-admin',
       name: 'Dr. Vikram Sengupta (Dean/Admin)',
       email: 'admin.demo@demo.thapar.local',
-      passwordHash: hashPasswordBcrypt('Demo@2026!'),
+      passwordHash: hashPasswordBcrypt('ThaparDemo@2026Test!'),
       roleId: 'role-admin',
       roleCode: 'COLLEGE_ADMIN',
       roleName: 'College Admin / Dean',
@@ -357,7 +357,7 @@ const usersDatabase: Map<string, StoredUser> = new Map([
       id: 'usr-demo-hod',
       name: 'Dr. Sunita Rao (HOD)',
       email: 'hod.demo@demo.thapar.local',
-      passwordHash: hashPasswordBcrypt('Demo@2026!'),
+      passwordHash: hashPasswordBcrypt('ThaparDemo@2026Test!'),
       roleId: 'role-hod',
       roleCode: 'HOD',
       roleName: 'Head of Department',
@@ -485,7 +485,7 @@ async function ensureSupabaseAuthUsers() {
 
     // 3. Seed users into auth.users and public.profiles
     for (const [email, user] of usersDatabase.entries()) {
-      const defaultPassword = user.isDemoUser ? 'Demo@2026!' : 'Thapar2026!';
+      const defaultPassword = user.isDemoUser ? 'ThaparDemo@2026Test!' : 'ThaparInstitute@2026!';
       const existing = existingMap.get(email.toLowerCase());
 
       let authId = user.id;
@@ -1043,7 +1043,7 @@ app.post('/api/auth/demo-login', async (req: Request, res: Response) => {
   if (supabaseAnon) {
     const { data: authData, error: authErr } = await supabaseAnon.auth.signInWithPassword({
       email: targetEmail,
-      password: 'Demo@2026!',
+      password: 'ThaparDemo@2026Test!',
     });
     if (!authErr && authData?.session?.access_token) {
       sessionToken = authData.session.access_token;
@@ -1128,7 +1128,7 @@ app.post('/api/demo/reset', requireAuth, (req: AuthenticatedRequest, res: Respon
   for (const email of demoAccounts) {
     const user = usersDatabase.get(email);
     if (user) {
-      user.passwordHash = hashPasswordBcrypt('Demo@2026!');
+      user.passwordHash = hashPasswordBcrypt('ThaparDemo@2026Test!');
       user.status = 'ACTIVE';
       usersDatabase.set(email, user);
     }
