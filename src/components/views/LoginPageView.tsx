@@ -439,10 +439,10 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
         {errorMessage && (
           <div
             role="alert"
-            className="mb-4 p-3 bg-rose-50/70 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 rounded-xl text-rose-800 dark:text-rose-300 text-xs flex items-start gap-2.5"
+            className="mb-4 p-3 bg-rose-50/80 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900/60 rounded-xl text-rose-800 dark:text-rose-300 text-xs flex items-start gap-2.5 shadow-2xs"
           >
             <AlertCircle className="h-4 w-4 shrink-0 text-[#8C1B2E] dark:text-red-400 mt-0.5" />
-            <span className="leading-relaxed">{errorMessage}</span>
+            <span className="leading-relaxed font-medium block">{errorMessage}</span>
           </div>
         )}
 
@@ -749,10 +749,6 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
               <p className="text-xs text-stone-500 dark:text-zinc-400">
                 Create your institutional account
               </p>
-            </div>
-
-            <div className="p-2.5 rounded-lg bg-[#F4F2EC] dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 text-[11px] text-stone-600 dark:text-zinc-400 text-center mb-4 leading-relaxed">
-              🔒 Staff & Faculty Portal — Accounts require pre-authorization by the Dean's Office.
             </div>
 
             <form onSubmit={handleRegisterSubmit} autoComplete="off" className="space-y-3.5">

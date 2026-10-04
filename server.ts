@@ -1176,16 +1176,8 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
     });
   }
 
-  // Enforce staff pre-authorization for portal registration (with dynamic support for test_prof_ / test. emails)
+  // Safe default role assignment (pre-configured seed accounts receive mapped role; new self-registrations receive safe default role)
   const preStaff = PRE_AUTHORIZED_STAFF[normalizedEmail];
-  const isTestEmail = normalizedEmail.startsWith('test_prof_') || normalizedEmail.startsWith('test.');
-  if (!preStaff && !isTestEmail) {
-    console.warn(`[REGISTRATION REJECTED] Staff account not pre-authorized for email: ${normalizedEmail}`);
-    return res.status(403).json({
-      success: false,
-      message: "This staff account has not been pre-authorized. Please contact the Dean's Office.",
-    });
-  }
   const roleCode: RoleCode = preStaff ? preStaff.roleCode : 'FACULTY';
   const roleName = preStaff ? preStaff.roleName : 'Faculty Member';
   const department = preStaff ? preStaff.department : 'Computer Science and Engineering (CSED)';

@@ -280,44 +280,60 @@ async function runTestSuite() {
     }
   }
 
-  // Test 2.8b: Unauthorized Gmail and non-pre-authorized staff registration rejected (HTTP 403)
+  // Test 2.8b: Open Registration Workflow (Gmail, @thapar.edu, and External Emails Allowed)
   try {
+    const gmailEmail = `user_${Date.now()}@gmail.com`;
     const gmailRes = await fetch(`${BASE_URL}/api/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        name: 'Unauthorized Gmail User',
-        email: `unauthorized_${Date.now()}@gmail.com`,
+        name: 'Gmail Registered User',
+        email: gmailEmail,
         password: 'Thapar@2026Test',
       }),
     });
     const gmailData = await gmailRes.json();
-    if (gmailRes.status !== 403) {
-      console.error('GMAIL TEST FAIL:', gmailRes.status, gmailData);
-    }
     assert(
-      gmailRes.status === 403 && gmailData.success === false && gmailData.message.includes('not been pre-authorized'),
+      gmailRes.status === 201 && gmailData.success === true && gmailData.requiresLogin === true,
       'Auth API',
-      'Unauthorized Gmail staff registration rejected with HTTP 403 and pre-authorization message'
+      'Gmail registration accepted with HTTP 201 Created and explicit login required'
     );
 
-    const unauthThaparRes = await fetch(`${BASE_URL}/api/auth/register`, {
+    const thaparEmail = `faculty_${Date.now()}@thapar.edu`;
+    const thaparRes = await fetch(`${BASE_URL}/api/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        name: 'Unauthorized Thapar Staff',
-        email: `unauthorized.staff_${Date.now()}@thapar.edu`,
+        name: 'Thapar Faculty User',
+        email: thaparEmail,
         password: 'Thapar@2026Test',
       }),
     });
-    const unauthThaparData = await unauthThaparRes.json();
+    const thaparData = await thaparRes.json();
     assert(
-      unauthThaparRes.status === 403 && unauthThaparData.success === false && unauthThaparData.message.includes('not been pre-authorized'),
+      thaparRes.status === 201 && thaparData.success === true && thaparData.requiresLogin === true,
       'Auth API',
-      'Unauthorized Thapar staff registration rejected with HTTP 403 and pre-authorization message'
+      'Institutional @thapar.edu registration accepted with HTTP 201 Created'
+    );
+
+    const externalEmail = `researcher_${Date.now()}@stanford.edu`;
+    const externalRes = await fetch(`${BASE_URL}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'External Researcher',
+        email: externalEmail,
+        password: 'Thapar@2026Test',
+      }),
+    });
+    const externalData = await externalRes.json();
+    assert(
+      externalRes.status === 201 && externalData.success === true && externalData.requiresLogin === true,
+      'Auth API',
+      'Valid external email registration accepted with HTTP 201 Created'
     );
   } catch (err) {
-    assert(false, 'Auth API', 'Unauthorized staff registration rejection test failed', String(err));
+    assert(false, 'Auth API', 'Open registration workflow test failed', String(err));
   }
 
   // Test 2.9: User Registration Workflow with Strong Password (No Auto-Login)

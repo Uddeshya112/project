@@ -415,7 +415,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setCurrentUserId(null);
         return {
           success: false,
-          message: data.message || 'Registration failed.',
+          message:
+            data.message ||
+            (resp.status === 403
+              ? "This staff account has not been pre-authorized. Please contact the Dean's Office."
+              : resp.status === 409
+              ? 'An account with this email already exists. Please sign in instead.'
+              : resp.status === 400
+              ? 'Invalid registration request or weak password.'
+              : 'Registration could not be completed. Please try again later.'),
         };
       }
     } catch {
