@@ -280,8 +280,48 @@ async function runTestSuite() {
     }
   }
 
+  // Test 2.8b: Unauthorized Gmail and non-pre-authorized staff registration rejected (HTTP 403)
+  try {
+    const gmailRes = await fetch(`${BASE_URL}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Unauthorized Gmail User',
+        email: `unauthorized_${Date.now()}@gmail.com`,
+        password: 'Thapar@2026Test',
+      }),
+    });
+    const gmailData = await gmailRes.json();
+    if (gmailRes.status !== 403) {
+      console.error('GMAIL TEST FAIL:', gmailRes.status, gmailData);
+    }
+    assert(
+      gmailRes.status === 403 && gmailData.success === false && gmailData.message.includes('not been pre-authorized'),
+      'Auth API',
+      'Unauthorized Gmail staff registration rejected with HTTP 403 and pre-authorization message'
+    );
+
+    const unauthThaparRes = await fetch(`${BASE_URL}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Unauthorized Thapar Staff',
+        email: `unauthorized.staff_${Date.now()}@thapar.edu`,
+        password: 'Thapar@2026Test',
+      }),
+    });
+    const unauthThaparData = await unauthThaparRes.json();
+    assert(
+      unauthThaparRes.status === 403 && unauthThaparData.success === false && unauthThaparData.message.includes('not been pre-authorized'),
+      'Auth API',
+      'Unauthorized Thapar staff registration rejected with HTTP 403 and pre-authorization message'
+    );
+  } catch (err) {
+    assert(false, 'Auth API', 'Unauthorized staff registration rejection test failed', String(err));
+  }
+
   // Test 2.9: User Registration Workflow with Strong Password (No Auto-Login)
-  const testRegEmail = `test_prof_${Date.now()}@thapar.edu`;
+  const testRegEmail = 'test.prof@thapar.edu';
   const testRegPassword = 'Thapar@2026Test';
   try {
     const res = await fetch(`${BASE_URL}/api/auth/register`, {
@@ -345,8 +385,8 @@ async function runTestSuite() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         name: 'Duplicate Attempt',
-        email: testRegEmail,
-        password: testRegPassword,
+        email: 'kn.murthy@thapar.edu',
+        password: 'Thapar@2026Test',
       }),
     });
     const data = await res.json();

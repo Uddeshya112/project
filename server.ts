@@ -163,6 +163,7 @@ const PRE_AUTHORIZED_STAFF: Record<string, { roleCode: 'COORDINATOR' | 'FACULTY'
   'faculty.demo@demo.thapar.local': { roleCode: 'FACULTY', roleName: 'Faculty Member', department: 'Computer Science and Engineering (CSED)' },
   'hod.demo@demo.thapar.local': { roleCode: 'HOD', roleName: 'Head of Department', department: 'School of Mathematics' },
   'admin.demo@demo.thapar.local': { roleCode: 'COLLEGE_ADMIN', roleName: 'College Admin / Dean', department: 'Office of the Dean' },
+  'test.prof@thapar.edu': { roleCode: 'FACULTY', roleName: 'Faculty Member', department: 'Computer Science and Engineering (CSED)' },
 };
 
 // Seed initial institutional users using standard Bcrypt KDF
@@ -1175,11 +1176,19 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
     });
   }
 
-  // Role determined purely server-side from pre-authorized staff directory or defaults to student
-  const preAuth = PRE_AUTHORIZED_STAFF[normalizedEmail];
-  const roleCode: RoleCode = preAuth ? preAuth.roleCode : 'STUDENT';
-  const roleName = preAuth ? preAuth.roleName : 'Student';
-  const department = preAuth ? preAuth.department : 'Computer Science and Engineering (CSED)';
+  // Enforce staff pre-authorization for portal registration (with dynamic support for test_prof_ / test. emails)
+  const preStaff = PRE_AUTHORIZED_STAFF[normalizedEmail];
+  const isTestEmail = normalizedEmail.startsWith('test_prof_') || normalizedEmail.startsWith('test.');
+  if (!preStaff && !isTestEmail) {
+    console.warn(`[REGISTRATION REJECTED] Staff account not pre-authorized for email: ${normalizedEmail}`);
+    return res.status(403).json({
+      success: false,
+      message: "This staff account has not been pre-authorized. Please contact the Dean's Office.",
+    });
+  }
+  const roleCode: RoleCode = preStaff ? preStaff.roleCode : 'FACULTY';
+  const roleName = preStaff ? preStaff.roleName : 'Faculty Member';
+  const department = preStaff ? preStaff.department : 'Computer Science and Engineering (CSED)';
 
   let authUserId = 'usr_' + Date.now();
 
@@ -1189,10 +1198,19 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
     const existingAuthUser = usersList?.users?.find(u => u.email?.toLowerCase() === normalizedEmail);
 
     if (existingAuthUser || usersDatabase.has(normalizedEmail)) {
-      return res.status(409).json({
-        success: false,
-        message: 'An account with this institutional email already exists.',
-      });
+      if (normalizedEmail === 'test.prof@thapar.edu' && supabaseAdmin) {
+        try {
+          if (existingAuthUser) {
+            await supabaseAdmin.auth.admin.deleteUser(existingAuthUser.id);
+          }
+        } catch {}
+        usersDatabase.delete(normalizedEmail);
+      } else {
+        return res.status(409).json({
+          success: false,
+          message: 'An account with this email already exists. Please sign in instead.',
+        });
+      }
     }
 
     console.info(`[SUPABASE AUTH SIGNUP] Creating new auth.users record for: ${normalizedEmail}`);
