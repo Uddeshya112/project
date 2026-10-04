@@ -1,0 +1,8 @@
+{
+  "name": "Thapar Institute of Engineering and Technology Timetable",
+  "description": "Thapar Institute of Engineering and Technology - Centralized Academic Timetabling & Schedule Operations Portal.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "name": "intellischedule",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx server.ts",
+    "build": "vite build",
+    "lint": "tsc --noEmit",
+    "test": "tsx scripts/run_e2e_tests.ts",
+    "test:demo": "tsx scripts/run_demo_tests.ts",
+    "test:security": "tsx scripts/run_adversarial_tests.ts",
+    "test:solver": "tsx scripts/run_solver_tests.ts",
+    "benchmark": "tsx scripts/run_password_benchmarks.ts",
+    "start": "tsx server.ts",
+    "preview": "vite preview --port 3000 --host 0.0.0.0"
+  },
+  "dependencies": {
+    "@google/genai": "^2.4.0",
+    "@supabase/supabase-js": "^2.117.2",
+    "@types/bcryptjs": "^3.0.0",
+    "bcryptjs": "^3.0.3",
+    "clsx": "^2.1.1",
+    "date-fns": "^4.1.0",
+    "dotenv": "^18.0.5",
+    "express": "^5.2.1",
+    "lucide-react": "^0.546.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwind-merge": "^3.0.2",
+    "tsx": "^4.23.15",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.13.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.1.0"
+  }
+}
