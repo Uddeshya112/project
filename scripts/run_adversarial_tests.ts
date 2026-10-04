@@ -280,10 +280,15 @@ async function runAdversarialSuite() {
   recordTest(adminPub.status === 200, 'Authorized Role', 'Admin / Dean successfully publishes master timetable', adminPub.status, 200);
 
   // 7.3 Faculty cancels class session for recovery
+  // Fetch active session from bootstrap to guarantee valid session ID
+  const bootstrapRes = await fetch(`${BASE_URL}/api/academic/bootstrap`);
+  const bootstrapData = await bootstrapRes.json();
+  const sessionToCancel = bootstrapData.activeSessions?.find((s: any) => s.status !== 'Cancelled')?.id || 'sess-mon-2';
+
   const facultyCancel = await fetch(`${BASE_URL}/api/recovery/cancel-class`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${facultyToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionId: 'sess-cs501-mon', reason: 'Conference Attendance' }),
+    body: JSON.stringify({ sessionId: sessionToCancel, reason: 'Conference Attendance' }),
   });
   recordTest(facultyCancel.status === 200, 'Authorized Role', 'Faculty successfully initiates class cancellation', facultyCancel.status, 200);
 
