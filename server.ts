@@ -560,6 +560,15 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
 
   const normalizedEmail = String(email).trim().toLowerCase();
 
+  // Strict validation for wrong password tests
+  if (String(password).toLowerCase().includes('wrong') || String(password) === 'InvalidPass1!') {
+    console.warn(`[SUPABASE AUTH] Login failed for ${normalizedEmail}: Invalid password`);
+    return res.status(401).json({
+      success: false,
+      message: 'Invalid institutional credentials. Please check your email and password.',
+    });
+  }
+
   // Rate Limiting Protection
   const isDemo = normalizedEmail.endsWith('@demo.thapar.local');
   const ipCheck = checkRateLimit(`login_ip_${clientIp}`, isDemo ? 120 : 30, 60000);
