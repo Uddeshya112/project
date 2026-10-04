@@ -585,8 +585,9 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
   }
 
   // 1. Authoritative Supabase Auth Verification
-  if (supabaseAnon) {
-    const { data: authData, error: authError } = await supabaseAnon.auth.signInWithPassword({
+  const authClient = supabaseAnon || supabaseAdmin;
+  if (authClient) {
+    const { data: authData, error: authError } = await authClient.auth.signInWithPassword({
       email: normalizedEmail,
       password: String(password),
     });
@@ -604,14 +605,42 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
 
     let user = usersDatabase.get(normalizedEmail);
     if (!user) {
+      // Look up profile from Supabase profiles table
+      let profileRoleCode: RoleCode | undefined;
+      let profileDepartment: string | undefined;
+      let profileName: string | undefined;
+
+      if (supabaseAdmin) {
+        try {
+          const { data: profile } = await supabaseAdmin.from('profiles').select('*').eq('id', authUser.id).single();
+          if (profile) {
+            profileRoleCode = profile.role_code as RoleCode;
+            profileDepartment = profile.department;
+            profileName = profile.name;
+          }
+        } catch {}
+      }
+
       const preAuth = PRE_AUTHORIZED_STAFF[normalizedEmail];
-      const roleCode: RoleCode = preAuth ? preAuth.roleCode : 'STUDENT';
-      const roleName = preAuth ? preAuth.roleName : 'Student';
-      const department = preAuth ? preAuth.department : 'Computer Science and Engineering (CSED)';
+      const roleCode: RoleCode =
+        profileRoleCode ||
+        (authUser.user_metadata?.roleCode as RoleCode) ||
+        (preAuth ? preAuth.roleCode : 'FACULTY');
+      const roleName =
+        (authUser.user_metadata?.roleName as string) ||
+        (roleCode === 'COORDINATOR' ? 'Timetable Coordinator' : roleCode === 'FACULTY' ? 'Faculty Member' : 'Student');
+      const department =
+        profileDepartment ||
+        (authUser.user_metadata?.department as string) ||
+        (preAuth ? preAuth.department : 'Computer Science and Engineering (CSED)');
+      const name =
+        profileName ||
+        (authUser.user_metadata?.name as string) ||
+        normalizedEmail.split('@')[0].toUpperCase();
 
       user = {
         id: authUser.id,
-        name: (authUser.user_metadata?.name as string) || normalizedEmail.split('@')[0].toUpperCase(),
+        name,
         email: normalizedEmail,
         passwordHash: 'SUPABASE_AUTH_MANAGED',
         roleId: 'role-' + roleCode.toLowerCase(),
@@ -806,6 +835,63 @@ app.get('/api/auth/me', async (req: Request, res: Response) => {
       foundUser = user;
       break;
     }
+  }
+
+  if (!foundUser && supabaseAdmin) {
+    try {
+      const { data: userData } = await supabaseAdmin.auth.getUser(token);
+      if (userData?.user) {
+        const authUser = userData.user;
+        const normalizedEmail = authUser.email?.toLowerCase() || '';
+
+        let profileRoleCode: RoleCode | undefined;
+        let profileDepartment: string | undefined;
+        let profileName: string | undefined;
+
+        const { data: profile } = await supabaseAdmin.from('profiles').select('*').eq('id', authUser.id).single();
+        if (profile) {
+          profileRoleCode = profile.role_code as RoleCode;
+          profileDepartment = profile.department;
+          profileName = profile.name;
+        }
+
+        const preAuth = PRE_AUTHORIZED_STAFF[normalizedEmail];
+        const roleCode: RoleCode =
+          profileRoleCode ||
+          (authUser.user_metadata?.roleCode as RoleCode) ||
+          (preAuth ? preAuth.roleCode : 'FACULTY');
+        const roleName =
+          (authUser.user_metadata?.roleName as string) ||
+          (roleCode === 'COORDINATOR' ? 'Timetable Coordinator' : roleCode === 'FACULTY' ? 'Faculty Member' : 'Student');
+        const department =
+          profileDepartment ||
+          (authUser.user_metadata?.department as string) ||
+          (preAuth ? preAuth.department : 'Computer Science and Engineering (CSED)');
+        const name =
+          profileName ||
+          (authUser.user_metadata?.name as string) ||
+          normalizedEmail.split('@')[0].toUpperCase();
+
+        foundUser = {
+          id: authUser.id,
+          name,
+          email: normalizedEmail,
+          passwordHash: 'SUPABASE_AUTH_MANAGED',
+          roleId: 'role-' + roleCode.toLowerCase(),
+          roleCode,
+          roleName,
+          institutionId: 'inst-thapar',
+          institutionName: 'Thapar Institute of Engineering and Technology',
+          department,
+          status: 'ACTIVE',
+          createdAt: new Date().toISOString(),
+          isDemoUser: Boolean(authUser.user_metadata?.isDemoUser),
+        };
+        if (normalizedEmail) {
+          usersDatabase.set(normalizedEmail, foundUser);
+        }
+      }
+    } catch {}
   }
 
   if (!foundUser) {
@@ -1220,9 +1306,20 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
 
     if (createError || !createData?.user) {
       console.error(`[SUPABASE AUTH SIGNUP ERROR] Failed to create auth.users: ${createError?.message}`);
-      return res.status(400).json({
+      const errMsg = createError?.message || '';
+      const isDuplicate =
+        errMsg.toLowerCase().includes('already') ||
+        errMsg.toLowerCase().includes('exists') ||
+        errMsg.toLowerCase().includes('registered') ||
+        errMsg.toLowerCase().includes('duplicate') ||
+        createError?.status === 422 ||
+        createError?.status === 409;
+
+      return res.status(isDuplicate ? 409 : 400).json({
         success: false,
-        message: createError?.message || 'Failed to create user account in Supabase Auth.',
+        message: isDuplicate
+          ? 'An account with this email already exists. Please sign in instead.'
+          : errMsg || 'Failed to create user account in Supabase Auth.',
       });
     }
 
