@@ -249,8 +249,40 @@ async function runTestSuite() {
     assert(false, 'Auth API', 'Unauthenticated check failed', String(err));
   }
 
-  // Test 2.8: User Registration Workflow
+  // Test 2.8: Strong Password Policy & Weak Password Rejection
+  const weakPasswords = [
+    'password',
+    'Password',
+    'Password123',
+    'password123!',
+    'PASSWORD123!',
+  ];
+
+  for (const weakPwd of weakPasswords) {
+    try {
+      const res = await fetch(`${BASE_URL}/api/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Weak Password Tester',
+          email: `weak_${Date.now()}_${Math.random().toString(36).slice(2, 6)}@thapar.edu`,
+          password: weakPwd,
+        }),
+      });
+      const data = await res.json();
+      assert(
+        res.status === 400 && data.success === false,
+        'Auth API',
+        `Weak password "${weakPwd}" rejected by institutional password policy (HTTP 400)`
+      );
+    } catch (err) {
+      assert(false, 'Auth API', `Weak password test failed for "${weakPwd}"`, String(err));
+    }
+  }
+
+  // Test 2.9: User Registration Workflow with Strong Password (No Auto-Login)
   const testRegEmail = `test_prof_${Date.now()}@thapar.edu`;
+  const testRegPassword = 'Thapar@2026Test';
   try {
     const res = await fetch(`${BASE_URL}/api/auth/register`, {
       method: 'POST',
@@ -258,20 +290,55 @@ async function runTestSuite() {
       body: JSON.stringify({
         name: 'Dr. Test Professor',
         email: testRegEmail,
-        password: 'ValidPassword2026!',
+        password: testRegPassword,
       }),
     });
     const data = await res.json();
     assert(
-      res.status === 201 && data.success === true && Boolean(data.token),
+      res.status === 201 && data.success === true && !data.token && data.requiresLogin === true,
       'Auth API',
-      'New user registration succeeds and returns authenticated session with scrypt hash'
+      'New user registration succeeds without automatic login token (explicit login required)'
+    );
+
+    // Verify unauthenticated state immediately after registration
+    const meCheck = await fetch(`${BASE_URL}/api/auth/me`);
+    const meData = await meCheck.json();
+    assert(
+      meCheck.status === 401 && meData.authenticated === false,
+      'Auth API',
+      'Registration does not create authenticated session or auto-login the user'
+    );
+
+    // Verify wrong password fails on new account
+    const wrongLoginRes = await fetch(`${BASE_URL}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: testRegEmail, password: 'WrongPassword99!' }),
+    });
+    const wrongLoginData = await wrongLoginRes.json();
+    assert(
+      wrongLoginRes.status === 401 && wrongLoginData.success === false,
+      'Auth API',
+      'Newly registered account rejects wrong password with HTTP 401'
+    );
+
+    // Verify correct password succeeds on new account
+    const correctLoginRes = await fetch(`${BASE_URL}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: testRegEmail, password: testRegPassword }),
+    });
+    const correctLoginData = await correctLoginRes.json();
+    assert(
+      correctLoginRes.status === 200 && correctLoginData.success === true && Boolean(correctLoginData.token),
+      'Auth API',
+      'Newly registered account authenticates successfully with correct password'
     );
   } catch (err) {
-    assert(false, 'Auth API', 'Registration test failed', String(err));
+    assert(false, 'Auth API', 'Registration test flow failed', String(err));
   }
 
-  // Test 2.9: Duplicate Registration Prevention
+  // Test 2.10: Duplicate Registration Prevention
   try {
     const res = await fetch(`${BASE_URL}/api/auth/register`, {
       method: 'POST',
@@ -279,7 +346,7 @@ async function runTestSuite() {
       body: JSON.stringify({
         name: 'Duplicate Attempt',
         email: testRegEmail,
-        password: 'ValidPassword2026!',
+        password: testRegPassword,
       }),
     });
     const data = await res.json();
@@ -288,7 +355,7 @@ async function runTestSuite() {
     assert(false, 'Auth API', 'Duplicate registration check failed', String(err));
   }
 
-  // Test 2.10: Password Reset Flow (Forgot -> Validate -> Reset -> Login)
+  // Test 2.11: Password Reset Flow (Forgot -> Validate -> Reset -> Login)
   try {
     // Step A: Request Reset
     const forgotRes = await fetch(`${BASE_URL}/api/auth/forgot-password`, {
@@ -309,7 +376,15 @@ async function runTestSuite() {
     const valData = await valRes.json();
     assert(valRes.status === 200 && valData.valid === true, 'Auth API', 'Reset token validation succeeds');
 
-    // Step C: Reset Password
+    // Step C: Weak reset password rejection
+    const weakResetRes = await fetch(`${BASE_URL}/api/auth/reset-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, newPassword: 'weak' }),
+    });
+    assert(weakResetRes.status === 400, 'Auth API', 'Weak password reset rejected by password policy');
+
+    // Step D: Reset Password with Strong Password
     const resetRes = await fetch(`${BASE_URL}/api/auth/reset-password`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -318,7 +393,7 @@ async function runTestSuite() {
     const resetData = await resetRes.json();
     assert(resetRes.status === 200 && resetData.success === true, 'Auth API', 'Password reset executes and invalidates token');
 
-    // Step D: Verify Login with New Password
+    // Step E: Verify Login with New Password
     const newLoginRes = await fetch(`${BASE_URL}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

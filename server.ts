@@ -4,11 +4,13 @@ import type { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import {
   hashPasswordBcrypt,
   hashPasswordScrypt,
   verifyPassword,
   hashPasswordLegacy,
+  evaluatePasswordPolicy,
   BCRYPT_SALT_ROUNDS,
 } from './src/lib/passwordUtils';
 import { executeOptimizationEngine, compileSchedulingProblem } from './src/lib/optimizationEngine';
@@ -28,6 +30,38 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const port = process.env.PORT || 3000;
+
+// Initialize Server-side Supabase Clients
+const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
+const supabaseServiceKey =
+  process.env.SUPABASE_SECRET_KEY ||
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  '';
+const supabaseAnonKey =
+  process.env.SUPABASE_PUBLISHABLE_KEY ||
+  process.env.SUPABASE_ANON_KEY ||
+  process.env.VITE_SUPABASE_ANON_KEY ||
+  '';
+
+export const supabaseAdmin: SupabaseClient | null =
+  supabaseUrl && supabaseServiceKey
+    ? createClient(supabaseUrl, supabaseServiceKey, {
+        auth: { autoRefreshToken: false, persistSession: false },
+      })
+    : null;
+
+export const supabaseAnon: SupabaseClient | null =
+  supabaseUrl && supabaseAnonKey
+    ? createClient(supabaseUrl, supabaseAnonKey, {
+        auth: { autoRefreshToken: false, persistSession: false },
+      })
+    : null;
+
+if (supabaseAdmin) {
+  console.info('[SUPABASE AUTH] Connected to Supabase Auth Authority at ' + supabaseUrl);
+} else {
+  console.warn('[SUPABASE AUTH] Service role key missing; operating in local mode.');
+}
 
 // Security Middleware: Headers
 app.use((_req: Request, res: Response, next: NextFunction) => {
@@ -417,10 +451,102 @@ app.post('/api/test/reset-rate-limits', (_req: Request, res: Response) => {
   return res.json({ success: true, message: 'Rate limit buckets cleared.' });
 });
 
+// Ensure Supabase Auth users on server startup
+async function ensureSupabaseAuthUsers() {
+  if (!supabaseAdmin) return;
+  try {
+    const { data: usersList } = await supabaseAdmin.auth.admin.listUsers();
+    const existingMap = new Map((usersList?.users || []).map(u => [u.email?.toLowerCase(), u]));
+
+    // 1. Ensure institution exists in Supabase
+    await supabaseAdmin.from('institutions').upsert({
+      id: 'inst-thapar',
+      name: 'Thapar Institute of Engineering and Technology',
+      code: 'TIET',
+      domain: 'thapar.edu',
+      status: 'ACTIVE',
+      location: 'Patiala, Punjab',
+      established_year: 1956,
+    });
+
+    // 2. Ensure roles exist
+    const defaultRoles = [
+      { id: 'role-super_admin', code: 'SUPER_ADMIN', name: 'Super Administrator' },
+      { id: 'role-college_admin', code: 'COLLEGE_ADMIN', name: 'Dean / Administrator' },
+      { id: 'role-coordinator', code: 'COORDINATOR', name: 'Timetable Coordinator' },
+      { id: 'role-hod', code: 'HOD', name: 'Head of Department' },
+      { id: 'role-faculty', code: 'FACULTY', name: 'Faculty Member' },
+      { id: 'role-class_representative', code: 'CLASS_REPRESENTATIVE', name: 'Class Representative' },
+      { id: 'role-student', code: 'STUDENT', name: 'Student' },
+    ];
+    for (const r of defaultRoles) {
+      await supabaseAdmin.from('roles').upsert(r);
+    }
+
+    // 3. Seed users into auth.users and public.profiles
+    for (const [email, user] of usersDatabase.entries()) {
+      const defaultPassword = user.isDemoUser ? 'Demo@2026!' : 'Thapar2026!';
+      const existing = existingMap.get(email.toLowerCase());
+
+      let authId = user.id;
+      if (!existing) {
+        const { data: created } = await supabaseAdmin.auth.admin.createUser({
+          email: user.email,
+          password: defaultPassword,
+          email_confirm: true,
+          user_metadata: {
+            name: user.name,
+            roleCode: user.roleCode,
+            roleName: user.roleName,
+            department: user.department,
+            isDemoUser: Boolean(user.isDemoUser),
+          },
+        });
+        if (created?.user) {
+          authId = created.user.id;
+          user.id = authId;
+        }
+      } else {
+        authId = existing.id;
+        user.id = authId;
+        await supabaseAdmin.auth.admin.updateUserById(existing.id, {
+          password: defaultPassword,
+          email_confirm: true,
+          user_metadata: {
+            name: user.name,
+            roleCode: user.roleCode,
+            roleName: user.roleName,
+            department: user.department,
+            isDemoUser: Boolean(user.isDemoUser),
+          },
+        });
+      }
+
+      // Upsert profile in Supabase public.profiles
+      await supabaseAdmin.from('profiles').upsert({
+        id: authId,
+        email: user.email,
+        name: user.name,
+        institution_id: 'inst-thapar',
+        department: user.department,
+        role_code: user.roleCode,
+        role_name: user.roleName,
+        authorized_workspaces: resolveWorkspacesForUser(user),
+        is_demo_user: Boolean(user.isDemoUser),
+        status: user.status,
+      });
+    }
+
+    console.info('[SUPABASE AUTH] Synchronized baseline institutional and demo users into auth.users and public.profiles.');
+  } catch (err: any) {
+    console.warn('[SUPABASE AUTH] User bootstrap sync notice:', err?.message || err);
+  }
+}
+
 // -------------------------------------------------------------
-// POST /api/auth/login (Institutional Email + Password)
+// POST /api/auth/login (Authoritative Supabase Auth Verification)
 // -------------------------------------------------------------
-app.post('/api/auth/login', (req: Request, res: Response) => {
+app.post('/api/auth/login', async (req: Request, res: Response) => {
   const clientIp = req.ip || req.socket.remoteAddress || '127.0.0.1';
   const { email, password } = req.body;
 
@@ -434,7 +560,7 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
 
   const normalizedEmail = String(email).trim().toLowerCase();
 
-  // Rate Limiting Protection (per IP and per Account, relaxed for demo accounts in test environments)
+  // Rate Limiting Protection
   const isDemo = normalizedEmail.endsWith('@demo.thapar.local');
   const ipCheck = checkRateLimit(`login_ip_${clientIp}`, isDemo ? 120 : 30, 60000);
   const accountCheck = checkRateLimit(`login_acc_${normalizedEmail}`, isDemo ? 120 : 15, 60000);
@@ -448,9 +574,112 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
     });
   }
 
-  const user = usersDatabase.get(normalizedEmail);
+  // 1. Authoritative Supabase Auth Verification
+  if (supabaseAnon) {
+    const { data: authData, error: authError } = await supabaseAnon.auth.signInWithPassword({
+      email: normalizedEmail,
+      password: String(password),
+    });
 
-  // Safe non-enumerating error message
+    if (authError || !authData?.user || !authData?.session) {
+      console.warn(`[SUPABASE AUTH] Login failed for ${normalizedEmail}: ${authError?.message || 'Invalid credentials'}`);
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid institutional credentials. Please check your email and password.',
+      });
+    }
+
+    const authUser = authData.user;
+    const sessionToken = authData.session.access_token || ('jwt_live_' + crypto.randomBytes(32).toString('hex'));
+
+    let user = usersDatabase.get(normalizedEmail);
+    if (!user) {
+      const preAuth = PRE_AUTHORIZED_STAFF[normalizedEmail];
+      const roleCode: RoleCode = preAuth ? preAuth.roleCode : 'STUDENT';
+      const roleName = preAuth ? preAuth.roleName : 'Student';
+      const department = preAuth ? preAuth.department : 'Computer Science and Engineering (CSED)';
+
+      user = {
+        id: authUser.id,
+        name: (authUser.user_metadata?.name as string) || normalizedEmail.split('@')[0].toUpperCase(),
+        email: normalizedEmail,
+        passwordHash: 'SUPABASE_AUTH_MANAGED',
+        roleId: 'role-' + roleCode.toLowerCase(),
+        roleCode,
+        roleName,
+        institutionId: 'inst-thapar',
+        institutionName: 'Thapar Institute of Engineering and Technology',
+        department,
+        status: 'ACTIVE',
+        createdAt: new Date().toISOString(),
+        isDemoUser: Boolean(authUser.user_metadata?.isDemoUser),
+      };
+      usersDatabase.set(normalizedEmail, user);
+    } else {
+      user.id = authUser.id;
+    }
+
+    // Upsert public profile
+    if (supabaseAdmin) {
+      await supabaseAdmin.from('profiles').upsert({
+        id: authUser.id,
+        email: normalizedEmail,
+        name: user.name,
+        institution_id: 'inst-thapar',
+        department: user.department,
+        role_code: user.roleCode,
+        role_name: user.roleName,
+        authorized_workspaces: resolveWorkspacesForUser(user),
+        is_demo_user: Boolean(user.isDemoUser),
+        status: user.status,
+      });
+    }
+
+    // Generate session
+    const session: StoredSession = {
+      id: 'sess_' + Date.now(),
+      userId: user.id,
+      token: sessionToken,
+      roleCode: user.roleCode,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      isRevoked: false,
+    };
+    sessionsDatabase.set(sessionToken, session);
+
+    res.cookie('intellischedule_session', sessionToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 24 * 60 * 60 * 1000,
+      path: '/',
+    });
+
+    const roleKey = mapRoleCodeToDashboard(user.roleCode);
+    const authorizedWorkspaces = resolveWorkspacesForUser(user);
+
+    return res.json({
+      success: true,
+      message: `Welcome, ${user.name}`,
+      token: sessionToken,
+      role: roleKey,
+      roleCode: user.roleCode,
+      roleName: user.roleName,
+      authorizedWorkspaces,
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        department: user.department,
+        institution: user.institutionName,
+        authorizedWorkspaces,
+        isDemoUser: Boolean(user.isDemoUser),
+      },
+    });
+  }
+
+  // Fallback if Supabase not configured in local testing
+  const user = usersDatabase.get(normalizedEmail);
   if (!user) {
     return res.status(401).json({
       success: false,
@@ -465,7 +694,7 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
     });
   }
 
-  const { isValid, needsRehash, detectedAlgorithm } = verifyPassword(String(password), user.passwordHash);
+  const { isValid } = verifyPassword(String(password), user.passwordHash);
   if (!isValid) {
     return res.status(401).json({
       success: false,
@@ -473,15 +702,6 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
     });
   }
 
-  // Automatic seamless migration to modern Bcrypt KDF if user logged in with legacy hash
-  if (needsRehash) {
-    const upgradedHash = hashPasswordBcrypt(String(password));
-    user.passwordHash = upgradedHash;
-    usersDatabase.set(normalizedEmail, user);
-    console.log(`[AUTH_MIGRATION] Transparently upgraded user ${normalizedEmail} password hash from ${detectedAlgorithm} to bcrypt (cost ${BCRYPT_SALT_ROUNDS})`);
-  }
-
-  // Generate secure cryptographic session token
   const sessionToken = 'jwt_live_' + crypto.randomBytes(32).toString('hex');
   const session: StoredSession = {
     id: 'sess_' + Date.now(),
@@ -494,7 +714,6 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
   };
   sessionsDatabase.set(sessionToken, session);
 
-  // Set HttpOnly, SameSite=Lax Session Cookie
   res.cookie('intellischedule_session', sessionToken, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
@@ -529,7 +748,7 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
 // -------------------------------------------------------------
 // GET /api/auth/me (Session Verification)
 // -------------------------------------------------------------
-app.get('/api/auth/me', (req: Request, res: Response) => {
+app.get('/api/auth/me', async (req: Request, res: Response) => {
   const token =
     req.headers.authorization?.replace(/^Bearer\s+/, '') ||
     (req.headers.cookie?.match(/intellischedule_session=([^;]+)/)?.[1]);
@@ -538,7 +757,34 @@ app.get('/api/auth/me', (req: Request, res: Response) => {
     return res.status(401).json({ authenticated: false });
   }
 
-  const session = sessionsDatabase.get(token);
+  let session = sessionsDatabase.get(token);
+
+  // If a session exists in cache and is revoked, reject immediately
+  if (session && session.isRevoked) {
+    return res.status(401).json({ authenticated: false });
+  }
+
+  let authUserId = session?.userId;
+
+  // If not in memory session cache and token looks like a Supabase JWT, verify with Supabase Auth
+  if (!session && supabaseAdmin && token.startsWith('eyJ')) {
+    const { data: userData, error: userError } = await supabaseAdmin.auth.getUser(token);
+    if (!userError && userData?.user) {
+      authUserId = userData.user.id;
+      // create session in memory cache
+      session = {
+        id: 'sess_' + Date.now(),
+        userId: authUserId,
+        token,
+        roleCode: 'STUDENT',
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        isRevoked: false,
+      };
+      sessionsDatabase.set(token, session);
+    }
+  }
+
   if (!session || session.isRevoked || new Date(session.expiresAt) < new Date()) {
     return res.status(401).json({ authenticated: false });
   }
@@ -580,15 +826,31 @@ app.get('/api/auth/me', (req: Request, res: Response) => {
 // -------------------------------------------------------------
 // POST /api/auth/logout
 // -------------------------------------------------------------
-app.post('/api/auth/logout', (req: Request, res: Response) => {
+app.post('/api/auth/logout', async (req: Request, res: Response) => {
   const token =
     req.headers.authorization?.replace(/^Bearer\s+/, '') ||
     (req.headers.cookie?.match(/intellischedule_session=([^;]+)/)?.[1]);
 
-  if (token && sessionsDatabase.has(token)) {
-    const session = sessionsDatabase.get(token)!;
-    session.isRevoked = true;
-    sessionsDatabase.set(token, session);
+  if (token) {
+    let session = sessionsDatabase.get(token);
+    if (session) {
+      session.isRevoked = true;
+      sessionsDatabase.set(token, session);
+    } else {
+      sessionsDatabase.set(token, {
+        id: 'sess_revoked_' + Date.now(),
+        userId: 'revoked_token',
+        token,
+        roleCode: 'STUDENT',
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        isRevoked: true,
+      });
+    }
+  }
+
+  if (supabaseAnon) {
+    await supabaseAnon.auth.signOut().catch(() => {});
   }
 
   res.clearCookie('intellischedule_session', { path: '/' });
@@ -749,7 +1011,7 @@ app.get('/api/demo/status', (_req: Request, res: Response) => {
 // -------------------------------------------------------------
 // POST /api/auth/demo-login (Server-Authoritative Demo Authentication)
 // -------------------------------------------------------------
-app.post('/api/auth/demo-login', (req: Request, res: Response) => {
+app.post('/api/auth/demo-login', async (req: Request, res: Response) => {
   const isDemoEnabled = process.env.PUBLIC_DEMO_ENABLED !== 'false';
   if (!isDemoEnabled) {
     return res.status(403).json({
@@ -775,6 +1037,20 @@ app.post('/api/auth/demo-login', (req: Request, res: Response) => {
     });
   }
 
+  let sessionToken = 'jwt_demo_' + crypto.randomBytes(32).toString('hex');
+  let authUserId: string | undefined = undefined;
+
+  if (supabaseAnon) {
+    const { data: authData, error: authErr } = await supabaseAnon.auth.signInWithPassword({
+      email: targetEmail,
+      password: 'Demo@2026!',
+    });
+    if (!authErr && authData?.session?.access_token) {
+      sessionToken = authData.session.access_token;
+      authUserId = authData.user?.id;
+    }
+  }
+
   const user = usersDatabase.get(targetEmail);
   if (!user || !user.isDemoUser) {
     return res.status(404).json({
@@ -783,8 +1059,10 @@ app.post('/api/auth/demo-login', (req: Request, res: Response) => {
     });
   }
 
-  // Issue real session token identical to standard authentication
-  const sessionToken = 'jwt_demo_' + crypto.randomBytes(32).toString('hex');
+  if (authUserId) {
+    user.id = authUserId;
+  }
+
   const session: StoredSession = {
     id: 'sess_demo_' + Date.now(),
     userId: user.id,
@@ -864,9 +1142,9 @@ app.post('/api/demo/reset', requireAuth, (req: AuthenticatedRequest, res: Respon
 });
 
 // -------------------------------------------------------------
-// POST /api/auth/register
+// POST /api/auth/register (Authoritative Supabase Auth Signup)
 // -------------------------------------------------------------
-app.post('/api/auth/register', (req: Request, res: Response) => {
+app.post('/api/auth/register', async (req: Request, res: Response) => {
   const { name, email, password } = req.body;
 
   if (!name || !email || !password) {
@@ -878,28 +1156,84 @@ app.post('/api/auth/register', (req: Request, res: Response) => {
 
   const normalizedEmail = String(email).trim().toLowerCase();
 
-  if (usersDatabase.has(normalizedEmail)) {
-    return res.status(409).json({
-      success: false,
-      message: 'An account with this institutional email already exists.',
-    });
-  }
-
-  if (String(password).length < 8) {
+  // Enforce strong password policy: 12+ chars, uppercase, lowercase, number, special character
+  const pwdCheck = evaluatePasswordPolicy(String(password));
+  if (!pwdCheck.isValid) {
     return res.status(400).json({
       success: false,
-      message: 'Password must be at least 8 characters long.',
+      message: `Password does not meet institutional security requirements: ${pwdCheck.errors.join(', ')}.`,
+      errors: pwdCheck.errors,
     });
   }
 
   // Role determined purely server-side from pre-authorized staff directory or defaults to student
   const preAuth = PRE_AUTHORIZED_STAFF[normalizedEmail];
-  const roleCode = preAuth ? preAuth.roleCode : 'STUDENT';
+  const roleCode: RoleCode = preAuth ? preAuth.roleCode : 'STUDENT';
   const roleName = preAuth ? preAuth.roleName : 'Student';
   const department = preAuth ? preAuth.department : 'Computer Science and Engineering (CSED)';
 
+  let authUserId = 'usr_' + Date.now();
+
+  // 1. Authoritative Registration in Supabase Auth
+  if (supabaseAdmin) {
+    const { data: usersList } = await supabaseAdmin.auth.admin.listUsers();
+    const existingAuthUser = usersList?.users?.find(u => u.email?.toLowerCase() === normalizedEmail);
+
+    if (existingAuthUser || usersDatabase.has(normalizedEmail)) {
+      return res.status(409).json({
+        success: false,
+        message: 'An account with this institutional email already exists.',
+      });
+    }
+
+    console.info(`[SUPABASE AUTH SIGNUP] Creating new auth.users record for: ${normalizedEmail}`);
+    const { data: createData, error: createError } = await supabaseAdmin.auth.admin.createUser({
+      email: normalizedEmail,
+      password: String(password),
+      email_confirm: true,
+      user_metadata: {
+        name: String(name).trim(),
+        roleCode,
+        roleName,
+        department,
+      },
+    });
+
+    if (createError || !createData?.user) {
+      console.error(`[SUPABASE AUTH SIGNUP ERROR] Failed to create auth.users: ${createError?.message}`);
+      return res.status(400).json({
+        success: false,
+        message: createError?.message || 'Failed to create user account in Supabase Auth.',
+      });
+    }
+
+    authUserId = createData.user.id;
+    console.info(`[SUPABASE AUTH SIGNUP SUCCESS] auth.users created with ID: ${authUserId}`);
+
+    // Create / Upsert public profile record linked to auth.users.id
+    await supabaseAdmin.from('profiles').upsert({
+      id: authUserId,
+      email: normalizedEmail,
+      name: String(name).trim(),
+      institution_id: 'inst-thapar',
+      department,
+      role_code: roleCode,
+      role_name: roleName,
+      authorized_workspaces: roleCode === 'COORDINATOR' ? ['Coordinator', 'Faculty'] : ['Student'],
+      is_demo_user: false,
+      status: 'ACTIVE',
+    });
+  } else {
+    if (usersDatabase.has(normalizedEmail)) {
+      return res.status(409).json({
+        success: false,
+        message: 'An account with this institutional email already exists.',
+      });
+    }
+  }
+
   const newUser: StoredUser = {
-    id: 'usr_' + Date.now(),
+    id: authUserId,
     name: String(name).trim(),
     email: normalizedEmail,
     passwordHash: hashPasswordBcrypt(String(password)),
@@ -915,43 +1249,13 @@ app.post('/api/auth/register', (req: Request, res: Response) => {
 
   usersDatabase.set(normalizedEmail, newUser);
 
-  // Issue session
-  const sessionToken = 'jwt_live_' + crypto.randomBytes(32).toString('hex');
-  const session: StoredSession = {
-    id: 'sess_' + Date.now(),
-    userId: newUser.id,
-    token: sessionToken,
-    roleCode: newUser.roleCode,
-    createdAt: new Date().toISOString(),
-    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-    isRevoked: false,
-  };
-  sessionsDatabase.set(sessionToken, session);
-
-  res.cookie('intellischedule_session', sessionToken, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
-    maxAge: 24 * 60 * 60 * 1000,
-    path: '/',
-  });
-
-  const roleKey = mapRoleCodeToDashboard(newUser.roleCode);
-
+  // Note: Registration does NOT create an authenticated session or issue session cookies.
+  // The user must explicitly proceed to login and enter their credentials.
   return res.status(201).json({
     success: true,
-    message: `Account created successfully. Welcome to Thapar Institute, ${newUser.name}.`,
-    token: sessionToken,
-    role: roleKey,
-    roleCode: newUser.roleCode,
-    roleName: newUser.roleName,
-    user: {
-      id: newUser.id,
-      name: newUser.name,
-      email: newUser.email,
-      department: newUser.department,
-      institution: newUser.institutionName,
-    },
+    message: 'Account created successfully. Please sign in with your new email and password.',
+    email: normalizedEmail,
+    requiresLogin: true,
   });
 });
 
@@ -1602,13 +1906,22 @@ app.get('/api/auth/validate-token', (req: Request, res: Response) => {
 // -------------------------------------------------------------
 // POST /api/auth/reset-password
 // -------------------------------------------------------------
-app.post('/api/auth/reset-password', (req: Request, res: Response) => {
+app.post('/api/auth/reset-password', async (req: Request, res: Response) => {
   const { token, newPassword } = req.body;
 
   if (!token || !newPassword) {
     return res.status(400).json({
       success: false,
       message: 'Token and new password are required.',
+    });
+  }
+
+  const pwdCheck = evaluatePasswordPolicy(String(newPassword));
+  if (!pwdCheck.isValid) {
+    return res.status(400).json({
+      success: false,
+      message: `Password does not meet security requirements: ${pwdCheck.errors.join(', ')}.`,
+      errors: pwdCheck.errors,
     });
   }
 
@@ -1631,6 +1944,17 @@ app.post('/api/auth/reset-password', (req: Request, res: Response) => {
   // Update password in database with modern Bcrypt KDF
   user.passwordHash = hashPasswordBcrypt(String(newPassword));
   usersDatabase.set(record.email, user);
+
+  // Sync password with Supabase Auth
+  if (supabaseAdmin) {
+    try {
+      await supabaseAdmin.auth.admin.updateUserById(user.id, {
+        password: String(newPassword),
+      });
+    } catch (err: any) {
+      console.warn('[SUPABASE AUTH] Password update notice:', err?.message || err);
+    }
+  }
 
   // Mark token used
   record.isUsed = true;
@@ -2430,6 +2754,9 @@ app.get('/api/audit', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN', 
 // Vite middleware in dev or static files in production
 // -------------------------------------------------------------
 async function setupApp() {
+  // Synchronize baseline users into Supabase Auth Authority on startup
+  await ensureSupabaseAuthUsers().catch(err => console.error('[SUPABASE AUTH SETUP ERROR]:', err));
+
   if (process.env.NODE_ENV === 'production') {
     app.use(express.static(path.join(__dirname, 'dist')));
     app.get('*', (_req, res) => {
@@ -2451,6 +2778,8 @@ async function setupApp() {
 
 if (!process.env.VERCEL) {
   setupApp();
+} else {
+  ensureSupabaseAuthUsers().catch(() => {});
 }
 
 export default app;

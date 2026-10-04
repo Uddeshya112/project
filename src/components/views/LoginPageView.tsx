@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useTimetable } from '../../context/TimetableContext';
 import { ThaparLogo } from '../ThaparLogo';
+import { evaluatePasswordPolicy } from '../../lib/passwordUtils';
 import {
   Mail,
   Lock,
@@ -16,14 +17,15 @@ import {
   ShieldCheck,
   Check,
   X,
-  Loader2
+  Loader2,
+  ShieldAlert
 } from 'lucide-react';
 
 interface LoginPageViewProps {
   onSuccessLogin: (workspaces?: any[]) => void;
 }
 
-type AuthScreenMode = 'login' | 'register' | 'forgot_password' | 'reset_password';
+type AuthScreenMode = 'login' | 'register' | 'register_success' | 'forgot_password' | 'reset_password';
 
 export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
   const {
@@ -53,6 +55,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
   const [regConfirmPassword, setRegConfirmPassword] = useState('');
   const [showRegPassword, setShowRegPassword] = useState(false);
   const [showRegConfirmPassword, setShowRegConfirmPassword] = useState(false);
+  const [registeredEmail, setRegisteredEmail] = useState('');
 
   // Forgot Password States
   const [forgotEmail, setForgotEmail] = useState('');
@@ -72,6 +75,10 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
   const [showDemoModal, setShowDemoModal] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  // Password Policy Checks (Strict: 12+ chars, uppercase, lowercase, number, symbol)
+  const regPasswordPolicy = evaluatePasswordPolicy(regPassword);
+  const resetPasswordPolicy = evaluatePasswordPolicy(newPassword);
 
   const handleDemoLoginClick = async (
     roleKey: 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin'
@@ -302,6 +309,8 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
 
   /**
    * Handle Register Submit (POST /api/auth/register)
+   * Enforces 12+ chars, uppercase, lowercase, number, symbol policy
+   * Does NOT auto-login, redirects to clean register_success screen
    */
   const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -315,10 +324,13 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
       setErrorMessage('All fields are required.');
       return;
     }
-    if (regPassword.length < 8) {
-      setErrorMessage('Password must be at least 8 characters long.');
+    
+    // Authoritative password policy validation
+    if (!regPasswordPolicy.isValid) {
+      setErrorMessage(`Password must satisfy all security requirements: ${regPasswordPolicy.errors.join(', ')}.`);
       return;
     }
+
     if (regPassword !== regConfirmPassword) {
       setErrorMessage('Passwords do not match.');
       return;
@@ -329,15 +341,14 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
     try {
       const res = await register(nameTrim, emailTrim, regPassword);
       if (res.success) {
-        setSuccessMessage(res.message);
-        if (res.roleKey) {
-          setCurrentRole(res.roleKey);
-        }
-        setTimeout(() => {
-          onSuccessLogin(res.authorizedWorkspaces);
-        }, 400);
+        setRegisteredEmail(res.email || emailTrim);
+        setLoginEmail(res.email || emailTrim);
+        setLoginPassword('');
+        setRegPassword('');
+        setRegConfirmPassword('');
+        setScreenMode('register_success');
       } else {
-        setErrorMessage(res.message);
+        setErrorMessage(res.message || 'Registration failed.');
       }
     } catch {
       setErrorMessage('Failed to create account. Please verify your details.');
@@ -387,8 +398,8 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
       setErrorMessage('Missing or invalid password reset token.');
       return;
     }
-    if (!allReqsMet) {
-      setErrorMessage('Please ensure your new password meets all security criteria.');
+    if (!resetPasswordPolicy.isValid) {
+      setErrorMessage(`Please ensure your new password meets all security criteria: ${resetPasswordPolicy.errors.join(', ')}.`);
       return;
     }
     if (newPassword !== confirmNewPassword) {
@@ -817,6 +828,66 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
                     {showRegPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
                 </div>
+
+                {/* Live Password Strength Indicator (Supplemental) */}
+                {regPassword && (
+                  <div className="pt-1 space-y-1.5">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="text-stone-500 dark:text-zinc-400">Strength:</span>
+                      <span
+                        className={`font-semibold capitalize ${
+                          regPasswordPolicy.strength === 'strong'
+                            ? 'text-emerald-600 dark:text-emerald-400'
+                            : regPasswordPolicy.strength === 'fair'
+                            ? 'text-amber-600 dark:text-amber-400'
+                            : 'text-rose-600 dark:text-rose-400'
+                        }`}
+                      >
+                        {regPasswordPolicy.strength}
+                      </span>
+                    </div>
+                    <div className="w-full bg-stone-200 dark:bg-zinc-800 h-1.5 rounded-full overflow-hidden flex gap-1">
+                      <div
+                        className={`h-full rounded-full transition-all duration-300 ${
+                          regPasswordPolicy.strength === 'strong'
+                            ? 'bg-emerald-500 w-full'
+                            : regPasswordPolicy.strength === 'fair'
+                            ? 'bg-amber-500 w-2/3'
+                            : 'bg-rose-500 w-1/3'
+                        }`}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Live Password Requirements Checklist */}
+                <div className="p-2.5 bg-[#F4F2EC] dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800/80 rounded-xl space-y-1.5 text-[11px] mt-1.5">
+                  <div className="text-[10px] font-mono text-stone-500 dark:text-zinc-400 uppercase tracking-wider font-semibold">
+                    Password requirements
+                  </div>
+                  <div className="space-y-1">
+                    <div className={`flex items-center gap-1.5 ${regPasswordPolicy.length ? 'text-emerald-700 dark:text-emerald-400 font-medium' : 'text-stone-500 dark:text-zinc-400'}`}>
+                      {regPasswordPolicy.length ? <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400 shrink-0" /> : <div className="h-1.5 w-1.5 rounded-full bg-stone-400 dark:bg-zinc-600 ml-1 mr-0.5 shrink-0" />}
+                      <span>At least 12 characters</span>
+                    </div>
+                    <div className={`flex items-center gap-1.5 ${regPasswordPolicy.uppercase ? 'text-emerald-700 dark:text-emerald-400 font-medium' : 'text-stone-500 dark:text-zinc-400'}`}>
+                      {regPasswordPolicy.uppercase ? <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400 shrink-0" /> : <div className="h-1.5 w-1.5 rounded-full bg-stone-400 dark:bg-zinc-600 ml-1 mr-0.5 shrink-0" />}
+                      <span>One uppercase letter</span>
+                    </div>
+                    <div className={`flex items-center gap-1.5 ${regPasswordPolicy.lowercase ? 'text-emerald-700 dark:text-emerald-400 font-medium' : 'text-stone-500 dark:text-zinc-400'}`}>
+                      {regPasswordPolicy.lowercase ? <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400 shrink-0" /> : <div className="h-1.5 w-1.5 rounded-full bg-stone-400 dark:bg-zinc-600 ml-1 mr-0.5 shrink-0" />}
+                      <span>One lowercase letter</span>
+                    </div>
+                    <div className={`flex items-center gap-1.5 ${regPasswordPolicy.number ? 'text-emerald-700 dark:text-emerald-400 font-medium' : 'text-stone-500 dark:text-zinc-400'}`}>
+                      {regPasswordPolicy.number ? <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400 shrink-0" /> : <div className="h-1.5 w-1.5 rounded-full bg-stone-400 dark:bg-zinc-600 ml-1 mr-0.5 shrink-0" />}
+                      <span>One number</span>
+                    </div>
+                    <div className={`flex items-center gap-1.5 ${regPasswordPolicy.special ? 'text-emerald-700 dark:text-emerald-400 font-medium' : 'text-stone-500 dark:text-zinc-400'}`}>
+                      {regPasswordPolicy.special ? <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400 shrink-0" /> : <div className="h-1.5 w-1.5 rounded-full bg-stone-400 dark:bg-zinc-600 ml-1 mr-0.5 shrink-0" />}
+                      <span>One special character</span>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               {/* Confirm Password */}
@@ -846,12 +917,17 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
                     {showRegConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
                 </div>
+                {regConfirmPassword && regPassword !== regConfirmPassword && (
+                  <p className="text-[11px] text-rose-600 dark:text-rose-400 pt-0.5">
+                    Passwords do not match.
+                  </p>
+                )}
               </div>
 
               {/* Create Account Button */}
               <button
                 type="submit"
-                disabled={isLoading}
+                disabled={isLoading || !regPasswordPolicy.isValid || (regPassword !== regConfirmPassword)}
                 className="w-full mt-2 py-2.5 bg-[#8C1B2E] hover:bg-[#721525] active:bg-[#5a111e] disabled:opacity-60 disabled:cursor-not-allowed text-white rounded-lg text-xs font-semibold shadow-xs transition-all flex items-center justify-center gap-2"
               >
                 {isLoading ? (
@@ -879,6 +955,48 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
                 Login
               </button>
             </div>
+          </div>
+        )}
+
+        {/* ======================================================== */}
+        {/* VIEW 2B: REGISTRATION SUCCESS (NO AUTO-LOGIN)             */}
+        {/* ======================================================== */}
+        {screenMode === 'register_success' && (
+          <div className="text-center space-y-5 py-2">
+            <div className="w-12 h-12 rounded-2xl bg-emerald-100 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400 flex items-center justify-center mx-auto shadow-xs">
+              <CheckCircle2 className="h-6 w-6" />
+            </div>
+
+            <div className="space-y-1.5">
+              <h2 className="text-xl font-bold font-serif text-stone-900 dark:text-zinc-100 tracking-tight">
+                Account created
+              </h2>
+              <p className="text-xs text-stone-600 dark:text-zinc-400 leading-relaxed max-w-sm mx-auto">
+                Your account has been created successfully.
+              </p>
+              <p className="text-xs text-stone-500 dark:text-zinc-400 leading-relaxed max-w-sm mx-auto pt-1">
+                Please verify your email address (if confirmation is required), then sign in using your email and password.
+              </p>
+            </div>
+
+            {registeredEmail && (
+              <div className="p-3 bg-[#F4F2EC] dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl text-xs font-mono text-stone-700 dark:text-zinc-300 break-all">
+                {registeredEmail}
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => {
+                setScreenMode('login');
+                setErrorMessage(null);
+                setSuccessMessage(null);
+              }}
+              className="w-full py-2.5 bg-[#8C1B2E] hover:bg-[#721525] active:bg-[#5a111e] text-white rounded-lg text-xs font-semibold shadow-xs transition-all flex items-center justify-center gap-2"
+            >
+              <span>Go to Login</span>
+              <ArrowRight className="h-4 w-4" />
+            </button>
           </div>
         )}
 
@@ -1060,31 +1178,62 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
                   </div>
                 </div>
 
+                {/* Live Password Strength Indicator for Reset */}
+                {newPassword && (
+                  <div className="pt-1 space-y-1.5">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="text-stone-500 dark:text-zinc-400">Strength:</span>
+                      <span
+                        className={`font-semibold capitalize ${
+                          resetPasswordPolicy.strength === 'strong'
+                            ? 'text-emerald-600 dark:text-emerald-400'
+                            : resetPasswordPolicy.strength === 'fair'
+                            ? 'text-amber-600 dark:text-amber-400'
+                            : 'text-rose-600 dark:text-rose-400'
+                        }`}
+                      >
+                        {resetPasswordPolicy.strength}
+                      </span>
+                    </div>
+                    <div className="w-full bg-stone-200 dark:bg-zinc-800 h-1.5 rounded-full overflow-hidden flex gap-1">
+                      <div
+                        className={`h-full rounded-full transition-all duration-300 ${
+                          resetPasswordPolicy.strength === 'strong'
+                            ? 'bg-emerald-500 w-full'
+                            : resetPasswordPolicy.strength === 'fair'
+                            ? 'bg-amber-500 w-2/3'
+                            : 'bg-rose-500 w-1/3'
+                        }`}
+                      />
+                    </div>
+                  </div>
+                )}
+
                 {/* Password Requirements Checklist */}
                 <div className="p-3 bg-[#F4F2EC] dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl space-y-1.5 text-[11px]">
-                  <span className="text-[10px] font-mono text-stone-500 dark:text-zinc-500 uppercase tracking-wider font-semibold block mb-1">
+                  <span className="text-[10px] font-mono text-stone-500 dark:text-zinc-400 uppercase tracking-wider font-semibold block mb-1">
                     Password Requirements:
                   </span>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
-                    <div className={`flex items-center gap-1.5 ${reqLength ? 'text-emerald-700 dark:text-emerald-400' : 'text-stone-400 dark:text-zinc-500'}`}>
-                      {reqLength ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
-                      <span>8+ characters</span>
+                  <div className="space-y-1">
+                    <div className={`flex items-center gap-1.5 ${resetPasswordPolicy.length ? 'text-emerald-700 dark:text-emerald-400 font-medium' : 'text-stone-500 dark:text-zinc-400'}`}>
+                      {resetPasswordPolicy.length ? <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400 shrink-0" /> : <div className="h-1.5 w-1.5 rounded-full bg-stone-400 dark:bg-zinc-600 ml-1 mr-0.5 shrink-0" />}
+                      <span>At least 12 characters</span>
                     </div>
-                    <div className={`flex items-center gap-1.5 ${reqUpper ? 'text-emerald-700 dark:text-emerald-400' : 'text-stone-400 dark:text-zinc-500'}`}>
-                      {reqUpper ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
-                      <span>Uppercase letter (A-Z)</span>
+                    <div className={`flex items-center gap-1.5 ${resetPasswordPolicy.uppercase ? 'text-emerald-700 dark:text-emerald-400 font-medium' : 'text-stone-500 dark:text-zinc-400'}`}>
+                      {resetPasswordPolicy.uppercase ? <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400 shrink-0" /> : <div className="h-1.5 w-1.5 rounded-full bg-stone-400 dark:bg-zinc-600 ml-1 mr-0.5 shrink-0" />}
+                      <span>One uppercase letter (A-Z)</span>
                     </div>
-                    <div className={`flex items-center gap-1.5 ${reqLower ? 'text-emerald-700 dark:text-emerald-400' : 'text-stone-400 dark:text-zinc-500'}`}>
-                      {reqLower ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
-                      <span>Lowercase letter (a-z)</span>
+                    <div className={`flex items-center gap-1.5 ${resetPasswordPolicy.lowercase ? 'text-emerald-700 dark:text-emerald-400 font-medium' : 'text-stone-500 dark:text-zinc-400'}`}>
+                      {resetPasswordPolicy.lowercase ? <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400 shrink-0" /> : <div className="h-1.5 w-1.5 rounded-full bg-stone-400 dark:bg-zinc-600 ml-1 mr-0.5 shrink-0" />}
+                      <span>One lowercase letter (a-z)</span>
                     </div>
-                    <div className={`flex items-center gap-1.5 ${reqNumber ? 'text-emerald-700 dark:text-emerald-400' : 'text-stone-400 dark:text-zinc-500'}`}>
-                      {reqNumber ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
-                      <span>Number (0-9)</span>
+                    <div className={`flex items-center gap-1.5 ${resetPasswordPolicy.number ? 'text-emerald-700 dark:text-emerald-400 font-medium' : 'text-stone-500 dark:text-zinc-400'}`}>
+                      {resetPasswordPolicy.number ? <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400 shrink-0" /> : <div className="h-1.5 w-1.5 rounded-full bg-stone-400 dark:bg-zinc-600 ml-1 mr-0.5 shrink-0" />}
+                      <span>One number (0-9)</span>
                     </div>
-                    <div className={`flex items-center gap-1.5 sm:col-span-2 ${reqSpecial ? 'text-emerald-700 dark:text-emerald-400' : 'text-stone-400 dark:text-zinc-500'}`}>
-                      {reqSpecial ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
-                      <span>Special symbol (!@#$%^&*)</span>
+                    <div className={`flex items-center gap-1.5 ${resetPasswordPolicy.special ? 'text-emerald-700 dark:text-emerald-400 font-medium' : 'text-stone-500 dark:text-zinc-400'}`}>
+                      {resetPasswordPolicy.special ? <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400 shrink-0" /> : <div className="h-1.5 w-1.5 rounded-full bg-stone-400 dark:bg-zinc-600 ml-1 mr-0.5 shrink-0" />}
+                      <span>One special character (!@#$%^&*)</span>
                     </div>
                   </div>
                 </div>
@@ -1092,7 +1241,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
                 {/* Reset Submit Button */}
                 <button
                   type="submit"
-                  disabled={isLoading || !allReqsMet}
+                  disabled={isLoading || !resetPasswordPolicy.isValid || (newPassword !== confirmNewPassword)}
                   className="w-full py-2.5 bg-[#8C1B2E] hover:bg-[#721525] active:bg-[#5a111e] disabled:opacity-60 disabled:cursor-not-allowed text-white rounded-lg text-xs font-semibold shadow-xs transition-all flex items-center justify-center gap-2"
                 >
                   {isLoading ? (

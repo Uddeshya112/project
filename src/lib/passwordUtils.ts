@@ -91,3 +91,62 @@ export function verifyPassword(pwd: string, storedHash: string): PasswordVerific
 
   return { isValid: false, needsRehash: false, detectedAlgorithm: 'unknown' };
 }
+
+export interface PasswordPolicyCheck {
+  isValid: boolean;
+  length: boolean;
+  uppercase: boolean;
+  lowercase: boolean;
+  number: boolean;
+  special: boolean;
+  score: number;
+  strength: 'weak' | 'fair' | 'strong';
+  errors: string[];
+}
+
+/**
+ * Institutional Strong Password Policy Validator
+ * Strict requirements:
+ * 1. Minimum 12 characters
+ * 2. At least 1 uppercase letter (A-Z)
+ * 3. At least 1 lowercase letter (a-z)
+ * 4. At least 1 numeric digit (0-9)
+ * 5. At least 1 special character (!@#$%^&*()_+-=[]{};':"|,.<>/?)
+ */
+export function evaluatePasswordPolicy(pwd: string): PasswordPolicyCheck {
+  const password = typeof pwd === 'string' ? pwd : '';
+  const length = password.length >= 12;
+  const uppercase = /[A-Z]/.test(password);
+  const lowercase = /[a-z]/.test(password);
+  const number = /[0-9]/.test(password);
+  const special = /[^A-Za-z0-9]/.test(password);
+
+  const errors: string[] = [];
+  if (!length) errors.push('At least 12 characters');
+  if (!uppercase) errors.push('At least one uppercase letter (A-Z)');
+  if (!lowercase) errors.push('At least one lowercase letter (a-z)');
+  if (!number) errors.push('At least one number (0-9)');
+  if (!special) errors.push('At least one special character (!@#$%^&* etc.)');
+
+  const satisfiedCount = [length, uppercase, lowercase, number, special].filter(Boolean).length;
+  let strength: 'weak' | 'fair' | 'strong' = 'weak';
+  if (satisfiedCount === 5) {
+    strength = 'strong';
+  } else if (satisfiedCount >= 3) {
+    strength = 'fair';
+  } else {
+    strength = 'weak';
+  }
+
+  return {
+    isValid: satisfiedCount === 5,
+    length,
+    uppercase,
+    lowercase,
+    number,
+    special,
+    score: satisfiedCount,
+    strength,
+    errors,
+  };
+}

@@ -53,9 +53,7 @@ interface AuthContextType {
   register: (name: string, email: string, password: string) => Promise<{
     success: boolean;
     message: string;
-    roleKey?: 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin';
-    authorizedWorkspaces?: WorkspaceType[];
-    user?: AuthUser;
+    email?: string;
   }>;
   loginAsDemoRole: (roleKey: 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin') => Promise<{
     success: boolean;
@@ -113,10 +111,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [passwordResetTokens] = useState<PasswordResetToken[]>([]);
 
   // Active authenticated user
-  const [currentUserId, setCurrentUserId] = useState<string>('usr-murthy');
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
-  const [currentWorkspace, setCurrentWorkspace] = useState<WorkspaceType>('Coordinator');
-  const [authorizedWorkspaces, setAuthorizedWorkspaces] = useState<WorkspaceType[]>(['Coordinator', 'Faculty']);
+  const [currentWorkspace, setCurrentWorkspace] = useState<WorkspaceType>('Student');
+  const [authorizedWorkspaces, setAuthorizedWorkspaces] = useState<WorkspaceType[]>(['Student']);
 
   const switchWorkspace = (ws: WorkspaceType) => {
     if (authorizedWorkspaces.includes(ws)) {
@@ -125,6 +123,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const currentUser = useMemo(() => {
+    if (!currentUserId) return null;
     return allUsers.find(u => u.id === currentUserId) || null;
   }, [allUsers, currentUserId]);
 
@@ -146,6 +145,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (resp.ok) {
           const data = await resp.json();
           if (data.authenticated && data.user) {
+            let user = allUsers.find(u => u.id === data.user.id || u.email.toLowerCase() === data.user.email.toLowerCase());
+            if (!user) {
+              user = {
+                id: data.user.id,
+                name: data.user.name,
+                email: data.user.email,
+                status: 'ACTIVE',
+                emailVerified: true,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                lastLoginAt: new Date().toISOString(),
+                department: data.user.department,
+                authorizedWorkspaces: data.authorizedWorkspaces,
+              };
+              setAllUsers(prev => [user!, ...prev]);
+            }
+            setCurrentUserId(data.user.id);
             setIsAuthenticated(true);
             if (data.authorizedWorkspaces && Array.isArray(data.authorizedWorkspaces)) {
               setAuthorizedWorkspaces(data.authorizedWorkspaces);
@@ -153,11 +169,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 setCurrentWorkspace(data.authorizedWorkspaces[0]);
               }
             }
+            return;
           }
         }
       } catch {
         // Not authenticated
       }
+      setIsAuthenticated(false);
+      setCurrentUserId(null);
     };
     verifyCurrentSession();
   }, []);
@@ -205,7 +224,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   /**
-   * REST Backend Login (POST /api/auth/login)
+   * REST Backend Login (POST /api/auth/login) - Strictly Authoritative
    */
   const login = async (
     email: string,
@@ -224,94 +243,61 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
       });
 
-      const contentType = resp.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
-        const data = await resp.json();
+      const data = await resp.json().catch(() => ({}));
 
-        if (resp.ok && data.success) {
-          let user = allUsers.find(u => u.email.toLowerCase() === email.trim().toLowerCase());
-          if (!user && data.user) {
-            user = {
-              id: data.user.id,
-              name: data.user.name,
-              email: data.user.email,
-              status: 'ACTIVE',
-              emailVerified: true,
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-              lastLoginAt: new Date().toISOString(),
-              department: data.user.department,
-              authorizedWorkspaces: data.authorizedWorkspaces,
-            };
-            setAllUsers(prev => [user!, ...prev]);
-          }
-
-          if (user) {
-            setCurrentUserId(user.id);
-          }
-
-          if (data.authorizedWorkspaces && Array.isArray(data.authorizedWorkspaces)) {
-            setAuthorizedWorkspaces(data.authorizedWorkspaces);
-            setCurrentWorkspace(data.authorizedWorkspaces[0]);
-          }
-
-          setIsAuthenticated(true);
-
-          return {
-            success: true,
-            message: data.message,
-            roleKey: data.role as 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin',
+      if (resp.ok && data.success && data.user) {
+        let user = allUsers.find(u => u.id === data.user.id || u.email.toLowerCase() === email.trim().toLowerCase());
+        if (!user) {
+          user = {
+            id: data.user.id,
+            name: data.user.name,
+            email: data.user.email,
+            status: 'ACTIVE',
+            emailVerified: true,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            lastLoginAt: new Date().toISOString(),
+            department: data.user.department,
             authorizedWorkspaces: data.authorizedWorkspaces,
-            user,
           };
-        } else if (data.message) {
-          return {
-            success: false,
-            message: data.message,
-          };
+          setAllUsers(prev => [user!, ...prev]);
         }
+
+        setCurrentUserId(user.id);
+
+        if (data.authorizedWorkspaces && Array.isArray(data.authorizedWorkspaces)) {
+          setAuthorizedWorkspaces(data.authorizedWorkspaces);
+          setCurrentWorkspace(data.authorizedWorkspaces[0]);
+        }
+
+        setIsAuthenticated(true);
+        if (data.token) {
+          localStorage.setItem('auth_token', data.token);
+        }
+
+        return {
+          success: true,
+          message: data.message,
+          roleKey: data.role as 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin',
+          authorizedWorkspaces: data.authorizedWorkspaces,
+          user,
+        };
+      } else {
+        setIsAuthenticated(false);
+        setCurrentUserId(null);
+        return {
+          success: false,
+          message: data.message || 'Invalid institutional credentials. Please check your email and password.',
+        };
       }
     } catch {
-      // Backend unreachable, proceed with client-side fallback
-    }
-
-    // Client-side authentication fallback (ensures full functionality on static hosts)
-    const normalizedEmail = email.trim().toLowerCase();
-    const user = allUsers.find(u => u.email.toLowerCase() === normalizedEmail);
-
-    if (!user) {
+      setIsAuthenticated(false);
+      setCurrentUserId(null);
       return {
         success: false,
-        message: 'Account not found. Please click Register to create your account.',
+        message: 'Network error connecting to authentication service.',
       };
     }
-
-    let roleKey: 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin' = 'Student';
-    let workspaceRole: WorkspaceType = 'Student';
-    if (normalizedEmail.includes('coord') || normalizedEmail.includes('murthy')) {
-      roleKey = 'Coordinator';
-      workspaceRole = 'Coordinator';
-    } else if (normalizedEmail.includes('sharma') || normalizedEmail.includes('faculty')) {
-      roleKey = 'Faculty';
-      workspaceRole = 'Faculty';
-    } else if (normalizedEmail.includes('dean') || normalizedEmail.includes('admin')) {
-      roleKey = 'Admin';
-      workspaceRole = 'Admin';
-    } else if (normalizedEmail.includes('hod')) {
-      roleKey = 'HOD';
-      workspaceRole = 'Faculty';
-    }
-
-    setCurrentUserId(user.id);
-    setIsAuthenticated(true);
-
-    return {
-      success: true,
-      message: 'Login successful.',
-      roleKey,
-      authorizedWorkspaces: [workspaceRole],
-      user,
-    };
   };
 
   /**
@@ -334,115 +320,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         body: JSON.stringify({ email: email.trim().toLowerCase(), name }),
       });
 
-      const contentType = resp.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
-        const data = await resp.json();
+      const data = await resp.json().catch(() => ({}));
 
-        if (resp.ok && data.success) {
-          let user = allUsers.find(u => u.email.toLowerCase() === email.trim().toLowerCase());
-          if (!user && data.user) {
-            user = {
-              id: data.user.id,
-              name: data.user.name,
-              email: data.user.email,
-              status: 'ACTIVE',
-              emailVerified: true,
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-              lastLoginAt: new Date().toISOString(),
-              department: data.user.department,
-              authorizedWorkspaces: data.authorizedWorkspaces,
-            };
-            setAllUsers(prev => [user!, ...prev]);
-          }
-
-          if (user) {
-            setCurrentUserId(user.id);
-          }
-
-          if (data.authorizedWorkspaces && Array.isArray(data.authorizedWorkspaces)) {
-            setAuthorizedWorkspaces(data.authorizedWorkspaces);
-            setCurrentWorkspace(data.authorizedWorkspaces[0]);
-          }
-
-          setIsAuthenticated(true);
-
-          return {
-            success: true,
-            message: data.message,
-            roleKey: data.role as 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin',
-            authorizedWorkspaces: data.authorizedWorkspaces,
-            user,
-          };
-        } else if (data.message) {
-          return {
-            success: false,
-            message: data.message,
-          };
-        }
-      }
-    } catch {
-      // Backend unreachable, proceed with client-side fallback
-    }
-
-    // Client-side Google sign-in fallback
-    const normalizedEmail = email.trim().toLowerCase();
-    let user = allUsers.find(u => u.email.toLowerCase() === normalizedEmail);
-
-    if (!user) {
-      user = {
-        id: `usr_g_${Date.now()}`,
-        name: name || normalizedEmail.split('@')[0],
-        email: normalizedEmail,
-        status: 'ACTIVE',
-        emailVerified: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        lastLoginAt: new Date().toISOString(),
-        department: 'Computer Science and Engineering (CSED)',
-        authorizedWorkspaces: ['Student'],
-      };
-      setAllUsers(prev => [user!, ...prev]);
-    }
-
-    setCurrentUserId(user.id);
-    setIsAuthenticated(true);
-
-    return {
-      success: true,
-      message: 'Signed in with Google successfully.',
-      roleKey: 'Student',
-      authorizedWorkspaces: ['Student'],
-      user,
-    };
-  };
-
-  /**
-   * REST Backend Register (POST /api/auth/register)
-   */
-  const register = async (
-    name: string,
-    email: string,
-    password: string
-  ): Promise<{
-    success: boolean;
-    message: string;
-    roleKey?: 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin';
-    user?: AuthUser;
-  }> => {
-    try {
-      const resp = await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ name: name.trim(), email: email.trim().toLowerCase(), password }),
-      });
-
-      const contentType = resp.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
-        const data = await resp.json();
-
-        if (resp.ok && data.success) {
-          const newUser: AuthUser = {
+      if (resp.ok && data.success && data.user) {
+        let user = allUsers.find(u => u.id === data.user.id || u.email.toLowerCase() === email.trim().toLowerCase());
+        if (!user) {
+          user = {
             id: data.user.id,
             name: data.user.name,
             email: data.user.email,
@@ -452,88 +335,97 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             updatedAt: new Date().toISOString(),
             lastLoginAt: new Date().toISOString(),
             department: data.user.department,
+            authorizedWorkspaces: data.authorizedWorkspaces,
           };
-
-          setAllUsers(prev => [newUser, ...prev]);
-
-          const newMembership: Membership = {
-            id: `mem_${Date.now()}`,
-            userId: newUser.id,
-            institutionId: currentInstitution.id,
-            roleId: `role-${data.roleCode.toLowerCase()}`,
-            status: 'ACTIVE',
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            assignedBy: 'backend-registration',
-          };
-          setAllMemberships(prev => [newMembership, ...prev]);
-
-          setCurrentUserId(newUser.id);
-          setIsAuthenticated(true);
-
-          return {
-            success: true,
-            message: data.message,
-            roleKey: data.role as 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin',
-            user: newUser,
-          };
-        } else if (data.message) {
-          return {
-            success: false,
-            message: data.message,
-          };
+          setAllUsers(prev => [user!, ...prev]);
         }
+
+        setCurrentUserId(user.id);
+
+        if (data.authorizedWorkspaces && Array.isArray(data.authorizedWorkspaces)) {
+          setAuthorizedWorkspaces(data.authorizedWorkspaces);
+          setCurrentWorkspace(data.authorizedWorkspaces[0]);
+        }
+
+        setIsAuthenticated(true);
+        if (data.token) {
+          localStorage.setItem('auth_token', data.token);
+        }
+
+        return {
+          success: true,
+          message: data.message,
+          roleKey: data.role as 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin',
+          authorizedWorkspaces: data.authorizedWorkspaces,
+          user,
+        };
+      } else {
+        setIsAuthenticated(false);
+        setCurrentUserId(null);
+        return {
+          success: false,
+          message: data.message || 'Google authentication failed.',
+        };
       }
     } catch {
-      // Backend unreachable, proceed with client-side registration
-    }
-
-    // Client-side registration fallback (guarantees registration succeeds on any deployment)
-    const normalizedEmail = email.trim().toLowerCase();
-    const existing = allUsers.find(u => u.email.toLowerCase() === normalizedEmail);
-    if (existing) {
+      setIsAuthenticated(false);
+      setCurrentUserId(null);
       return {
         success: false,
-        message: 'An account with this email address already exists. Please login instead.',
+        message: 'Could not connect to Google authentication provider.',
       };
     }
+  };
 
-    const newUser: AuthUser = {
-      id: `usr_client_${Date.now()}`,
-      name: name.trim(),
-      email: normalizedEmail,
-      status: 'ACTIVE',
-      emailVerified: true,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      lastLoginAt: new Date().toISOString(),
-      department: 'Computer Science and Engineering (CSED)',
-      authorizedWorkspaces: ['Student'],
-    };
+  /**
+   * REST Backend Register (POST /api/auth/register) - Strictly Authoritative
+   * Registration policy: Registration creates the user account in Supabase Auth,
+   * but does NOT automatically authenticate or issue an application session.
+   * The user must explicitly sign in on the login screen.
+   */
+  const register = async (
+    name: string,
+    email: string,
+    password: string
+  ): Promise<{
+    success: boolean;
+    message: string;
+    email?: string;
+  }> => {
+    try {
+      const resp = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ name: name.trim(), email: email.trim().toLowerCase(), password }),
+      });
 
-    setAllUsers(prev => [newUser, ...prev]);
+      const data = await resp.json().catch(() => ({}));
 
-    const newMembership: Membership = {
-      id: `mem_${Date.now()}`,
-      userId: newUser.id,
-      institutionId: currentInstitution.id,
-      roleId: 'role-student',
-      status: 'ACTIVE',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      assignedBy: 'client-registration',
-    };
-    setAllMemberships(prev => [newMembership, ...prev]);
+      if (resp.ok && data.success) {
+        setIsAuthenticated(false);
+        setCurrentUserId(null);
 
-    setCurrentUserId(newUser.id);
-    setIsAuthenticated(true);
-
-    return {
-      success: true,
-      message: 'Account registered successfully! Welcome to Thapar Institute of Engineering and Technology Timetable.',
-      roleKey: 'Student',
-      user: newUser,
-    };
+        return {
+          success: true,
+          message: data.message || 'Account created successfully. Please sign in with your email and password.',
+          email: data.email || email.trim().toLowerCase(),
+        };
+      } else {
+        setIsAuthenticated(false);
+        setCurrentUserId(null);
+        return {
+          success: false,
+          message: data.message || 'Registration failed.',
+        };
+      }
+    } catch {
+      setIsAuthenticated(false);
+      setCurrentUserId(null);
+      return {
+        success: false,
+        message: 'Unable to connect to registration service.',
+      };
+    }
   };
 
   /**
@@ -555,99 +447,61 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         body: JSON.stringify({ roleKey }),
       });
 
-      const contentType = resp.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
-        const data = await resp.json();
-        if (resp.ok && data.success) {
-          let user = allUsers.find(u => u.email.toLowerCase() === data.user.email.toLowerCase());
-          if (!user && data.user) {
-            user = {
-              id: data.user.id,
-              name: data.user.name,
-              email: data.user.email,
-              status: 'ACTIVE',
-              emailVerified: true,
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-              lastLoginAt: new Date().toISOString(),
-              department: data.user.department,
-              authorizedWorkspaces: data.authorizedWorkspaces,
-              isDemoUser: true,
-            };
-            setAllUsers(prev => [user!, ...prev]);
-          }
-
-          if (user) {
-            setCurrentUserId(user.id);
-          }
-
-          if (data.authorizedWorkspaces && Array.isArray(data.authorizedWorkspaces)) {
-            setAuthorizedWorkspaces(data.authorizedWorkspaces);
-            setCurrentWorkspace(data.authorizedWorkspaces[0]);
-          }
-
-          setIsAuthenticated(true);
-
-          return {
-            success: true,
-            message: data.message,
-            roleKey: data.role as 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin',
+      const data = await resp.json().catch(() => ({}));
+      if (resp.ok && data.success && data.user) {
+        let user = allUsers.find(u => u.id === data.user.id || u.email.toLowerCase() === data.user.email.toLowerCase());
+        if (!user) {
+          user = {
+            id: data.user.id,
+            name: data.user.name,
+            email: data.user.email,
+            status: 'ACTIVE',
+            emailVerified: true,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            lastLoginAt: new Date().toISOString(),
+            department: data.user.department,
             authorizedWorkspaces: data.authorizedWorkspaces,
-            user,
+            isDemoUser: true,
           };
+          setAllUsers(prev => [user!, ...prev]);
         }
+
+        setCurrentUserId(user.id);
+
+        if (data.authorizedWorkspaces && Array.isArray(data.authorizedWorkspaces)) {
+          setAuthorizedWorkspaces(data.authorizedWorkspaces);
+          setCurrentWorkspace(data.authorizedWorkspaces[0]);
+        }
+
+        setIsAuthenticated(true);
+        if (data.token) {
+          localStorage.setItem('auth_token', data.token);
+        }
+
+        return {
+          success: true,
+          message: data.message,
+          roleKey: data.role as 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin',
+          authorizedWorkspaces: data.authorizedWorkspaces,
+          user,
+        };
+      } else {
+        setIsAuthenticated(false);
+        setCurrentUserId(null);
+        return {
+          success: false,
+          message: data.message || 'Demo authentication failed.',
+        };
       }
     } catch {
-      // Backend unreachable, fallback to client-side demo user lookup
-    }
-
-    // Client-side demo fallback for static hosting
-    const demoEmailMap: Record<string, string> = {
-      Coordinator: 'coordinator.demo@demo.thapar.local',
-      Faculty: 'faculty.demo@demo.thapar.local',
-      Student: 'student.demo@demo.thapar.local',
-      Admin: 'admin.demo@demo.thapar.local',
-      HOD: 'hod.demo@demo.thapar.local',
-    };
-    const targetEmail = demoEmailMap[roleKey];
-    let user = allUsers.find(u => u.email.toLowerCase() === targetEmail.toLowerCase());
-    if (!user) {
-      user = {
-        id: `usr-demo-${roleKey.toLowerCase()}`,
-        name: `Demo ${roleKey}`,
-        email: targetEmail,
-        status: 'ACTIVE',
-        emailVerified: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        lastLoginAt: new Date().toISOString(),
-        department: 'Computer Science and Engineering (CSED)',
-        isDemoUser: true,
+      setIsAuthenticated(false);
+      setCurrentUserId(null);
+      return {
+        success: false,
+        message: 'Could not connect to demo authentication service.',
       };
-      setAllUsers(prev => [user!, ...prev]);
     }
-
-    setCurrentUserId(user.id);
-    const workspaces: WorkspaceType[] =
-      roleKey === 'Coordinator'
-        ? ['Coordinator', 'Faculty']
-        : roleKey === 'Admin'
-        ? ['Admin', 'Coordinator']
-        : roleKey === 'HOD'
-        ? ['Coordinator', 'Faculty']
-        : [roleKey as WorkspaceType];
-
-    setAuthorizedWorkspaces(workspaces);
-    setCurrentWorkspace(workspaces[0]);
-    setIsAuthenticated(true);
-
-    return {
-      success: true,
-      message: `Signed in as Demo ${roleKey}`,
-      roleKey,
-      authorizedWorkspaces: workspaces,
-      user,
-    };
   };
 
   /**
@@ -749,11 +603,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // Ignore network errors on logout
     }
     setIsAuthenticated(false);
-    setCurrentUserId('usr-sharma');
-    setAuthorizedWorkspaces(['Faculty']);
-    setCurrentWorkspace('Faculty');
+    setCurrentUserId(null);
+    setAuthorizedWorkspaces(['Student']);
+    setCurrentWorkspace('Student');
     
     // Clear user tokens from storage
+    localStorage.removeItem('auth_token');
     localStorage.removeItem('app_session_token');
     sessionStorage.clear();
   };

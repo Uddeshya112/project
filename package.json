@@ -8,6 +8,7 @@
     "build": "vite build",
     "lint": "tsc --noEmit",
     "test": "tsx scripts/run_e2e_tests.ts",
+    "test:auth": "tsx scripts/run_auth_architecture_tests.ts",
     "test:demo": "tsx scripts/run_demo_tests.ts",
     "test:security": "tsx scripts/run_adversarial_tests.ts",
     "test:solver": "tsx scripts/run_solver_tests.ts",

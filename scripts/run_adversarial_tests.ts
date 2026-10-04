@@ -183,22 +183,35 @@ async function runAdversarialSuite() {
     }),
   });
   const injectData = await injectReg.json();
-  // Server must strictly assign STUDENT role, ignoring client injection
+  // Server must strictly register the account without auto-login and ignore client injection
   recordTest(
-    injectReg.status === 201 && injectData.roleCode === 'STUDENT' && injectData.role === 'Student',
+    injectReg.status === 201 && injectData.success === true && !injectData.token,
     'Role Injection',
-    'Registration ignoring client-injected role payload and enforcing server-side STUDENT role',
+    'Registration succeeds without auto-login session and ignores injected role credentials',
     injectReg.status,
     201
   );
 
-  // 4.2 Injected user attempting admin endpoint
-  const injectedToken = injectData.token;
+  // 4.2 Injected user logging in and attempting admin endpoint
+  const injectLoginRes = await fetch(`${BASE_URL}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: injectedRegEmail, password: 'AttackerPassword2026!' }),
+  });
+  const injectLoginData = await injectLoginRes.json();
+  const injectedToken = injectLoginData.token;
+  
   const injectAdminAccess = await fetch(`${BASE_URL}/api/timetable/publish`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${injectedToken}` },
   });
-  recordTest(injectAdminAccess.status === 403, 'Role Injection', 'Injected account blocked from admin endpoints', injectAdminAccess.status, 403);
+  recordTest(
+    injectLoginData.roleCode === 'STUDENT' && injectAdminAccess.status === 403,
+    'Role Injection',
+    'Injected account blocked from admin endpoints and enforced as STUDENT role',
+    injectAdminAccess.status,
+    403
+  );
 
   // -------------------------------------------------------------
   // ATTACK VECTOR 5: OAUTH CSRF STATE TAMPERING (Layer 10)
