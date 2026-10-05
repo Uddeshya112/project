@@ -1,6 +1,6 @@
 import { ClassSession, Course, Faculty, Room, StudentSection, DayOfWeek, SystemHealthMetrics } from '../types';
-import { TIME_SLOTS } from './initialData.js';
-import { checkHardConstraints, calculateHealthScore } from './recoveryEngine.js';
+import { TIME_SLOTS } from './initialData';
+import { checkHardConstraints, calculateHealthScore } from './recoveryEngine';
 
 export interface ConflictNode {
   id: string; // e.g. "CS501-CSE-A"

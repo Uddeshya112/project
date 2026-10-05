@@ -12,8 +12,8 @@ import {
   hashPasswordLegacy,
   evaluatePasswordPolicy,
   BCRYPT_SALT_ROUNDS,
-} from './src/lib/passwordUtils.js';
-import { executeOptimizationEngine, compileSchedulingProblem } from './src/lib/optimizationEngine.js';
+} from './src/lib/passwordUtils';
+import { executeOptimizationEngine, compileSchedulingProblem } from './src/lib/optimizationEngine';
 import {
   INITIAL_ACADEMIC_YEAR,
   INITIAL_ALLOCATIONS,
@@ -22,8 +22,8 @@ import {
   SECTIONS,
   COURSES,
   INITIAL_CONSTRAINTS,
-} from './src/lib/initialData.js';
-import { supabaseStore } from './src/server/supabaseStore.js';
+} from './src/lib/initialData';
+import { supabaseStore } from './src/server/supabaseStore';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
