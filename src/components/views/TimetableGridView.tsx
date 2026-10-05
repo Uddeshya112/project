@@ -32,6 +32,10 @@ export function TimetableGridView() {
     toggleSessionLock,
     cancelSession,
     addSession,
+    publishStatus,
+    publishMasterTimetable,
+    validationReport,
+    setActiveView,
   } = useTimetable();
 
   const [filterMode, setFilterMode] = useState<'section' | 'faculty' | 'room'>('section');
@@ -46,7 +50,27 @@ export function TimetableGridView() {
   const [newType, setNewType] = useState<'Lecture' | 'Lab' | 'Tutorial'>('Lecture');
   const [scheduleError, setScheduleError] = useState<string | null>(null);
 
+  const [selectedMobileDay, setSelectedMobileDay] = useState<DayOfWeek>('Monday');
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const [publishFeedback, setPublishFeedback] = useState<string | null>(null);
+
   const days: DayOfWeek[] = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+
+  const canPublish = sessions.length > 0 && validationReport.hardViolationsCount === 0;
+
+  const handlePublish = () => {
+    if (!canPublish) {
+      setPublishFeedback(`Publishing blocked: ${validationReport.hardViolationsCount} hard violations exist.`);
+      return;
+    }
+    const res = publishMasterTimetable('Coordinator');
+    if (res.success) {
+      setPublishFeedback('Timetable officially published!');
+      setTimeout(() => setPublishFeedback(null), 3000);
+    } else {
+      setPublishFeedback(res.error || 'Failed to publish.');
+    }
+  };
 
   // Filter sessions based on active mode
   const filteredSessions = sessions.filter(s => {
@@ -72,27 +96,27 @@ export function TimetableGridView() {
   };
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto font-sans">
+    <div className="space-y-6 max-w-7xl mx-auto font-sans text-stone-900 dark:text-zinc-100">
       {/* Header and Controls */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#E5E2D9] dark:border-zinc-800 pb-4">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-bold font-serif text-stone-900 dark:text-zinc-100 tracking-tight">
-            Master Timetable Grid
+          <h1 className="text-2xl sm:text-3xl font-bold font-serif tracking-tight">
+            Timetable
           </h1>
-          <p className="text-xs sm:text-sm text-stone-500 dark:text-zinc-400 mt-1">
-            Weekly institutional timetable routine across sections, faculty members, and campus rooms.
+          <p className="text-xs sm:text-sm text-stone-500 dark:text-zinc-400 mt-0.5">
+            View and manage the current timetable.
           </p>
         </div>
 
-        {/* View Mode & Selection Filters */}
+        {/* View Switcher, Publish & More Menu */}
         <div className="flex flex-wrap items-center gap-2">
-          {/* Segmented Filter Mode */}
-          <div className="flex bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 p-0.5 rounded-lg text-xs font-medium">
+          {/* View Switcher [ Section ] [ Faculty ] [ Room ] */}
+          <div className="flex bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 p-0.5 rounded-lg text-xs font-semibold">
             <button
               onClick={() => setFilterMode('section')}
               className={`px-3 py-1 rounded-md transition-colors ${
                 filterMode === 'section'
-                  ? 'bg-[#8C1B2E] text-white font-semibold shadow-xs'
+                  ? 'bg-[#8C1B2E] text-white shadow-xs'
                   : 'text-stone-600 dark:text-zinc-400 hover:text-stone-900 dark:hover:text-zinc-200'
               }`}
             >
@@ -102,7 +126,7 @@ export function TimetableGridView() {
               onClick={() => setFilterMode('faculty')}
               className={`px-3 py-1 rounded-md transition-colors ${
                 filterMode === 'faculty'
-                  ? 'bg-[#8C1B2E] text-white font-semibold shadow-xs'
+                  ? 'bg-[#8C1B2E] text-white shadow-xs'
                   : 'text-stone-600 dark:text-zinc-400 hover:text-stone-900 dark:hover:text-zinc-200'
               }`}
             >
@@ -112,15 +136,15 @@ export function TimetableGridView() {
               onClick={() => setFilterMode('room')}
               className={`px-3 py-1 rounded-md transition-colors ${
                 filterMode === 'room'
-                  ? 'bg-[#8C1B2E] text-white font-semibold shadow-xs'
+                  ? 'bg-[#8C1B2E] text-white shadow-xs'
                   : 'text-stone-600 dark:text-zinc-400 hover:text-stone-900 dark:hover:text-zinc-200'
               }`}
             >
-              Room & Lab
+              Room
             </button>
           </div>
 
-          {/* Sub-selector */}
+          {/* Sub-selector Dropdown */}
           {filterMode === 'section' && (
             <select
               value={selectedSectionId}
@@ -162,7 +186,89 @@ export function TimetableGridView() {
               ))}
             </select>
           )}
+
+          {/* Publish Action Button */}
+          <button
+            onClick={handlePublish}
+            disabled={!canPublish}
+            className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all shadow-xs ${
+              canPublish
+                ? 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer'
+                : 'bg-stone-200 dark:bg-zinc-800 text-stone-400 dark:text-zinc-500 cursor-not-allowed'
+            }`}
+            title={canPublish ? 'Publish master timetable' : `Resolve ${validationReport.hardViolationsCount} conflicts before publishing.`}
+          >
+            Publish
+          </button>
+
+          {/* More Menu Dropdown */}
+          <div className="relative">
+            <button
+              onClick={() => setShowMoreMenu(!showMoreMenu)}
+              className="px-3 py-1.5 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 bg-[#FAF9F5] dark:bg-zinc-900 text-xs font-semibold text-stone-700 dark:text-zinc-300 hover:text-stone-900"
+            >
+              More ▾
+            </button>
+
+            {showMoreMenu && (
+              <div className="absolute right-0 mt-1 w-48 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg shadow-lg p-1 z-40 space-y-0.5 text-xs">
+                <button
+                  onClick={() => {
+                    setActiveView('whatif');
+                    setShowMoreMenu(false);
+                  }}
+                  className="w-full text-left px-3 py-2 rounded-md hover:bg-stone-100 dark:hover:bg-zinc-800 font-medium"
+                >
+                  What-If Simulator
+                </button>
+                <button
+                  onClick={() => {
+                    setActiveView('syllabus');
+                    setShowMoreMenu(false);
+                  }}
+                  className="w-full text-left px-3 py-2 rounded-md hover:bg-stone-100 dark:hover:bg-zinc-800 font-medium"
+                >
+                  Syllabus Progress
+                </button>
+              </div>
+            )}
+          </div>
         </div>
+      </div>
+
+      {publishFeedback && (
+        <div className="p-3 bg-stone-100 dark:bg-zinc-800 rounded-lg text-xs font-semibold text-stone-800 dark:text-zinc-200">
+          {publishFeedback}
+        </div>
+      )}
+
+      {/* Mobile Day Selector Bar (< Monday > < Tuesday > ...) */}
+      <div className="sm:hidden flex items-center justify-between bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 p-2 rounded-xl text-xs font-semibold">
+        <button
+          onClick={() => {
+            const idx = days.indexOf(selectedMobileDay);
+            if (idx > 0) setSelectedMobileDay(days[idx - 1]);
+          }}
+          disabled={days.indexOf(selectedMobileDay) === 0}
+          className="px-2 py-1 disabled:opacity-30"
+        >
+          ‹ Prev
+        </button>
+
+        <span className="font-serif font-bold text-stone-900 dark:text-zinc-100 text-sm">
+          {selectedMobileDay}
+        </span>
+
+        <button
+          onClick={() => {
+            const idx = days.indexOf(selectedMobileDay);
+            if (idx < days.length - 1) setSelectedMobileDay(days[idx + 1]);
+          }}
+          disabled={days.indexOf(selectedMobileDay) === days.length - 1}
+          className="px-2 py-1 disabled:opacity-30"
+        >
+          Next ›
+        </button>
       </div>
 
       {/* Timetable Grid Table (Canonical Matrix) */}

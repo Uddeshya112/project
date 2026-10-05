@@ -19,6 +19,10 @@ import { AdminPortalView } from './views/AdminPortalView';
 import { GovernanceView } from './views/GovernanceView';
 import { AcademicSetupHubView } from './views/AcademicSetupHubView';
 import { GenerateTimetablePage } from './views/GenerateTimetablePage';
+import { SettingsView } from './views/SettingsView';
+import { WhatIfSimulatorView } from './views/WhatIfSimulatorView';
+import { WorkloadSyllabusView } from './views/WorkloadSyllabusView';
+import { RequestsView } from './views/RequestsView';
 
 import {
   Menu,
@@ -269,7 +273,10 @@ export function DashboardLayout({
               {activeView === 'allocations' && <AcademicSetupHubView />}
               {activeView === 'availability' && <AcademicSetupHubView />}
               {activeView === 'generation_validator' && <GenerateTimetablePage />}
-              {activeView === 'recovery' && <RecoveryEngineView />}
+              {activeView === 'recovery' && <RequestsView />}
+              {activeView === 'whatif' && <WhatIfSimulatorView />}
+              {activeView === 'syllabus' && <WorkloadSyllabusView />}
+              {activeView === 'settings' && <SettingsView />}
               {activeView === 'governance' && <GovernanceView />}
             </>
           )}

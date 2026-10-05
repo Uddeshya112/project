@@ -230,65 +230,73 @@ export function Sidebar({
           </div>
         )}
 
-        {/* COORDINATOR NAVIGATION */}
+        {/* COORDINATOR NAVIGATION (EXACTLY 5 PRIMARY ITEMS) */}
         {isCoordinator && (
-          <div className="space-y-2">
-            <div>
-              <button
-                onClick={() => handleSelect('overview')}
-                className={`w-full text-left px-3 py-2 rounded-lg transition-all font-medium flex items-center gap-2 ${
-                  activeView === 'overview'
-                    ? 'bg-[#8C1B2E] text-white font-semibold shadow-xs'
-                    : 'hover:bg-stone-100 dark:hover:bg-zinc-800 text-stone-800 dark:text-zinc-200'
-                }`}
-              >
-                <Calendar className="h-4 w-4 shrink-0" />
-                <span>Dashboard</span>
-              </button>
-            </div>
+          <div className="space-y-1 font-medium">
+            {/* 1. HOME */}
+            <button
+              onClick={() => handleSelect('overview')}
+              className={`w-full text-left px-3 py-2 rounded-lg transition-all flex items-center gap-2.5 ${
+                activeView === 'overview'
+                  ? 'bg-[#8C1B2E] text-white font-semibold shadow-xs'
+                  : 'hover:bg-stone-100 dark:hover:bg-zinc-800 text-stone-800 dark:text-zinc-200'
+              }`}
+            >
+              <Calendar className="h-4 w-4 shrink-0" />
+              <span>Home</span>
+            </button>
 
-            {/* Academic Setup Group */}
-            <div className="space-y-0.5">
-              <button
-                onClick={() => toggleGroup('setup')}
-                className="w-full flex items-center justify-between px-2.5 py-1.5 text-[11px] font-bold text-stone-500 dark:text-zinc-400 hover:text-stone-800 dark:hover:text-zinc-200 uppercase tracking-wider"
-              >
-                <span>Academic Setup</span>
-                {expandedGroups.setup ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-              </button>
+            {/* 2. TIMETABLE */}
+            <button
+              onClick={() => handleSelect('grid')}
+              className={`w-full text-left px-3 py-2 rounded-lg transition-all flex items-center gap-2.5 ${
+                activeView === 'grid' || activeView === 'generation_validator' || activeView === 'whatif' || activeView === 'syllabus'
+                  ? 'bg-[#8C1B2E] text-white font-semibold shadow-xs'
+                  : 'hover:bg-stone-100 dark:hover:bg-zinc-800 text-stone-800 dark:text-zinc-200'
+              }`}
+            >
+              <Clock className="h-4 w-4 shrink-0" />
+              <span>Timetable</span>
+            </button>
 
-              {expandedGroups.setup && (
-                <div className="pl-2.5 space-y-0.5 border-l border-[#E5E2D9] dark:border-zinc-800 ml-2">
-                  <button onClick={() => handleSelect('academic_setup')} className={`w-full text-left px-2.5 py-1.5 rounded-md transition-colors ${activeView === 'academic_setup' ? 'text-[#8C1B2E] dark:text-red-400 font-semibold' : 'hover:bg-stone-100 dark:hover:bg-zinc-800 text-stone-700 dark:text-zinc-300 font-medium'}`}>Master Setup & Excel</button>
-                  <button onClick={() => handleSelect('academic_year')} className={`w-full text-left px-2.5 py-1.5 rounded-md transition-colors ${activeView === 'academic_year' ? 'text-[#8C1B2E] dark:text-red-400 font-semibold' : 'hover:bg-stone-100 dark:hover:bg-zinc-800 text-stone-700 dark:text-zinc-300'}`}>Academic Year</button>
-                  <button onClick={() => handleSelect('departments')} className={`w-full text-left px-2.5 py-1.5 rounded-md transition-colors ${activeView === 'departments' ? 'text-[#8C1B2E] dark:text-red-400 font-semibold' : 'hover:bg-stone-100 dark:hover:bg-zinc-800 text-stone-700 dark:text-zinc-300'}`}>Departments</button>
-                  <button onClick={() => handleSelect('courses_mgmt')} className={`w-full text-left px-2.5 py-1.5 rounded-md transition-colors ${activeView === 'courses_mgmt' ? 'text-[#8C1B2E] dark:text-red-400 font-semibold' : 'hover:bg-stone-100 dark:hover:bg-zinc-800 text-stone-700 dark:text-zinc-300'}`}>Courses</button>
-                  <button onClick={() => handleSelect('faculty_mgmt')} className={`w-full text-left px-2.5 py-1.5 rounded-md transition-colors ${activeView === 'faculty_mgmt' ? 'text-[#8C1B2E] dark:text-red-400 font-semibold' : 'hover:bg-stone-100 dark:hover:bg-zinc-800 text-stone-700 dark:text-zinc-300'}`}>Faculty</button>
-                  <button onClick={() => handleSelect('rooms_mgmt')} className={`w-full text-left px-2.5 py-1.5 rounded-md transition-colors ${activeView === 'rooms_mgmt' ? 'text-[#8C1B2E] dark:text-red-400 font-semibold' : 'hover:bg-stone-100 dark:hover:bg-zinc-800 text-stone-700 dark:text-zinc-300'}`}>Rooms & Labs</button>
-                  <button onClick={() => handleSelect('sections_mgmt')} className={`w-full text-left px-2.5 py-1.5 rounded-md transition-colors ${activeView === 'sections_mgmt' ? 'text-[#8C1B2E] dark:text-red-400 font-semibold' : 'hover:bg-stone-100 dark:hover:bg-zinc-800 text-stone-700 dark:text-zinc-300'}`}>Groups & Subgroups</button>
-                </div>
-              )}
-            </div>
+            {/* 3. DATA */}
+            <button
+              onClick={() => handleSelect('academic_setup')}
+              className={`w-full text-left px-3 py-2 rounded-lg transition-all flex items-center gap-2.5 ${
+                ['academic_setup', 'courses_mgmt', 'faculty_mgmt', 'rooms_mgmt', 'sections_mgmt', 'allocations', 'availability'].includes(activeView)
+                  ? 'bg-[#8C1B2E] text-white font-semibold shadow-xs'
+                  : 'hover:bg-stone-100 dark:hover:bg-zinc-800 text-stone-800 dark:text-zinc-200'
+              }`}
+            >
+              <BookOpen className="h-4 w-4 shrink-0" />
+              <span>Data</span>
+            </button>
 
-            {/* Timetable Group */}
-            <div className="space-y-0.5">
-              <button
-                onClick={() => toggleGroup('timetable')}
-                className="w-full flex items-center justify-between px-2.5 py-1.5 text-[11px] font-bold text-stone-500 dark:text-zinc-400 hover:text-stone-800 dark:hover:text-zinc-200 uppercase tracking-wider"
-              >
-                <span>Timetable Management</span>
-                {expandedGroups.timetable ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-              </button>
+            {/* 4. REQUESTS */}
+            <button
+              onClick={() => handleSelect('recovery')}
+              className={`w-full text-left px-3 py-2 rounded-lg transition-all flex items-center gap-2.5 ${
+                activeView === 'recovery'
+                  ? 'bg-[#8C1B2E] text-white font-semibold shadow-xs'
+                  : 'hover:bg-stone-100 dark:hover:bg-zinc-800 text-stone-800 dark:text-zinc-200'
+              }`}
+            >
+              <Bell className="h-4 w-4 shrink-0" />
+              <span>Requests</span>
+            </button>
 
-              {expandedGroups.timetable && (
-                <div className="pl-2.5 space-y-0.5 border-l border-[#E5E2D9] dark:border-zinc-800 ml-2">
-                  <button onClick={() => handleSelect('allocations')} className={`w-full text-left px-2.5 py-1.5 rounded-md transition-colors ${activeView === 'allocations' ? 'text-[#8C1B2E] dark:text-red-400 font-semibold' : 'hover:bg-stone-100 dark:hover:bg-zinc-800 text-stone-700 dark:text-zinc-300'}`}>Course Allocations</button>
-                  <button onClick={() => handleSelect('availability')} className={`w-full text-left px-2.5 py-1.5 rounded-md transition-colors ${activeView === 'availability' ? 'text-[#8C1B2E] dark:text-red-400 font-semibold' : 'hover:bg-stone-100 dark:hover:bg-zinc-800 text-stone-700 dark:text-zinc-300'}`}>Faculty Availability</button>
-                  <button onClick={() => handleSelect('generation_validator')} className={`w-full text-left px-2.5 py-1.5 rounded-md transition-colors ${activeView === 'generation_validator' ? 'text-[#8C1B2E] dark:text-red-400 font-semibold' : 'text-[#8C1B2E] dark:text-red-400 font-medium hover:bg-stone-100 dark:hover:bg-zinc-800'}`}>Generate Timetable</button>
-                  <button onClick={() => handleSelect('grid')} className={`w-full text-left px-2.5 py-1.5 rounded-md transition-colors ${activeView === 'grid' ? 'text-[#8C1B2E] dark:text-red-400 font-semibold' : 'hover:bg-stone-100 dark:hover:bg-zinc-800 text-stone-700 dark:text-zinc-300'}`}>Timetable Grid</button>
-                </div>
-              )}
-            </div>
+            {/* 5. SETTINGS */}
+            <button
+              onClick={() => handleSelect('settings')}
+              className={`w-full text-left px-3 py-2 rounded-lg transition-all flex items-center gap-2.5 ${
+                activeView === 'settings'
+                  ? 'bg-[#8C1B2E] text-white font-semibold shadow-xs'
+                  : 'hover:bg-stone-100 dark:hover:bg-zinc-800 text-stone-800 dark:text-zinc-200'
+              }`}
+            >
+              <Settings className="h-4 w-4 shrink-0" />
+              <span>Settings</span>
+            </button>
           </div>
         )}
 

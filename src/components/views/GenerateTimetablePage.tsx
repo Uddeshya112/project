@@ -18,7 +18,8 @@ import {
   Eye,
   Sliders,
   Check,
-  Send
+  Send,
+  BookOpen
 } from 'lucide-react';
 
 export function GenerateTimetablePage() {
@@ -112,190 +113,192 @@ export function GenerateTimetablePage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#E5E2D9] dark:border-zinc-800 pb-4">
         <div>
           <div className="flex items-center gap-2">
-            <span className="p-1 rounded bg-[#8C1B2E]/10 dark:bg-red-500/10 text-[#8C1B2E] dark:text-red-400">
+            <span className="p-1.5 rounded-lg bg-[#8C1B2E]/10 text-[#8C1B2E] dark:text-red-400">
               <Sparkles className="h-5 w-5" />
             </span>
             <h1 className="text-2xl sm:text-3xl font-serif font-bold text-stone-900 dark:text-zinc-100 tracking-tight">
-              Timetable Generation Machine
+              Generate Timetable
             </h1>
           </div>
           <p className="text-xs sm:text-sm text-stone-500 dark:text-zinc-400 mt-1">
-            Constraint Satisfaction, Soft Optimization, and Independent Verification Engine
+            Academic Year {academicYear.yearLabel} · Automated Clash-Free Timetable Generator
           </p>
         </div>
 
         <div className="flex items-center gap-2">
-          <span className="text-xs text-stone-500 dark:text-zinc-400">Lifecycle Status:</span>
-          <span className="px-2.5 py-1 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-md text-xs font-semibold text-stone-800 dark:text-zinc-200 shadow-2xs">
+          <span className="text-xs text-stone-500 dark:text-zinc-400">Current Status:</span>
+          <span className="px-3 py-1 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg text-xs font-semibold text-stone-800 dark:text-zinc-200 shadow-2xs">
             {publishStatus}
           </span>
         </div>
       </div>
 
-      {/* STEP 1: Pre-Generation Readiness & Academic Setup Audit */}
+      {/* 4-Step Process Header Bar */}
+      <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl p-3 flex flex-wrap items-center justify-around gap-2 text-xs font-semibold">
+        <div className="flex items-center gap-2 text-[#8C1B2E] dark:text-red-400 font-bold">
+          <span className="w-5 h-5 rounded-full bg-[#8C1B2E] text-white flex items-center justify-center text-[10px]">1</span>
+          <span>Academic Data</span>
+        </div>
+        <ArrowRight className="h-3 w-3 text-stone-300 dark:text-zinc-600 hidden sm:block" />
+        <div className={`flex items-center gap-2 ${isGenerating || generationOutput ? 'text-[#8C1B2E] dark:text-red-400 font-bold' : 'text-stone-500 dark:text-zinc-400'}`}>
+          <span className="w-5 h-5 rounded-full bg-stone-200 dark:bg-zinc-800 text-stone-700 dark:text-zinc-300 flex items-center justify-center text-[10px]">2</span>
+          <span>Generate</span>
+        </div>
+        <ArrowRight className="h-3 w-3 text-stone-300 dark:text-zinc-600 hidden sm:block" />
+        <div className={`flex items-center gap-2 ${generationOutput ? 'text-[#8C1B2E] dark:text-red-400 font-bold' : 'text-stone-500 dark:text-zinc-400'}`}>
+          <span className="w-5 h-5 rounded-full bg-stone-200 dark:bg-zinc-800 text-stone-700 dark:text-zinc-300 flex items-center justify-center text-[10px]">3</span>
+          <span>Review Options</span>
+        </div>
+        <ArrowRight className="h-3 w-3 text-stone-300 dark:text-zinc-600 hidden sm:block" />
+        <div className={`flex items-center gap-2 ${publishStatus === 'Published' ? 'text-emerald-700 font-bold' : 'text-stone-500 dark:text-zinc-400'}`}>
+          <span className="w-5 h-5 rounded-full bg-stone-200 dark:bg-zinc-800 text-stone-700 dark:text-zinc-300 flex items-center justify-center text-[10px]">4</span>
+          <span>Publish</span>
+        </div>
+      </div>
+
+      {/* STEP 1: Academic Data Readiness Summary */}
       <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl p-5 space-y-4 shadow-xs">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#E5E2D9] dark:border-zinc-800 pb-3">
           <div>
-            <span className="text-xs font-bold font-serif uppercase tracking-wider text-[#8C1B2E] dark:text-red-400">
-              Phase 1 · Master Setup Verification
-            </span>
+            <h3 className="text-sm font-bold font-serif text-stone-900 dark:text-zinc-100 uppercase tracking-wider">
+              Step 1 — Academic Data Readiness
+            </h3>
             <p className="text-xs text-stone-500 dark:text-zinc-400 mt-0.5">
-              Validates institutional data integrity, teacher availability, room capacity, and cohort definitions
+              Summary of sections, subgroups, faculty, rooms, and course allocations configured for generation.
             </p>
           </div>
 
           <div className="flex items-center gap-2">
             {validationReport.isReadyForGeneration ? (
-              <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20">
-                <CheckCircle2 className="h-3.5 w-3.5" /> Setup Verified · Ready
+              <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800">
+                <CheckCircle2 className="h-3.5 w-3.5" /> Ready for generation
               </span>
             ) : (
-              <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded bg-rose-50 text-rose-800 border border-rose-200 dark:bg-red-500/10 dark:text-red-400 dark:border-red-500/20">
-                <XCircle className="h-3.5 w-3.5" /> {validationReport.errorCount} Blocking Errors
+              <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded bg-rose-50 text-rose-800 border border-rose-200 dark:bg-red-950/40 dark:text-red-400 dark:border-red-800">
+                <XCircle className="h-3.5 w-3.5" /> {validationReport.errorCount} Issues to Resolve
               </span>
             )}
             <button
               onClick={() => runValidation()}
               className="p-1.5 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 text-stone-600 dark:text-zinc-400 hover:text-stone-900 dark:hover:text-zinc-100"
-              title="Re-run master data audit"
+              title="Re-check readiness"
             >
               <RotateCcw className="h-3.5 w-3.5" />
             </button>
           </div>
         </div>
 
-        {/* Setup Metrics Grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-6 gap-2 text-xs text-center">
-          <div className="p-2.5 bg-white dark:bg-zinc-950/60 rounded-lg border border-[#E5E2D9] dark:border-zinc-800">
-            <span className="text-[11px] text-stone-500 block">Working Days</span>
-            <span className="font-semibold text-stone-900 dark:text-zinc-100">{academicYear.workingDays?.length || 5} days</span>
+        {/* Readiness Compact Counters */}
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-xs text-center">
+          <div className="p-3 bg-white dark:bg-zinc-950/60 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 space-y-0.5">
+            <span className="text-[11px] text-stone-500 block">Sections</span>
+            <span className="font-bold text-base text-stone-900 dark:text-zinc-100">{activeSectionsCount}</span>
           </div>
 
-          <div className="p-2.5 bg-white dark:bg-zinc-950/60 rounded-lg border border-[#E5E2D9] dark:border-zinc-800">
-            <span className="text-[11px] text-stone-500 block">Courses Allocated</span>
-            <span className="font-semibold text-stone-900 dark:text-zinc-100">{allocatedCoursesCount} / {activeCoursesCount}</span>
+          <div className="p-3 bg-white dark:bg-zinc-950/60 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 space-y-0.5">
+            <span className="text-[11px] text-stone-500 block">Subgroups</span>
+            <span className="font-bold text-base text-stone-900 dark:text-zinc-100">{totalSubgroupsCount}</span>
           </div>
 
-          <div className="p-2.5 bg-white dark:bg-zinc-950/60 rounded-lg border border-[#E5E2D9] dark:border-zinc-800">
-            <span className="text-[11px] text-stone-500 block">Active Faculty</span>
-            <span className="font-semibold text-stone-900 dark:text-zinc-100">{activeFacultyCount} instructors</span>
+          <div className="p-3 bg-white dark:bg-zinc-950/60 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 space-y-0.5">
+            <span className="text-[11px] text-stone-500 block">Faculty</span>
+            <span className="font-bold text-base text-stone-900 dark:text-zinc-100">{activeFacultyCount}</span>
           </div>
 
-          <div className="p-2.5 bg-white dark:bg-zinc-950/60 rounded-lg border border-[#E5E2D9] dark:border-zinc-800">
+          <div className="p-3 bg-white dark:bg-zinc-950/60 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 space-y-0.5">
             <span className="text-[11px] text-stone-500 block">Rooms & Labs</span>
-            <span className="font-semibold text-stone-900 dark:text-zinc-100">{activeRoomsCount} facilities</span>
+            <span className="font-bold text-base text-stone-900 dark:text-zinc-100">{activeRoomsCount}</span>
           </div>
 
-          <div className="p-2.5 bg-white dark:bg-zinc-950/60 rounded-lg border border-[#E5E2D9] dark:border-zinc-800">
-            <span className="text-[11px] text-stone-500 block">Student Groups</span>
-            <span className="font-semibold text-[#8C1B2E] dark:text-red-400">{activeSectionsCount} sections</span>
-          </div>
-
-          <div className="p-2.5 bg-white dark:bg-zinc-950/60 rounded-lg border border-[#E5E2D9] dark:border-zinc-800">
-            <span className="text-[11px] text-stone-500 block">Lab Subgroups</span>
-            <span className="font-semibold text-stone-900 dark:text-zinc-100">{totalSubgroupsCount} cohorts</span>
+          <div className="col-span-2 sm:col-span-1 p-3 bg-white dark:bg-zinc-950/60 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 space-y-0.5">
+            <span className="text-[11px] text-stone-500 block">Course Allocations</span>
+            <span className="font-bold text-base text-[#8C1B2E] dark:text-red-400">{allocations.length}</span>
           </div>
         </div>
       </div>
 
-      {/* STEP 2: Generation Engine Parameters */}
+      {/* STEP 2: Generation Execution & Settings */}
       <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl p-5 space-y-4 shadow-xs">
         <div className="border-b border-[#E5E2D9] dark:border-zinc-800 pb-3">
-          <span className="text-xs font-bold font-serif uppercase tracking-wider text-[#8C1B2E] dark:text-red-400">
-            Phase 2 · Search & Optimization Settings
-          </span>
+          <h3 className="text-sm font-bold font-serif text-stone-900 dark:text-zinc-100 uppercase tracking-wider">
+            Step 2 — Timetable Generator
+          </h3>
           <p className="text-xs text-stone-500 dark:text-zinc-400 mt-0.5">
-            Configure search depth, time budget, and number of candidate timetable options to compile
+            Run the automated solver to construct a clash-free timetable matrix.
           </p>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
           <div>
             <label className="text-stone-700 dark:text-zinc-300 font-medium block mb-1">
-              Optimization Quality
+              Optimization Depth
             </label>
             <select
               value={budgetMode}
               onChange={e => setBudgetMode(e.target.value as any)}
-              className="w-full bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2 text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
+              className="w-full bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2.5 text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
             >
-              <option value="FAST">Fast Feasibility (Quick Verification)</option>
-              <option value="BALANCED">Balanced (MRV + Penalty Minimization)</option>
-              <option value="MAXIMUM_OPTIMIZATION">Thorough Local Search (Best Gaps & Utilization)</option>
+              <option value="FAST">Fast (Quick Check)</option>
+              <option value="BALANCED">Balanced (Recommended)</option>
+              <option value="MAXIMUM_OPTIMIZATION">Thorough (Maximum Gap Minimization)</option>
             </select>
           </div>
 
           <div>
             <label className="text-stone-700 dark:text-zinc-300 font-medium block mb-1">
-              Time Budget Limit
-            </label>
-            <select
-              value={timeBudgetMs}
-              onChange={e => setTimeBudgetMs(Number(e.target.value))}
-              className="w-full bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2 text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
-            >
-              <option value={300}>Auto (Fast ~300ms)</option>
-              <option value={1000}>1 Second</option>
-              <option value={3000}>3 Seconds</option>
-              <option value={5000}>5 Seconds</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="text-stone-700 dark:text-zinc-300 font-medium block mb-1">
-              Candidate Timetable Options
+              Number of Candidate Options
             </label>
             <select
               value={numCandidates}
               onChange={e => setNumCandidates(Number(e.target.value))}
-              className="w-full bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2 text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
+              className="w-full bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2.5 text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
             >
-              <option value={1}>1 Option</option>
-              <option value={3}>3 Options (Recommended for Review)</option>
-              <option value={5}>5 Options</option>
+              <option value={1}>1 Timetable Option</option>
+              <option value={3}>3 Timetable Options (Recommended)</option>
+              <option value={5}>5 Timetable Options</option>
             </select>
           </div>
         </div>
 
         <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-[#E5E2D9] dark:border-zinc-800">
           <span className="text-[11px] text-stone-500">
-            Bitset search algorithm guarantees 100% collision-free assignments. Every candidate is independently re-validated.
+            Guarantees 100% collision-free assignments across faculty, rooms, and student sections.
           </span>
 
           <button
             onClick={handleStartGeneration}
             disabled={isGenerating || !validationReport.isReadyForGeneration}
-            className={`flex items-center justify-center gap-2 px-6 py-2.5 rounded-lg text-xs font-semibold shadow-xs transition-all ${
+            className={`flex items-center justify-center gap-2 px-6 py-3 rounded-xl text-xs font-bold shadow-md transition-all ${
               !isGenerating && validationReport.isReadyForGeneration
-                ? 'bg-[#8C1B2E] hover:bg-[#731625] text-white cursor-pointer'
+                ? 'bg-[#8C1B2E] hover:bg-[#721525] text-white cursor-pointer'
                 : 'bg-stone-200 text-stone-400 dark:bg-zinc-800 dark:text-zinc-500 cursor-not-allowed'
             }`}
           >
             {isGenerating ? (
               <>
-                <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                <span>Generating & Validating...</span>
+                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                <span>Generating Draft Timetable...</span>
               </>
             ) : (
               <>
-                <Sparkles className="h-4 w-4" />
-                <span>Execute Generation Engine</span>
+                <Sparkles className="h-4 w-4 text-amber-300" />
+                <span>Generate Draft Timetable</span>
               </>
             )}
           </button>
         </div>
       </div>
 
-      {/* STEP 3: Multi-Candidate Generated Timetable Options */}
+      {/* STEP 3 & 4: Review Options & Publish */}
       {generationOutput && (
         <div className="space-y-4">
           <div className="flex items-center justify-between border-b border-[#E5E2D9] dark:border-zinc-800 pb-3">
             <div>
-              <h2 className="font-serif text-lg font-bold text-stone-900 dark:text-zinc-100">
-                Generated Candidate Timetables ({generationOutput.candidates.length})
-              </h2>
+              <h3 className="text-sm font-bold font-serif text-stone-900 dark:text-zinc-100 uppercase tracking-wider">
+                Step 3 — Review Generated Options ({generationOutput.candidates.length})
+              </h3>
               <p className="text-xs text-stone-500 dark:text-zinc-400 mt-0.5">
-                Each candidate was independently audited and verified against hard and soft constraints
+                Select the preferred candidate option to set as the active draft.
               </p>
             </div>
 
@@ -304,7 +307,7 @@ export function GenerateTimetablePage() {
               className="flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 rounded-lg text-xs font-semibold text-stone-700 dark:text-zinc-300 shadow-2xs transition-colors"
             >
               <Eye className="h-3.5 w-3.5" />
-              <span>Open Master Matrix</span>
+              <span>Inspect Grid Matrix</span>
             </button>
           </div>
 
@@ -334,13 +337,13 @@ export function GenerateTimetablePage() {
                           </span>
                         )}
                       </div>
-                      <span className="text-[11px] font-mono text-stone-400 block mt-0.5">
-                        Seed #{cand.seed} · {cand.scheduledHours} sessions
+                      <span className="text-[11px] text-stone-400 block mt-0.5">
+                        {cand.scheduledHours} sessions scheduled
                       </span>
                     </div>
 
                     <div className="text-right">
-                      <span className="text-[10px] text-stone-400 block">Health Score</span>
+                      <span className="text-[10px] text-stone-400 block">Quality Score</span>
                       <span className="font-serif font-bold text-lg text-[#8C1B2E] dark:text-red-400 leading-none">
                         {cand.healthScore}
                         <span className="text-xs text-stone-400 font-normal">/100</span>
@@ -348,67 +351,43 @@ export function GenerateTimetablePage() {
                     </div>
                   </div>
 
-                  {/* Independent Validator Seal */}
+                  {/* Conflict Check Badge */}
                   <div className="p-2.5 rounded-lg bg-white dark:bg-zinc-950/60 border border-[#E5E2D9] dark:border-zinc-800 flex items-center justify-between text-xs">
                     <span className="flex items-center gap-1.5 font-medium text-emerald-700 dark:text-emerald-400">
                       <ShieldCheck className="h-4 w-4" />
-                      <span>Hard Violations</span>
+                      <span>Hard Conflicts</span>
                     </span>
                     <strong className="font-mono text-emerald-700 dark:text-emerald-400">
-                      {valReport ? valReport.hardViolationsCount : 0} Conflicts
+                      {valReport ? valReport.hardViolationsCount : 0}
                     </strong>
                   </div>
 
-                  {/* Soft Objective Breakdown */}
-                  <div className="space-y-1.5 text-[11px] border-t border-[#E5E2D9] dark:border-zinc-800/80 pt-2.5">
-                    <div className="flex justify-between text-stone-600 dark:text-zinc-400">
-                      <span>Faculty Gaps Penalty:</span>
-                      <strong className="font-mono text-stone-800 dark:text-zinc-200">
-                        {cand.softPenalty.facultyGapsPenalty}
-                      </strong>
-                    </div>
-                    <div className="flex justify-between text-stone-600 dark:text-zinc-400">
-                      <span>Consecutive Limit Penalty:</span>
-                      <strong className="font-mono text-stone-800 dark:text-zinc-200">
-                        {cand.softPenalty.facultyConsecutivePenalty}
-                      </strong>
-                    </div>
-                    <div className="flex justify-between text-stone-600 dark:text-zinc-400">
-                      <span>Room Capacity Fit:</span>
-                      <strong className="font-mono text-stone-800 dark:text-zinc-200">
-                        {cand.softPenalty.roomCapacityFitPenalty}
-                      </strong>
-                    </div>
-                  </div>
-
-                  <div className="pt-2 border-t border-[#E5E2D9] dark:border-zinc-800 flex items-center justify-between">
-                    <button
-                      onClick={() => handleSelectAndApply(idx)}
-                      className={`w-full py-2 rounded-lg text-xs font-semibold transition-all ${
-                        isSelected
-                          ? 'bg-[#8C1B2E] text-white shadow-xs'
-                          : 'bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 text-stone-700 dark:text-zinc-300 hover:text-stone-900'
-                      }`}
-                    >
-                      {isSelected ? '✓ Selected as Working Draft' : 'Select Option'}
-                    </button>
-                  </div>
+                  <button
+                    onClick={() => handleSelectAndApply(idx)}
+                    className={`w-full py-2 rounded-lg text-xs font-semibold transition-all ${
+                      isSelected
+                        ? 'bg-[#8C1B2E] text-white shadow-xs'
+                        : 'bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 text-stone-700 dark:text-zinc-300 hover:text-stone-900'
+                    }`}
+                  >
+                    {isSelected ? '✓ Selected as Active Draft' : 'Select Option'}
+                  </button>
                 </div>
               );
             })}
           </div>
 
-          {/* Publishing Gate Section */}
+          {/* STEP 4: Publish Gate */}
           <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl p-5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4 mt-6">
             <div className="space-y-0.5">
               <div className="flex items-center gap-2">
                 <ShieldCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
                 <h3 className="font-serif text-sm font-bold text-stone-900 dark:text-zinc-100">
-                  Institutional Master Publication Gate
+                  Step 4 — Master Publication
                 </h3>
               </div>
               <p className="text-xs text-stone-500 dark:text-zinc-400">
-                Approving publishes this timetable directly to all student timetables, faculty portals, and classroom rosters.
+                Publishes this timetable directly to student schedules and faculty rosters.
               </p>
             </div>
 
@@ -417,7 +396,7 @@ export function GenerateTimetablePage() {
                 onClick={() => setActiveView('grid')}
                 className="px-3.5 py-2 bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 rounded-lg text-xs font-semibold text-stone-700 dark:text-zinc-300 shadow-2xs transition-colors"
               >
-                Inspect in Grid First
+                Inspect Grid Matrix
               </button>
 
               <button
@@ -425,12 +404,12 @@ export function GenerateTimetablePage() {
                 className="flex items-center gap-1.5 px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors"
               >
                 <Send className="h-3.5 w-3.5" />
-                <span>Approve & Publish to Campus</span>
+                <span>Approve & Publish Timetable</span>
               </button>
             </div>
           </div>
 
-          {/* Publish Feedback Alert */}
+          {/* Feedback */}
           {publishFeedback && (
             <div
               className={`p-4 rounded-xl border text-xs flex items-start gap-2.5 animate-in fade-in duration-200 ${
@@ -445,7 +424,7 @@ export function GenerateTimetablePage() {
                 <XCircle className="h-4 w-4 text-rose-600 mt-0.5 shrink-0" />
               )}
               <div>
-                <div className="font-bold">{publishFeedback.success ? 'Published & Live' : 'Publication Blocked'}</div>
+                <div className="font-bold">{publishFeedback.success ? 'Published Successfully' : 'Publication Blocked'}</div>
                 <div className="mt-0.5">{publishFeedback.message}</div>
               </div>
             </div>

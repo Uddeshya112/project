@@ -478,6 +478,10 @@ export const SECTIONS: StudentSection[] = [
     semester: 5,
     batchYear: 2024,
     studentCount: 52,
+    subSections: [
+      { id: 'sub-a1', sectionId: 'sec-cse-a', name: '2C4-SG1', studentCount: 26, type: 'Lab' },
+      { id: 'sub-a2', sectionId: 'sec-cse-a', name: '2C4-SG2', studentCount: 26, type: 'Lab' },
+    ],
     classRepresentative: {
       name: 'Aarav Mehta',
       email: 'aarav.m@student.apex.edu.in',
@@ -492,6 +496,10 @@ export const SECTIONS: StudentSection[] = [
     semester: 5,
     batchYear: 2024,
     studentCount: 48,
+    subSections: [
+      { id: 'sub-b1', sectionId: 'sec-cse-b', name: '2C5-SG1', studentCount: 24, type: 'Lab' },
+      { id: 'sub-b2', sectionId: 'sec-cse-b', name: '2C5-SG2', studentCount: 24, type: 'Lab' },
+    ],
     classRepresentative: {
       name: 'Diya Sen',
       email: 'diya.s@student.apex.edu.in',
@@ -506,6 +514,10 @@ export const SECTIONS: StudentSection[] = [
     semester: 5,
     batchYear: 2024,
     studentCount: 45,
+    subSections: [
+      { id: 'sub-e1', sectionId: 'sec-ece-a', name: '3E1-SG1', studentCount: 23, type: 'Lab' },
+      { id: 'sub-e2', sectionId: 'sec-ece-a', name: '3E1-SG2', studentCount: 22, type: 'Lab' },
+    ],
     classRepresentative: {
       name: 'Nikhil Joshi',
       email: 'nikhil.j@student.apex.edu.in',

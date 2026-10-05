@@ -91,7 +91,9 @@ export type ViewTab =
   | 'student_courses'
   | 'student_section'
   | 'governance'
-  | 'auth_gov';
+  | 'auth_gov'
+  | 'settings'
+  | 'profile';
 
 interface TimetableContextType {
   // Master data

@@ -94,7 +94,7 @@ export function AcademicSetupHubView() {
     setSelectedRoomId,
   } = useTimetable();
 
-  const [activeTab, setActiveTab] = useState<SetupSubTab>('overview');
+  const [activeTab, setActiveTab] = useState<SetupSubTab>('courses');
 
   React.useEffect(() => {
     if (activeView === 'academic_year') setActiveTab('academic_year');
@@ -105,7 +105,7 @@ export function AcademicSetupHubView() {
     else if (activeView === 'sections_mgmt') setActiveTab('sections');
     else if (activeView === 'allocations') setActiveTab('allocations');
     else if (activeView === 'availability') setActiveTab('constraints');
-    else if (activeView === 'academic_setup') setActiveTab('overview');
+    else if (activeView === 'academic_setup') setActiveTab('courses');
   }, [activeView]);
   const [courseSearch, setCourseSearch] = useState('');
   const [facultySearch, setFacultySearch] = useState('');
@@ -281,20 +281,13 @@ export function AcademicSetupHubView() {
   };
 
   const navTabs = [
-    { id: 'master_excel', label: 'Master Excel', icon: <FileSpreadsheet className="h-3.5 w-3.5" />, badge: 'XLSX' },
-    { id: 'overview', label: 'Overview', icon: <CalendarDays className="h-3.5 w-3.5" /> },
-    { id: 'academic_year', label: 'Academic Year', icon: <CalendarDays className="h-3.5 w-3.5" /> },
-    { id: 'departments', label: 'Departments', icon: <Building2 className="h-3.5 w-3.5" />, badge: departments.length },
-    { id: 'programs', label: 'Programs', icon: <GraduationCap className="h-3.5 w-3.5" />, badge: programs.length },
     { id: 'courses', label: 'Courses', icon: <BookOpen className="h-3.5 w-3.5" />, badge: courses.length },
     { id: 'faculty', label: 'Faculty', icon: <UserSquare2 className="h-3.5 w-3.5" />, badge: facultyMembers.length },
     { id: 'rooms', label: 'Rooms & Labs', icon: <DoorOpen className="h-3.5 w-3.5" />, badge: rooms.length },
-    { id: 'sections', label: 'Groups & Subgroups', icon: <Users className="h-3.5 w-3.5" />, badge: sections.length },
+    { id: 'sections', label: 'Sections & Groups', icon: <Users className="h-3.5 w-3.5" />, badge: sections.length },
     { id: 'allocations', label: 'Allocations', icon: <Layers className="h-3.5 w-3.5" />, badge: allocations.length },
-    { id: 'constraints', label: 'Constraints', icon: <ShieldCheck className="h-3.5 w-3.5" />, badge: constraints.filter(c => c.isActive).length },
-    { id: 'generator', label: 'Generator', icon: <Sparkles className="h-3.5 w-3.5 text-[#8C1B2E] dark:text-red-400" /> },
-    { id: 'review', label: 'Review Matrix', icon: <Eye className="h-3.5 w-3.5" /> },
-    { id: 'bulk_import', label: 'Fast CSV', icon: <Upload className="h-3.5 w-3.5" /> },
+    { id: 'constraints', label: 'Constraints & Rules', icon: <ShieldCheck className="h-3.5 w-3.5" />, badge: constraints.filter(c => c.isActive).length },
+    { id: 'master_excel', label: 'Excel Import', icon: <FileSpreadsheet className="h-3.5 w-3.5" /> },
   ];
 
   return (
