@@ -1,4 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { apiUrl } from './apiConfig';
 
 // Browser-safe Supabase configuration
 // NEVER include SUPABASE_SERVICE_ROLE_KEY here!
@@ -28,7 +29,7 @@ export async function apiFetch<T = any>(endpoint: string, options: RequestInit =
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  const response = await fetch(endpoint, {
+  const response = await fetch(apiUrl(endpoint), {
     ...options,
     headers,
   });

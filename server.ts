@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
+import cors from 'cors';
 import type { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import path from 'path';
@@ -72,6 +73,7 @@ app.use((_req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 
 export type WorkspaceType = 'Student' | 'CR' | 'Faculty' | 'Coordinator' | 'Admin';
