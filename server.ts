@@ -2911,30 +2911,37 @@ app.get('/api/audit', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN', 
 // Vite middleware in dev or static files in production
 // -------------------------------------------------------------
 async function setupApp() {
-  // Synchronize baseline users into Supabase Auth Authority on startup
-  await ensureSupabaseAuthUsers().catch(err => console.error('[SUPABASE AUTH SETUP ERROR]:', err));
-
-  if (process.env.NODE_ENV === 'production') {
+  if (process.env.NODE_ENV === 'production' || process.env.RENDER) {
     app.use(express.static(path.join(__dirname, 'dist')));
-    app.get('*', (_req, res) => {
+    app.get('*', (_req, res, next) => {
+      if (_req.path.startsWith('/api/')) {
+        return next();
+      }
       res.sendFile(path.join(__dirname, 'dist', 'index.html'));
     });
   } else {
-    const { createServer } = await import('vite');
-    const vite = await createServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
+    try {
+      const { createServer } = await import('vite');
+      const vite = await createServer({
+        server: { middlewareMode: true },
+        appType: 'spa',
+      });
+      app.use(vite.middlewares);
+    } catch {
+      app.use(express.static(path.join(__dirname, 'dist')));
+    }
   }
 
-  app.listen(Number(port), '0.0.0.0', () => {
-    console.log(`Thapar Timetable Server running on http://0.0.0.0:${port}`);
-  });
+  // Synchronize baseline users into Supabase Auth Authority in background non-blocking
+  ensureSupabaseAuthUsers().catch(err => console.error('[SUPABASE AUTH SETUP ERROR]:', err));
 }
 
 if (!process.env.VERCEL) {
   setupApp();
+  const effectivePort = Number(process.env.PORT) || 3000;
+  app.listen(effectivePort, '0.0.0.0', () => {
+    console.log(`Server listening on ${effectivePort}`);
+  });
 } else {
   ensureSupabaseAuthUsers().catch(() => {});
 }
