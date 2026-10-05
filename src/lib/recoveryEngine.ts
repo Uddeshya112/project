@@ -10,7 +10,7 @@ import {
   DayOfWeek,
   WhatIfSimulation
 } from '../types';
-import { TIME_SLOTS } from './initialData';
+import { TIME_SLOTS } from './initialData.js';
 
 export interface ConstraintCheckResult {
   isFeasible: boolean;

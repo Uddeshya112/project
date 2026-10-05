@@ -278,7 +278,7 @@ export function validateAcademicSetup(
   };
 }
 
-import { executeOptimizationEngine } from './optimizationEngine';
+import { executeOptimizationEngine } from './optimizationEngine.js';
 
 /**
  * Generates a draft timetable using the high-performance Bitset Constraint Optimization Engine.

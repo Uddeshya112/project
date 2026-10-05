@@ -12,8 +12,8 @@ import {
   hashPasswordLegacy,
   evaluatePasswordPolicy,
   BCRYPT_SALT_ROUNDS,
-} from './src/lib/passwordUtils';
-import { executeOptimizationEngine, compileSchedulingProblem } from './src/lib/optimizationEngine';
+} from './src/lib/passwordUtils.js';
+import { executeOptimizationEngine, compileSchedulingProblem } from './src/lib/optimizationEngine.js';
 import {
   INITIAL_ACADEMIC_YEAR,
   INITIAL_ALLOCATIONS,
@@ -22,8 +22,8 @@ import {
   SECTIONS,
   COURSES,
   INITIAL_CONSTRAINTS,
-} from './src/lib/initialData';
-import { supabaseStore } from './src/server/supabaseStore';
+} from './src/lib/initialData.js';
+import { supabaseStore } from './src/server/supabaseStore.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2225,7 +2225,8 @@ app.post('/api/academic/departments', requireAuth, requireRole(['COORDINATOR', '
 
 app.put('/api/academic/departments/:id', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
   try {
-    const dept = supabaseStore.updateDepartment(req.params.id, req.body, req.authenticatedUser?.name);
+    const deptId = req.params.id as string;
+    const dept = supabaseStore.updateDepartment(deptId, req.body, req.authenticatedUser?.name);
     return res.json({ success: true, department: dept });
   } catch (err: any) {
     return res.status(400).json({ success: false, message: err.message });
@@ -2234,7 +2235,8 @@ app.put('/api/academic/departments/:id', requireAuth, requireRole(['COORDINATOR'
 
 app.delete('/api/academic/departments/:id', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
   try {
-    supabaseStore.deleteDepartment(req.params.id, req.authenticatedUser?.name);
+    const deptId = req.params.id as string;
+    supabaseStore.deleteDepartment(deptId, req.authenticatedUser?.name);
     return res.json({ success: true, message: 'Department deleted successfully.' });
   } catch (err: any) {
     return res.status(400).json({ success: false, message: err.message });
@@ -2272,7 +2274,8 @@ app.post('/api/academic/programs', requireAuth, requireRole(['COORDINATOR', 'COL
 
 app.put('/api/academic/programs/:id', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
   try {
-    const prog = supabaseStore.updateProgram(req.params.id, req.body, req.authenticatedUser?.name);
+    const progId = req.params.id as string;
+    const prog = supabaseStore.updateProgram(progId, req.body, req.authenticatedUser?.name);
     return res.json({ success: true, program: prog });
   } catch (err: any) {
     return res.status(400).json({ success: false, message: err.message });
@@ -2281,7 +2284,8 @@ app.put('/api/academic/programs/:id', requireAuth, requireRole(['COORDINATOR', '
 
 app.delete('/api/academic/programs/:id', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
   try {
-    supabaseStore.deleteProgram(req.params.id, req.authenticatedUser?.name);
+    const progId = req.params.id as string;
+    supabaseStore.deleteProgram(progId, req.authenticatedUser?.name);
     return res.json({ success: true, message: 'Program deleted successfully.' });
   } catch (err: any) {
     return res.status(400).json({ success: false, message: err.message });
@@ -2348,7 +2352,8 @@ app.post('/api/academic/courses', requireAuth, requireRole(['COORDINATOR', 'COLL
 
 app.put('/api/academic/courses/:id', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
   try {
-    const course = supabaseStore.updateCourse(req.params.id, req.body, req.authenticatedUser?.name);
+    const courseId = req.params.id as string;
+    const course = supabaseStore.updateCourse(courseId, req.body, req.authenticatedUser?.name);
     return res.json({ success: true, course });
   } catch (err: any) {
     return res.status(400).json({ success: false, message: err.message });
@@ -2357,7 +2362,8 @@ app.put('/api/academic/courses/:id', requireAuth, requireRole(['COORDINATOR', 'C
 
 app.delete('/api/academic/courses/:id', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
   try {
-    supabaseStore.deleteCourse(req.params.id, req.authenticatedUser?.name);
+    const courseId = req.params.id as string;
+    supabaseStore.deleteCourse(courseId, req.authenticatedUser?.name);
     return res.json({ success: true, message: 'Course deleted successfully.' });
   } catch (err: any) {
     return res.status(400).json({ success: false, message: err.message });
@@ -2405,7 +2411,8 @@ app.post('/api/academic/faculty', requireAuth, requireRole(['COORDINATOR', 'COLL
 
 app.put('/api/academic/faculty/:id', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
   try {
-    const faculty = supabaseStore.updateFaculty(req.params.id, req.body, req.authenticatedUser?.name);
+    const facultyId = req.params.id as string;
+    const faculty = supabaseStore.updateFaculty(facultyId, req.body, req.authenticatedUser?.name);
     return res.json({ success: true, faculty });
   } catch (err: any) {
     return res.status(400).json({ success: false, message: err.message });
@@ -2414,7 +2421,8 @@ app.put('/api/academic/faculty/:id', requireAuth, requireRole(['COORDINATOR', 'C
 
 app.delete('/api/academic/faculty/:id', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
   try {
-    supabaseStore.deleteFaculty(req.params.id, req.authenticatedUser?.name);
+    const facultyId = req.params.id as string;
+    supabaseStore.deleteFaculty(facultyId, req.authenticatedUser?.name);
     return res.json({ success: true, message: 'Faculty removed successfully.' });
   } catch (err: any) {
     return res.status(400).json({ success: false, message: err.message });
@@ -2458,7 +2466,8 @@ app.post('/api/academic/rooms', requireAuth, requireRole(['COORDINATOR', 'COLLEG
 
 app.put('/api/academic/rooms/:id', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
   try {
-    const room = supabaseStore.updateRoom(req.params.id, req.body, req.authenticatedUser?.name);
+    const roomId = req.params.id as string;
+    const room = supabaseStore.updateRoom(roomId, req.body, req.authenticatedUser?.name);
     return res.json({ success: true, room });
   } catch (err: any) {
     return res.status(400).json({ success: false, message: err.message });
@@ -2467,7 +2476,8 @@ app.put('/api/academic/rooms/:id', requireAuth, requireRole(['COORDINATOR', 'COL
 
 app.delete('/api/academic/rooms/:id', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
   try {
-    supabaseStore.deleteRoom(req.params.id, req.authenticatedUser?.name);
+    const roomId = req.params.id as string;
+    supabaseStore.deleteRoom(roomId, req.authenticatedUser?.name);
     return res.json({ success: true, message: 'Room deleted successfully.' });
   } catch (err: any) {
     return res.status(400).json({ success: false, message: err.message });
@@ -2514,7 +2524,8 @@ app.post('/api/academic/groups', requireAuth, requireRole(['COORDINATOR', 'COLLE
 
 app.put('/api/academic/groups/:id', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
   try {
-    const group = supabaseStore.updateGroup(req.params.id, req.body, req.authenticatedUser?.name);
+    const groupId = req.params.id as string;
+    const group = supabaseStore.updateGroup(groupId, req.body, req.authenticatedUser?.name);
     return res.json({ success: true, section: group });
   } catch (err: any) {
     return res.status(400).json({ success: false, message: err.message });
@@ -2523,7 +2534,8 @@ app.put('/api/academic/groups/:id', requireAuth, requireRole(['COORDINATOR', 'CO
 
 app.delete('/api/academic/groups/:id', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
   try {
-    supabaseStore.deleteGroup(req.params.id, req.authenticatedUser?.name);
+    const groupId = req.params.id as string;
+    supabaseStore.deleteGroup(groupId, req.authenticatedUser?.name);
     return res.json({ success: true, message: 'Cohort removed successfully.' });
   } catch (err: any) {
     return res.status(400).json({ success: false, message: err.message });
@@ -2571,7 +2583,9 @@ app.post('/api/academic/subgroups', requireAuth, requireRole(['COORDINATOR', 'CO
 
 app.delete('/api/academic/subgroups/:groupId/:subgroupId', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
   try {
-    supabaseStore.deleteSubgroup(req.params.groupId, req.params.subgroupId, req.authenticatedUser?.name);
+    const groupId = req.params.groupId as string;
+    const subgroupId = req.params.subgroupId as string;
+    supabaseStore.deleteSubgroup(groupId, subgroupId, req.authenticatedUser?.name);
     return res.json({ success: true, message: 'Subgroup removed successfully.' });
   } catch (err: any) {
     return res.status(400).json({ success: false, message: err.message });
@@ -2616,7 +2630,8 @@ app.post('/api/academic/allocations', requireAuth, requireRole(['COORDINATOR', '
 
 app.put('/api/academic/allocations/:id', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
   try {
-    const alloc = supabaseStore.updateAllocation(req.params.id, req.body, req.authenticatedUser?.name);
+    const allocId = req.params.id as string;
+    const alloc = supabaseStore.updateAllocation(allocId, req.body, req.authenticatedUser?.name);
     return res.json({ success: true, allocation: alloc });
   } catch (err: any) {
     return res.status(400).json({ success: false, message: err.message });
@@ -2625,7 +2640,8 @@ app.put('/api/academic/allocations/:id', requireAuth, requireRole(['COORDINATOR'
 
 app.delete('/api/academic/allocations/:id', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
   try {
-    supabaseStore.deleteAllocation(req.params.id, req.authenticatedUser?.name);
+    const allocId = req.params.id as string;
+    supabaseStore.deleteAllocation(allocId, req.authenticatedUser?.name);
     return res.json({ success: true, message: 'Allocation deleted successfully.' });
   } catch (err: any) {
     return res.status(400).json({ success: false, message: err.message });
@@ -2878,7 +2894,8 @@ app.get('/api/notifications', (_req: Request, res: Response) => {
 });
 
 app.post('/api/notifications/:id/read', (req: Request, res: Response) => {
-  const success = supabaseStore.markNotificationRead(req.params.id);
+  const notifId = req.params.id as string;
+  const success = supabaseStore.markNotificationRead(notifId);
   return res.json({ success });
 });
 

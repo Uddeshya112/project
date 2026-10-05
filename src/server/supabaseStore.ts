@@ -35,15 +35,15 @@ import {
   INITIAL_POLLS,
   INITIAL_NOTIFICATIONS,
   INITIAL_VERSIONS,
-} from '../lib/initialData';
+} from '../lib/initialData.js';
 import {
   validateTimetableIndependently,
   validateProposedSessionMove,
   validateProposedSessionSwap,
-} from '../lib/independentValidator';
-import { executeOptimizationEngine } from '../lib/optimizationEngine';
-import { findSelfHealingRecoverySlots } from '../lib/recoveryEngine';
-import { ExcelImportPreview } from '../lib/excelMasterService';
+} from '../lib/independentValidator.js';
+import { executeOptimizationEngine } from '../lib/optimizationEngine.js';
+import { findSelfHealingRecoverySlots } from '../lib/recoveryEngine.js';
+import { ExcelImportPreview } from '../lib/excelMasterService.js';
 
 // Initialize Supabase Client if environment variables are provided
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
