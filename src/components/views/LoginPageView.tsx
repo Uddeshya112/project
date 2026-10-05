@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useTimetable } from '../../context/TimetableContext';
 import { ThaparLogo } from '../ThaparLogo';
 import { evaluatePasswordPolicy } from '../../lib/passwordUtils';
+import { supabaseClient, apiFetch } from '../../lib/supabaseClient';
 import {
   Mail,
   Lock,
@@ -25,7 +26,7 @@ interface LoginPageViewProps {
   onSuccessLogin: (workspaces?: any[]) => void;
 }
 
-type AuthScreenMode = 'login' | 'register' | 'register_success' | 'forgot_password' | 'reset_password';
+type AuthScreenMode = 'login' | 'register' | 'register_success' | 'forgot_password' | 'otp_verification' | 'reset_password' | 'reset_success';
 
 export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
   const {
@@ -57,9 +58,21 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
   const [showRegConfirmPassword, setShowRegConfirmPassword] = useState(false);
   const [registeredEmail, setRegisteredEmail] = useState('');
 
-  // Forgot Password States
+  // Forgot Password & OTP States
   const [forgotEmail, setForgotEmail] = useState('');
-  const [activeResetToken, setActiveResetToken] = useState<string | null>(null);
+  const [otpDigits, setOtpDigits] = useState<string[]>(['', '', '', '', '', '']);
+  const [resendCooldown, setResendCooldown] = useState<number>(0);
+  const otpInputRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  useEffect(() => {
+    let timer: any;
+    if (resendCooldown > 0) {
+      timer = setInterval(() => {
+        setResendCooldown(prev => (prev > 0 ? prev - 1 : 0));
+      }, 1000);
+    }
+    return () => clearInterval(timer);
+  }, [resendCooldown]);
 
   // Reset Password States
   const [newPassword, setNewPassword] = useState('');
@@ -358,7 +371,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
   };
 
   /**
-   * Handle Forgot Password Submit (POST /api/auth/forgot-password)
+   * Handle Forgot Password Submit (Step 1: Request OTP)
    */
   const handleForgotPasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -374,30 +387,108 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
     setIsLoading(true);
 
     try {
-      const res = await requestPasswordReset(emailTrim);
-      setSuccessMessage(res.message);
-      if (res.resetToken) {
-        setActiveResetToken(res.resetToken);
+      if (supabaseClient) {
+        await supabaseClient.auth.resetPasswordForEmail(emailTrim, {
+          redirectTo: window.location.origin,
+        });
+      } else {
+        await apiFetch('/api/auth/forgot-password', {
+          method: 'POST',
+          body: JSON.stringify({ email: emailTrim }),
+        }).catch(() => {});
       }
+
+      setSuccessMessage("If an account exists for this email, we've sent a verification code.");
+      setScreenMode('otp_verification');
+      setResendCooldown(60);
+      setOtpDigits(['', '', '', '', '', '']);
     } catch {
-      setErrorMessage('Unable to process password reset request.');
+      // Never reveal account existence
+      setSuccessMessage("If an account exists for this email, we've sent a verification code.");
+      setScreenMode('otp_verification');
+      setResendCooldown(60);
+      setOtpDigits(['', '', '', '', '', '']);
     } finally {
       setIsLoading(false);
     }
   };
 
   /**
-   * Handle Reset Password Submit (POST /api/auth/reset-password)
+   * Handle Verify OTP (Step 2: Verify 6-digit OTP token)
+   */
+  const handleVerifyOtpSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    const otpStr = otpDigits.join('');
+    if (otpStr.length !== 6) {
+      setErrorMessage('Please enter the complete 6-digit verification code.');
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      if (supabaseClient) {
+        const { error } = await supabaseClient.auth.verifyOtp({
+          email: forgotEmail.trim(),
+          token: otpStr,
+          type: 'recovery',
+        });
+        if (error) throw error;
+      } else {
+        const res = await apiFetch('/api/auth/validate-token', {
+          method: 'POST',
+          body: JSON.stringify({ email: forgotEmail.trim(), token: otpStr }),
+        });
+        if (!res.success) throw new Error(res.message || 'Invalid verification code.');
+      }
+
+      setSuccessMessage('Verification code confirmed successfully.');
+      setScreenMode('reset_password');
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Invalid or expired verification code.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  /**
+   * Handle Resend OTP
+   */
+  const handleResendOtp = async () => {
+    if (resendCooldown > 0) return;
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    setIsLoading(true);
+
+    try {
+      if (supabaseClient) {
+        await supabaseClient.auth.resetPasswordForEmail(forgotEmail.trim(), {
+          redirectTo: window.location.origin,
+        });
+      }
+      setSuccessMessage('A new verification code has been sent.');
+      setResendCooldown(60);
+      setOtpDigits(['', '', '', '', '', '']);
+    } catch {
+      setSuccessMessage('A new verification code has been sent.');
+      setResendCooldown(60);
+      setOtpDigits(['', '', '', '', '', '']);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  /**
+   * Handle Reset Password Submit (Step 3: Update Password)
    */
   const handleResetPasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
     setSuccessMessage(null);
 
-    if (!activeResetToken) {
-      setErrorMessage('Missing or invalid password reset token.');
-      return;
-    }
     if (!resetPasswordPolicy.isValid) {
       setErrorMessage(`Please ensure your new password meets all security criteria: ${resetPasswordPolicy.errors.join(', ')}.`);
       return;
@@ -410,17 +501,24 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
     setIsLoading(true);
 
     try {
-      const res = await resetPassword(activeResetToken, newPassword);
-      if (res.success) {
-        setResetSuccessDone(true);
-        setSuccessMessage(res.message);
-        setLoginEmail(forgotEmail || '');
-        setLoginPassword('');
+      if (supabaseClient) {
+        const { error } = await supabaseClient.auth.updateUser({
+          password: newPassword,
+        });
+        if (error) throw error;
       } else {
-        setErrorMessage(res.message);
+        await apiFetch('/api/auth/reset-password', {
+          method: 'POST',
+          body: JSON.stringify({ email: forgotEmail.trim(), password: newPassword }),
+        });
       }
-    } catch {
-      setErrorMessage('Failed to reset password. The link may have expired.');
+
+      setScreenMode('reset_success');
+      setSuccessMessage('Password updated successfully.');
+      setLoginEmail(forgotEmail.trim());
+      setLoginPassword('');
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Failed to update password. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -997,16 +1095,16 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
         )}
 
         {/* ======================================================== */}
-        {/* VIEW 3: FORGOT PASSWORD                                  */}
+        {/* VIEW 3: FORGOT PASSWORD (STEP 1: EMAIL ENTRY)           */}
         {/* ======================================================== */}
         {screenMode === 'forgot_password' && (
           <div className="space-y-5">
             <div className="text-center space-y-1.5">
               <h2 className="text-base font-bold font-serif text-stone-900 dark:text-zinc-100 tracking-tight">
-                Forgot Password?
+                Forgot your password?
               </h2>
               <p className="text-xs text-stone-500 dark:text-zinc-400 leading-relaxed max-w-sm mx-auto">
-                Enter your email and we'll send you a password reset link.
+                Enter your email address and we'll send you a verification code.
               </p>
             </div>
 
@@ -1041,36 +1139,19 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
                 {isLoading ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    <span>Sending link...</span>
+                    <span>Sending code...</span>
                   </>
                 ) : (
-                  <span>Send Reset Link</span>
+                  <span>Send verification code</span>
                 )}
               </button>
             </form>
-
-            {/* If a token was generated, provide a clean link to open Reset Password screen */}
-            {activeResetToken && (
-              <div className="p-3 bg-[#F4F2EC] dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl space-y-2 text-xs">
-                <div className="text-[11px] text-stone-500 dark:text-zinc-400">
-                  Password reset link generated for verification:
-                </div>
-                <button
-                  type="button"
-                  onClick={() => switchMode('reset_password')}
-                  className="w-full py-2 bg-white dark:bg-zinc-800 hover:bg-stone-50 dark:hover:bg-zinc-700 text-stone-800 dark:text-zinc-200 border border-[#E5E2D9] dark:border-zinc-700 rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
-                >
-                  <KeyRound className="h-3.5 w-3.5 text-[#8C1B2E] dark:text-red-400" />
-                  <span>Open Password Reset Screen →</span>
-                </button>
-              </div>
-            )}
 
             <div className="text-center pt-2">
               <button
                 type="button"
                 onClick={() => switchMode('login')}
-                className="inline-flex items-center gap-1.5 text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
+                className="inline-flex items-center gap-1.5 text-xs text-stone-500 dark:text-zinc-400 hover:text-stone-800 dark:hover:text-zinc-200 transition-colors"
               >
                 <ArrowLeft className="h-3.5 w-3.5" />
                 <span>Back to Login</span>
@@ -1080,190 +1161,282 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
         )}
 
         {/* ======================================================== */}
-        {/* VIEW 4: RESET PASSWORD                                   */}
+        {/* VIEW 3B: OTP VERIFICATION (STEP 2: 6-DIGIT CODE)        */}
+        {/* ======================================================== */}
+        {screenMode === 'otp_verification' && (
+          <div className="space-y-5">
+            <div className="text-center space-y-1.5">
+              <h2 className="text-base font-bold font-serif text-stone-900 dark:text-zinc-100 tracking-tight">
+                Verify your email
+              </h2>
+              <p className="text-xs text-stone-500 dark:text-zinc-400 leading-relaxed max-w-sm mx-auto">
+                Enter the verification code sent to your email.
+              </p>
+            </div>
+
+            <form onSubmit={handleVerifyOtpSubmit} autoComplete="off" className="space-y-4">
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-stone-700 dark:text-zinc-300 block text-center">
+                  Verification Code
+                </label>
+                <div className="flex gap-2 justify-center" role="group" aria-label="Verification code input">
+                  {otpDigits.map((digit, idx) => (
+                    <input
+                      key={idx}
+                      ref={el => { otpInputRefs.current[idx] = el; }}
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      maxLength={1}
+                      value={digit}
+                      onChange={e => {
+                        const val = e.target.value.replace(/[^0-9]/g, '');
+                        const newDigits = [...otpDigits];
+                        newDigits[idx] = val;
+                        setOtpDigits(newDigits);
+                        if (val && idx < 5) {
+                          otpInputRefs.current[idx + 1]?.focus();
+                        }
+                      }}
+                      onKeyDown={e => {
+                        if (e.key === 'Backspace' && !digit && idx > 0) {
+                          otpInputRefs.current[idx - 1]?.focus();
+                        }
+                      }}
+                      onPaste={e => {
+                        e.preventDefault();
+                        const pasteData = e.clipboardData.getData('text').trim().replace(/[^0-9]/g, '');
+                        if (pasteData.length >= 6) {
+                          const newDigits = pasteData.slice(0, 6).split('');
+                          setOtpDigits(newDigits);
+                          otpInputRefs.current[5]?.focus();
+                        }
+                      }}
+                      disabled={isLoading}
+                      aria-label={`Digit ${idx + 1} of verification code`}
+                      className="w-11 h-12 text-center bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 focus:border-[#8C1B2E] focus:ring-1 focus:ring-[#8C1B2E] rounded-xl text-base font-mono font-bold text-stone-900 dark:text-zinc-100 outline-none transition-all disabled:opacity-50 shadow-2xs"
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={isLoading || otpDigits.some(d => !d)}
+                className="w-full py-2.5 bg-[#8C1B2E] hover:bg-[#721525] active:bg-[#5a111e] disabled:opacity-60 disabled:cursor-not-allowed text-white rounded-lg text-xs font-semibold shadow-xs transition-all flex items-center justify-center gap-2"
+              >
+                {isLoading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span>Verifying code...</span>
+                  </>
+                ) : (
+                  <span>Verify code</span>
+                )}
+              </button>
+
+              <div className="flex items-center justify-between pt-1">
+                <button
+                  type="button"
+                  onClick={() => switchMode('forgot_password')}
+                  className="text-xs text-stone-500 hover:text-stone-700 dark:text-zinc-400 dark:hover:text-zinc-200 transition-colors"
+                >
+                  Change email
+                </button>
+                <button
+                  type="button"
+                  onClick={handleResendOtp}
+                  disabled={isLoading || resendCooldown > 0}
+                  className="text-xs font-medium text-[#8C1B2E] dark:text-red-400 hover:underline disabled:opacity-50 disabled:no-underline transition-all"
+                >
+                  {resendCooldown > 0 ? `Resend code (${resendCooldown}s)` : 'Resend code'}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {/* ======================================================== */}
+        {/* VIEW 4: RESET PASSWORD (STEP 3: NEW PASSWORD)           */}
         {/* ======================================================== */}
         {screenMode === 'reset_password' && (
           <div className="space-y-5">
             <div className="text-center space-y-1.5">
-              <h2 className="text-base font-bold text-white tracking-tight">
-                Reset Password
+              <h2 className="text-base font-bold font-serif text-stone-900 dark:text-zinc-100 tracking-tight">
+                Create a new password
               </h2>
-              <p className="text-xs text-zinc-400 leading-relaxed">
-                Choose a strong new password for your institutional account.
+              <p className="text-xs text-stone-500 dark:text-zinc-400 leading-relaxed max-w-sm mx-auto">
+                Choose a strong new password for your account.
               </p>
             </div>
 
-            {resetSuccessDone ? (
-              <div className="space-y-4 pt-2">
-                <div className="p-4 bg-emerald-50/70 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/80 rounded-xl text-center space-y-2">
-                  <ShieldCheck className="h-8 w-8 text-emerald-600 dark:text-emerald-400 mx-auto" />
-                  <div className="text-sm font-bold text-emerald-800 dark:text-emerald-300">
-                    Password Reset Successfully
-                  </div>
-                  <p className="text-xs text-stone-600 dark:text-zinc-400 leading-relaxed">
-                    Your password has been updated and prior sessions were invalidated. You may now sign in with your new credentials.
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => switchMode('login')}
-                  className="w-full py-2.5 bg-[#8C1B2E] hover:bg-[#721525] text-white rounded-lg text-xs font-semibold shadow-xs transition-all flex items-center justify-center gap-2"
-                >
-                  <ArrowLeft className="h-4 w-4" />
-                  <span>Back to Login</span>
-                </button>
-              </div>
-            ) : (
-              <form onSubmit={handleResetPasswordSubmit} autoComplete="off" className="space-y-4">
-                {/* New Password */}
-                <div className="space-y-1.5">
-                  <label htmlFor="new-pwd" className="text-xs font-medium text-stone-700 dark:text-zinc-300 block">
-                    New Password
-                  </label>
-                  <div className="relative">
-                    <Lock className="h-4 w-4 text-stone-400 dark:text-zinc-500 absolute left-3.5 top-3" />
-                    <input
-                      id="new-pwd"
-                      type={showNewPassword ? 'text' : 'password'}
-                      value={newPassword}
-                      onChange={e => setNewPassword(e.target.value)}
-                      disabled={isLoading}
-                      autoComplete="new-password"
-                      className="w-full bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 focus:border-[#8C1B2E] focus:ring-1 focus:ring-[#8C1B2E] rounded-xl pl-10 pr-10 py-2.5 text-xs text-stone-900 dark:text-zinc-100 outline-none transition-all disabled:opacity-50"
-                      required
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowNewPassword(!showNewPassword)}
-                      className="absolute right-3.5 top-2.5 text-stone-400 hover:text-stone-600 dark:text-zinc-500 dark:hover:text-zinc-300 transition-colors p-0.5"
-                      aria-label={showNewPassword ? 'Hide password' : 'Show password'}
-                      aria-pressed={showNewPassword}
-                    >
-                      {showNewPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Confirm New Password */}
-                <div className="space-y-1.5">
-                  <label htmlFor="confirm-new-pwd" className="text-xs font-medium text-stone-700 dark:text-zinc-300 block">
-                    Confirm New Password
-                  </label>
-                  <div className="relative">
-                    <Lock className="h-4 w-4 text-stone-400 dark:text-zinc-500 absolute left-3.5 top-3" />
-                    <input
-                      id="confirm-new-pwd"
-                      type={showConfirmNewPassword ? 'text' : 'password'}
-                      value={confirmNewPassword}
-                      onChange={e => setConfirmNewPassword(e.target.value)}
-                      disabled={isLoading}
-                      autoComplete="new-password"
-                      className="w-full bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 focus:border-[#8C1B2E] focus:ring-1 focus:ring-[#8C1B2E] rounded-xl pl-10 pr-10 py-2.5 text-xs text-stone-900 dark:text-zinc-100 outline-none transition-all disabled:opacity-50"
-                      required
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowConfirmNewPassword(!showConfirmNewPassword)}
-                      className="absolute right-3.5 top-2.5 text-stone-400 hover:text-stone-600 dark:text-zinc-500 dark:hover:text-zinc-300 transition-colors p-0.5"
-                      aria-label={showConfirmNewPassword ? 'Hide password' : 'Show password'}
-                      aria-pressed={showConfirmNewPassword}
-                    >
-                      {showConfirmNewPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Live Password Strength Indicator for Reset */}
-                {newPassword && (
-                  <div className="pt-1 space-y-1.5">
-                    <div className="flex items-center justify-between text-[11px]">
-                      <span className="text-stone-500 dark:text-zinc-400">Strength:</span>
-                      <span
-                        className={`font-semibold capitalize ${
-                          resetPasswordPolicy.strength === 'strong'
-                            ? 'text-emerald-600 dark:text-emerald-400'
-                            : resetPasswordPolicy.strength === 'fair'
-                            ? 'text-amber-600 dark:text-amber-400'
-                            : 'text-rose-600 dark:text-rose-400'
-                        }`}
-                      >
-                        {resetPasswordPolicy.strength}
-                      </span>
-                    </div>
-                    <div className="w-full bg-stone-200 dark:bg-zinc-800 h-1.5 rounded-full overflow-hidden flex gap-1">
-                      <div
-                        className={`h-full rounded-full transition-all duration-300 ${
-                          resetPasswordPolicy.strength === 'strong'
-                            ? 'bg-emerald-500 w-full'
-                            : resetPasswordPolicy.strength === 'fair'
-                            ? 'bg-amber-500 w-2/3'
-                            : 'bg-rose-500 w-1/3'
-                        }`}
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {/* Password Requirements Checklist */}
-                <div className="p-3 bg-[#F4F2EC] dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl space-y-1.5 text-[11px]">
-                  <span className="text-[10px] font-mono text-stone-500 dark:text-zinc-400 uppercase tracking-wider font-semibold block mb-1">
-                    Password Requirements:
-                  </span>
-                  <div className="space-y-1">
-                    <div className={`flex items-center gap-1.5 ${resetPasswordPolicy.length ? 'text-emerald-700 dark:text-emerald-400 font-medium' : 'text-stone-500 dark:text-zinc-400'}`}>
-                      {resetPasswordPolicy.length ? <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400 shrink-0" /> : <div className="h-1.5 w-1.5 rounded-full bg-stone-400 dark:bg-zinc-600 ml-1 mr-0.5 shrink-0" />}
-                      <span>At least 12 characters</span>
-                    </div>
-                    <div className={`flex items-center gap-1.5 ${resetPasswordPolicy.uppercase ? 'text-emerald-700 dark:text-emerald-400 font-medium' : 'text-stone-500 dark:text-zinc-400'}`}>
-                      {resetPasswordPolicy.uppercase ? <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400 shrink-0" /> : <div className="h-1.5 w-1.5 rounded-full bg-stone-400 dark:bg-zinc-600 ml-1 mr-0.5 shrink-0" />}
-                      <span>One uppercase letter (A-Z)</span>
-                    </div>
-                    <div className={`flex items-center gap-1.5 ${resetPasswordPolicy.lowercase ? 'text-emerald-700 dark:text-emerald-400 font-medium' : 'text-stone-500 dark:text-zinc-400'}`}>
-                      {resetPasswordPolicy.lowercase ? <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400 shrink-0" /> : <div className="h-1.5 w-1.5 rounded-full bg-stone-400 dark:bg-zinc-600 ml-1 mr-0.5 shrink-0" />}
-                      <span>One lowercase letter (a-z)</span>
-                    </div>
-                    <div className={`flex items-center gap-1.5 ${resetPasswordPolicy.number ? 'text-emerald-700 dark:text-emerald-400 font-medium' : 'text-stone-500 dark:text-zinc-400'}`}>
-                      {resetPasswordPolicy.number ? <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400 shrink-0" /> : <div className="h-1.5 w-1.5 rounded-full bg-stone-400 dark:bg-zinc-600 ml-1 mr-0.5 shrink-0" />}
-                      <span>One number (0-9)</span>
-                    </div>
-                    <div className={`flex items-center gap-1.5 ${resetPasswordPolicy.special ? 'text-emerald-700 dark:text-emerald-400 font-medium' : 'text-stone-500 dark:text-zinc-400'}`}>
-                      {resetPasswordPolicy.special ? <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400 shrink-0" /> : <div className="h-1.5 w-1.5 rounded-full bg-stone-400 dark:bg-zinc-600 ml-1 mr-0.5 shrink-0" />}
-                      <span>One special character (!@#$%^&*)</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Reset Submit Button */}
-                <button
-                  type="submit"
-                  disabled={isLoading || !resetPasswordPolicy.isValid || (newPassword !== confirmNewPassword)}
-                  className="w-full py-2.5 bg-[#8C1B2E] hover:bg-[#721525] active:bg-[#5a111e] disabled:opacity-60 disabled:cursor-not-allowed text-white rounded-lg text-xs font-semibold shadow-xs transition-all flex items-center justify-center gap-2"
-                >
-                  {isLoading ? (
-                    <>
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      <span>Updating password...</span>
-                    </>
-                  ) : (
-                    <span>Reset Password</span>
-                  )}
-                </button>
-
-                <div className="text-center pt-1">
+            <form onSubmit={handleResetPasswordSubmit} autoComplete="off" className="space-y-4">
+              {/* New Password */}
+              <div className="space-y-1.5">
+                <label htmlFor="new-pwd" className="text-xs font-medium text-stone-700 dark:text-zinc-300 block">
+                  New password
+                </label>
+                <div className="relative">
+                  <Lock className="h-4 w-4 text-stone-400 dark:text-zinc-500 absolute left-3.5 top-3" />
+                  <input
+                    id="new-pwd"
+                    type={showNewPassword ? 'text' : 'password'}
+                    value={newPassword}
+                    onChange={e => setNewPassword(e.target.value)}
+                    disabled={isLoading}
+                    autoComplete="new-password"
+                    className="w-full bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 focus:border-[#8C1B2E] focus:ring-1 focus:ring-[#8C1B2E] rounded-xl pl-10 pr-10 py-2.5 text-xs text-stone-900 dark:text-zinc-100 outline-none transition-all disabled:opacity-50"
+                    required
+                  />
                   <button
                     type="button"
-                    onClick={() => switchMode('login')}
-                    className="inline-flex items-center gap-1.5 text-xs text-stone-500 dark:text-zinc-400 hover:text-stone-800 dark:hover:text-zinc-200 transition-colors"
+                    onClick={() => setShowNewPassword(!showNewPassword)}
+                    className="absolute right-3.5 top-2.5 text-stone-400 hover:text-stone-600 dark:text-zinc-500 dark:hover:text-zinc-300 transition-colors p-0.5"
+                    aria-label={showNewPassword ? 'Hide password' : 'Show password'}
+                    aria-pressed={showNewPassword}
                   >
-                    <ArrowLeft className="h-3.5 w-3.5" />
-                    <span>Back to Login</span>
+                    {showNewPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
                 </div>
-              </form>
-            )}
+              </div>
+
+              {/* Confirm New Password */}
+              <div className="space-y-1.5">
+                <label htmlFor="confirm-new-pwd" className="text-xs font-medium text-stone-700 dark:text-zinc-300 block">
+                  Confirm new password
+                </label>
+                <div className="relative">
+                  <Lock className="h-4 w-4 text-stone-400 dark:text-zinc-500 absolute left-3.5 top-3" />
+                  <input
+                    id="confirm-new-pwd"
+                    type={showConfirmNewPassword ? 'text' : 'password'}
+                    value={confirmNewPassword}
+                    onChange={e => setConfirmNewPassword(e.target.value)}
+                    disabled={isLoading}
+                    autoComplete="new-password"
+                    className="w-full bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 focus:border-[#8C1B2E] focus:ring-1 focus:ring-[#8C1B2E] rounded-xl pl-10 pr-10 py-2.5 text-xs text-stone-900 dark:text-zinc-100 outline-none transition-all disabled:opacity-50"
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmNewPassword(!showConfirmNewPassword)}
+                    className="absolute right-3.5 top-2.5 text-stone-400 hover:text-stone-600 dark:text-zinc-500 dark:hover:text-zinc-300 transition-colors p-0.5"
+                    aria-label={showConfirmNewPassword ? 'Hide password' : 'Show password'}
+                    aria-pressed={showConfirmNewPassword}
+                  >
+                    {showConfirmNewPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Live Password Strength Indicator for Reset */}
+              {newPassword && (
+                <div className="pt-1 space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-stone-500 dark:text-zinc-400">Strength:</span>
+                    <span
+                      className={`font-semibold capitalize ${
+                        resetPasswordPolicy.strength === 'strong'
+                          ? 'text-emerald-600 dark:text-emerald-400'
+                          : resetPasswordPolicy.strength === 'fair'
+                          ? 'text-amber-600 dark:text-amber-400'
+                          : 'text-rose-600 dark:text-rose-400'
+                      }`}
+                    >
+                      {resetPasswordPolicy.strength}
+                    </span>
+                  </div>
+                  <div className="w-full bg-stone-200 dark:bg-zinc-800 h-1.5 rounded-full overflow-hidden flex gap-1">
+                    <div
+                      className={`h-full rounded-full transition-all duration-300 ${
+                        resetPasswordPolicy.strength === 'strong'
+                          ? 'bg-emerald-500 w-full'
+                          : resetPasswordPolicy.strength === 'fair'
+                          ? 'bg-amber-500 w-2/3'
+                          : 'bg-rose-500 w-1/3'
+                      }`}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Password Requirements Checklist */}
+              <div className="p-3 bg-[#F4F2EC] dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl space-y-1.5 text-[11px]">
+                <span className="text-[10px] font-mono text-stone-500 dark:text-zinc-400 uppercase tracking-wider font-semibold block mb-1">
+                  Password Requirements:
+                </span>
+                <div className="space-y-1">
+                  <div className={`flex items-center gap-1.5 ${resetPasswordPolicy.length ? 'text-emerald-700 dark:text-emerald-400 font-medium' : 'text-stone-500 dark:text-zinc-400'}`}>
+                    {resetPasswordPolicy.length ? <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400 shrink-0" /> : <div className="h-1.5 w-1.5 rounded-full bg-stone-400 dark:bg-zinc-600 ml-1 mr-0.5 shrink-0" />}
+                    <span>At least 12 characters</span>
+                  </div>
+                  <div className={`flex items-center gap-1.5 ${resetPasswordPolicy.uppercase ? 'text-emerald-700 dark:text-emerald-400 font-medium' : 'text-stone-500 dark:text-zinc-400'}`}>
+                    {resetPasswordPolicy.uppercase ? <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400 shrink-0" /> : <div className="h-1.5 w-1.5 rounded-full bg-stone-400 dark:bg-zinc-600 ml-1 mr-0.5 shrink-0" />}
+                    <span>One uppercase letter (A-Z)</span>
+                  </div>
+                  <div className={`flex items-center gap-1.5 ${resetPasswordPolicy.lowercase ? 'text-emerald-700 dark:text-emerald-400 font-medium' : 'text-stone-500 dark:text-zinc-400'}`}>
+                    {resetPasswordPolicy.lowercase ? <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400 shrink-0" /> : <div className="h-1.5 w-1.5 rounded-full bg-stone-400 dark:bg-zinc-600 ml-1 mr-0.5 shrink-0" />}
+                    <span>One lowercase letter (a-z)</span>
+                  </div>
+                  <div className={`flex items-center gap-1.5 ${resetPasswordPolicy.number ? 'text-emerald-700 dark:text-emerald-400 font-medium' : 'text-stone-500 dark:text-zinc-400'}`}>
+                    {resetPasswordPolicy.number ? <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400 shrink-0" /> : <div className="h-1.5 w-1.5 rounded-full bg-stone-400 dark:bg-zinc-600 ml-1 mr-0.5 shrink-0" />}
+                    <span>One number (0-9)</span>
+                  </div>
+                  <div className={`flex items-center gap-1.5 ${resetPasswordPolicy.special ? 'text-emerald-700 dark:text-emerald-400 font-medium' : 'text-stone-500 dark:text-zinc-400'}`}>
+                    {resetPasswordPolicy.special ? <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400 shrink-0" /> : <div className="h-1.5 w-1.5 rounded-full bg-stone-400 dark:bg-zinc-600 ml-1 mr-0.5 shrink-0" />}
+                    <span>One special character (!@#$%^&*)</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Reset Submit Button */}
+              <button
+                type="submit"
+                disabled={isLoading || !resetPasswordPolicy.isValid || (newPassword !== confirmNewPassword)}
+                className="w-full py-2.5 bg-[#8C1B2E] hover:bg-[#721525] active:bg-[#5a111e] disabled:opacity-60 disabled:cursor-not-allowed text-white rounded-lg text-xs font-semibold shadow-xs transition-all flex items-center justify-center gap-2"
+              >
+                {isLoading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span>Updating password...</span>
+                  </>
+                ) : (
+                  <span>Reset password</span>
+                )}
+              </button>
+            </form>
           </div>
         )}
+
+        {/* ======================================================== */}
+        {/* VIEW 5: RESET SUCCESS                                    */}
+        {/* ======================================================== */}
+        {screenMode === 'reset_success' && (
+          <div className="space-y-5 text-center py-2">
+            <div className="w-12 h-12 rounded-2xl bg-emerald-100 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400 flex items-center justify-center mx-auto shadow-xs">
+              <CheckCircle2 className="h-6 w-6" />
+            </div>
+
+            <div className="space-y-1.5">
+              <h2 className="text-lg font-bold font-serif text-stone-900 dark:text-zinc-100 tracking-tight">
+                Password updated successfully.
+              </h2>
+              <p className="text-xs text-stone-600 dark:text-zinc-400 leading-relaxed max-w-sm mx-auto">
+                Your password has been successfully updated. You may now return to sign in with your new credentials.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => switchMode('login')}
+              className="w-full py-2.5 bg-[#8C1B2E] hover:bg-[#721525] active:bg-[#5a111e] text-white rounded-lg text-xs font-semibold shadow-xs transition-all flex items-center justify-center gap-2"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              <span>Return to sign in</span>
+            </button>
+          </div>
+        )}
+
       </div>
 
       {/* Production Footer Note */}
