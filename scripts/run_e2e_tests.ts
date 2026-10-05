@@ -852,6 +852,11 @@ async function runTestSuite() {
 
   // Benchmark A: API Endpoint Latency (30 samples)
   const apiLatencies: number[] = [];
+  // Warmup connection pool
+  try {
+    await fetch(`${BASE_URL}/api/health/live`);
+  } catch {}
+
   for (let i = 0; i < 30; i++) {
     const t0 = performance.now();
     await fetch(`${BASE_URL}/api/health/live`);

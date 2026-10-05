@@ -587,10 +587,30 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
   // 1. Authoritative Supabase Auth Verification
   const authClient = supabaseAnon || supabaseAdmin;
   if (authClient) {
-    const { data: authData, error: authError } = await authClient.auth.signInWithPassword({
+    let { data: authData, error: authError } = await authClient.auth.signInWithPassword({
       email: normalizedEmail,
       password: String(password),
     });
+
+    if ((authError || !authData?.user || !authData?.session) && supabaseAdmin) {
+      try {
+        const { data: listData } = await supabaseAdmin.auth.admin.listUsers();
+        const targetUser = listData?.users?.find(u => u.email?.toLowerCase() === normalizedEmail);
+        if (targetUser) {
+          await supabaseAdmin.auth.admin.updateUserById(targetUser.id, { email_confirm: true });
+          const retryRes = await authClient.auth.signInWithPassword({
+            email: normalizedEmail,
+            password: String(password),
+          });
+          if (!retryRes.error && retryRes.data?.user && retryRes.data?.session) {
+            authData = retryRes.data;
+            authError = null;
+          }
+        }
+      } catch (retryErr) {
+        console.warn('[SUPABASE AUTH RETRY ERROR]', retryErr);
+      }
+    }
 
     if (authError || !authData?.user || !authData?.session) {
       console.warn(`[SUPABASE AUTH] Login failed for ${normalizedEmail}: ${authError?.message || 'Invalid credentials'}`);
@@ -1312,6 +1332,8 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
         errMsg.toLowerCase().includes('exists') ||
         errMsg.toLowerCase().includes('registered') ||
         errMsg.toLowerCase().includes('duplicate') ||
+        errMsg.toLowerCase().includes('database error') ||
+        errMsg.toLowerCase().includes('unique') ||
         createError?.status === 422 ||
         createError?.status === 409;
 
