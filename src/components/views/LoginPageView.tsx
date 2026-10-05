@@ -430,22 +430,34 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
 
     try {
       if (supabaseClient) {
-        const { error } = await supabaseClient.auth.resetPasswordForEmail(emailTrim, {
-          redirectTo: window.location.origin,
+        console.info('[AUTH RECOVERY] request started');
+        const productionFrontendUrl = 'https://tiet-timetable-six.vercel.app';
+        const redirectToUrl = window.location.origin.includes('localhost') || window.location.origin.includes('run.app')
+          ? window.location.origin
+          : productionFrontendUrl;
+
+        const { data, error } = await supabaseClient.auth.resetPasswordForEmail(emailTrim, {
+          redirectTo: redirectToUrl,
         });
+
         if (error) {
-          console.info('[SUPABASE AUTH] Forgot password request error handled securely');
+          console.warn('[AUTH RECOVERY] Supabase request failed:', error.message || error);
+        } else {
+          console.info('[AUTH RECOVERY] Supabase request succeeded');
         }
       } else {
+        console.info('[AUTH RECOVERY] request started (backend fallback)');
         await apiFetch('/api/auth/forgot-password', {
           method: 'POST',
           body: JSON.stringify({ email: emailTrim }),
         }).catch(() => {});
+        console.info('[AUTH RECOVERY] backend request succeeded');
       }
 
       setSuccessMessage("If an account exists for this email, we've sent password-reset instructions.");
       setScreenMode('forgot_success');
-    } catch {
+    } catch (err: any) {
+      console.warn('[AUTH RECOVERY] Supabase request exception:', err?.message || err);
       // Never reveal account existence
       setSuccessMessage("If an account exists for this email, we've sent password-reset instructions.");
       setScreenMode('forgot_success');
