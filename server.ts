@@ -2937,11 +2937,20 @@ async function setupApp() {
 }
 
 if (!process.env.VERCEL) {
-  setupApp();
   const effectivePort = Number(process.env.PORT) || 3000;
-  app.listen(effectivePort, '0.0.0.0', () => {
-    console.log(`Server listening on ${effectivePort}`);
+  console.log("[STARTUP] About to bind HTTP server", {
+    port: effectivePort,
+    host: "0.0.0.0"
   });
+
+  const server = app.listen(effectivePort, "0.0.0.0", () => {
+    console.log("[STARTUP] HTTP SERVER LISTENING", {
+      port: effectivePort,
+      address: "0.0.0.0"
+    });
+  });
+
+  setupApp().catch(err => console.error('[SETUP APP ERROR]:', err));
 } else {
   ensureSupabaseAuthUsers().catch(() => {});
 }
