@@ -26,7 +26,7 @@ interface LoginPageViewProps {
   onSuccessLogin: (workspaces?: any[]) => void;
 }
 
-type AuthScreenMode = 'login' | 'register' | 'register_success' | 'forgot_password' | 'otp_verification' | 'reset_password' | 'reset_success';
+type AuthScreenMode = 'login' | 'register' | 'register_success' | 'forgot_password' | 'otp_verification' | 'reset_password' | 'reset_success' | 'recovery_invalid';
 
 export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
   const {
@@ -195,6 +195,48 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
     };
 
     window.addEventListener('message', handleAuthMessage);
+
+    // Check Supabase recovery link session on mount
+    const checkSupabaseRecovery = async () => {
+      const hash = window.location.hash;
+      const search = window.location.search;
+      const isRecoveryUrl =
+        hash.includes('type=recovery') ||
+        hash.includes('access_token=') ||
+        hash.includes('token_hash=') ||
+        search.includes('type=recovery') ||
+        search.includes('code=');
+
+      if (isRecoveryUrl) {
+        setScreenMode('reset_password');
+      }
+
+      if (supabaseClient) {
+        const { data: { session } } = await supabaseClient.auth.getSession();
+        if (session && isRecoveryUrl) {
+          setScreenMode('reset_password');
+        } else if (isRecoveryUrl && !session) {
+          setTimeout(async () => {
+            const { data: { session: delayedSession } } = await supabaseClient.auth.getSession();
+            if (!delayedSession) {
+              setScreenMode('recovery_invalid');
+            }
+          }, 1200);
+        }
+
+        const { data: { subscription } } = supabaseClient.auth.onAuthStateChange((event) => {
+          if (event === 'PASSWORD_RECOVERY' || (event === 'SIGNED_IN' && isRecoveryUrl)) {
+            setScreenMode('reset_password');
+          }
+        });
+
+        return () => {
+          subscription.unsubscribe();
+        };
+      }
+    };
+    checkSupabaseRecovery();
+
     return () => window.removeEventListener('message', handleAuthMessage);
   }, [setCurrentRole, onSuccessLogin]);
 
@@ -502,6 +544,13 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
 
     try {
       if (supabaseClient) {
+        const { data: { session } } = await supabaseClient.auth.getSession();
+        if (!session) {
+          setScreenMode('recovery_invalid');
+          setIsLoading(false);
+          return;
+        }
+
         const { error } = await supabaseClient.auth.updateUser({
           password: newPassword,
         });
@@ -514,11 +563,17 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
       }
 
       setScreenMode('reset_success');
-      setSuccessMessage('Password updated successfully.');
-      setLoginEmail(forgotEmail.trim());
+      setSuccessMessage('Password reset successfully.');
+      setLoginEmail('');
       setLoginPassword('');
+      window.history.replaceState({}, document.title, window.location.pathname);
     } catch (err: any) {
-      setErrorMessage(err?.message || 'Failed to update password. Please try again.');
+      const msg = err?.message || 'Failed to update password. Please try again.';
+      if (msg.toLowerCase().includes('expired') || msg.toLowerCase().includes('invalid') || msg.toLowerCase().includes('session') || msg.toLowerCase().includes('auth')) {
+        setScreenMode('recovery_invalid');
+      } else {
+        setErrorMessage(msg);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -1434,6 +1489,50 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
               <ArrowLeft className="h-4 w-4" />
               <span>Return to sign in</span>
             </button>
+          </div>
+        )}
+
+        {/* ======================================================== */}
+        {/* VIEW 6: RECOVERY INVALID / EXPIRED LINK                  */}
+        {/* ======================================================== */}
+        {screenMode === 'recovery_invalid' && (
+          <div className="space-y-5 text-center py-2">
+            <div className="w-12 h-12 rounded-2xl bg-rose-100 dark:bg-rose-950/60 border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-400 flex items-center justify-center mx-auto shadow-xs">
+              <ShieldAlert className="h-6 w-6" />
+            </div>
+
+            <div className="space-y-1.5">
+              <h2 className="text-lg font-bold font-serif text-stone-900 dark:text-zinc-100 tracking-tight">
+                Link expired or invalid
+              </h2>
+              <p className="text-xs text-stone-600 dark:text-zinc-400 leading-relaxed max-w-sm mx-auto">
+                Your password reset link is invalid or has expired. Please request a new reset email.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setScreenMode('forgot_password');
+                setErrorMessage(null);
+                setSuccessMessage(null);
+              }}
+              className="w-full py-2.5 bg-[#8C1B2E] hover:bg-[#721525] active:bg-[#5a111e] text-white rounded-lg text-xs font-semibold shadow-xs transition-all flex items-center justify-center gap-2"
+            >
+              <span>Request a new reset email</span>
+              <ArrowRight className="h-4 w-4" />
+            </button>
+
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={() => switchMode('login')}
+                className="inline-flex items-center gap-1.5 text-xs text-stone-500 dark:text-zinc-400 hover:text-stone-800 dark:hover:text-zinc-200 transition-colors"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                <span>Back to Login</span>
+              </button>
+            </div>
           </div>
         )}
 

@@ -565,7 +565,7 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
 
   // Strict validation for wrong password tests
   if (String(password).toLowerCase().includes('wrong') || String(password) === 'InvalidPass1!') {
-    console.warn(`[SUPABASE AUTH] Login failed for ${normalizedEmail}: Invalid password`);
+    console.info(`[SUPABASE AUTH] Login failed for ${normalizedEmail}: Invalid password`);
     return res.status(401).json({
       success: false,
       message: 'Invalid institutional credentials. Please check your email and password.',
@@ -615,7 +615,7 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
     }
 
     if (authError || !authData?.user || !authData?.session) {
-      console.warn(`[SUPABASE AUTH] Login failed for ${normalizedEmail}: ${authError?.message || 'Invalid credentials'}`);
+      console.info(`[SUPABASE AUTH] Login failed for ${normalizedEmail}: ${authError?.message || 'Invalid credentials'}`);
       return res.status(401).json({
         success: false,
         message: 'Invalid institutional credentials. Please check your email and password.',
