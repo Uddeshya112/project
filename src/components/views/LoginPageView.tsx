@@ -26,7 +26,7 @@ interface LoginPageViewProps {
   onSuccessLogin: (workspaces?: any[]) => void;
 }
 
-type AuthScreenMode = 'login' | 'register' | 'register_success' | 'forgot_password' | 'otp_verification' | 'reset_password' | 'reset_success' | 'recovery_invalid';
+type AuthScreenMode = 'login' | 'register' | 'register_success' | 'forgot_password' | 'forgot_success' | 'reset_password' | 'reset_success' | 'recovery_invalid';
 
 export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
   const {
@@ -430,9 +430,12 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
 
     try {
       if (supabaseClient) {
-        await supabaseClient.auth.resetPasswordForEmail(emailTrim, {
+        const { error } = await supabaseClient.auth.resetPasswordForEmail(emailTrim, {
           redirectTo: window.location.origin,
         });
+        if (error) {
+          console.info('[SUPABASE AUTH] Forgot password request error handled securely');
+        }
       } else {
         await apiFetch('/api/auth/forgot-password', {
           method: 'POST',
@@ -440,16 +443,12 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
         }).catch(() => {});
       }
 
-      setSuccessMessage("If an account exists for this email, we've sent a verification code.");
-      setScreenMode('otp_verification');
-      setResendCooldown(60);
-      setOtpDigits(['', '', '', '', '', '']);
+      setSuccessMessage("If an account exists for this email, we've sent password-reset instructions.");
+      setScreenMode('forgot_success');
     } catch {
       // Never reveal account existence
-      setSuccessMessage("If an account exists for this email, we've sent a verification code.");
-      setScreenMode('otp_verification');
-      setResendCooldown(60);
-      setOtpDigits(['', '', '', '', '', '']);
+      setSuccessMessage("If an account exists for this email, we've sent password-reset instructions.");
+      setScreenMode('forgot_success');
     } finally {
       setIsLoading(false);
     }
@@ -1194,10 +1193,10 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
                 {isLoading ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    <span>Sending code...</span>
+                    <span>Sending instructions...</span>
                   </>
                 ) : (
-                  <span>Send verification code</span>
+                  <span>Send password reset email</span>
                 )}
               </button>
             </form>
@@ -1216,98 +1215,31 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
         )}
 
         {/* ======================================================== */}
-        {/* VIEW 3B: OTP VERIFICATION (STEP 2: 6-DIGIT CODE)        */}
+        {/* VIEW 3B: FORGOT PASSWORD SUCCESS                         */}
         {/* ======================================================== */}
-        {screenMode === 'otp_verification' && (
-          <div className="space-y-5">
-            <div className="text-center space-y-1.5">
-              <h2 className="text-base font-bold font-serif text-stone-900 dark:text-zinc-100 tracking-tight">
-                Verify your email
+        {screenMode === 'forgot_success' && (
+          <div className="space-y-5 text-center py-2">
+            <div className="w-12 h-12 rounded-2xl bg-emerald-100 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400 flex items-center justify-center mx-auto shadow-xs">
+              <CheckCircle2 className="h-6 w-6" />
+            </div>
+
+            <div className="space-y-1.5">
+              <h2 className="text-lg font-bold font-serif text-stone-900 dark:text-zinc-100 tracking-tight">
+                Check your email
               </h2>
-              <p className="text-xs text-stone-500 dark:text-zinc-400 leading-relaxed max-w-sm mx-auto">
-                Enter the verification code sent to your email.
+              <p className="text-xs text-stone-600 dark:text-zinc-400 leading-relaxed max-w-sm mx-auto">
+                {successMessage || "If an account exists for this email, we've sent password-reset instructions."}
               </p>
             </div>
 
-            <form onSubmit={handleVerifyOtpSubmit} autoComplete="off" className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-xs font-medium text-stone-700 dark:text-zinc-300 block text-center">
-                  Verification Code
-                </label>
-                <div className="flex gap-2 justify-center" role="group" aria-label="Verification code input">
-                  {otpDigits.map((digit, idx) => (
-                    <input
-                      key={idx}
-                      ref={el => { otpInputRefs.current[idx] = el; }}
-                      type="text"
-                      inputMode="numeric"
-                      pattern="[0-9]*"
-                      maxLength={1}
-                      value={digit}
-                      onChange={e => {
-                        const val = e.target.value.replace(/[^0-9]/g, '');
-                        const newDigits = [...otpDigits];
-                        newDigits[idx] = val;
-                        setOtpDigits(newDigits);
-                        if (val && idx < 5) {
-                          otpInputRefs.current[idx + 1]?.focus();
-                        }
-                      }}
-                      onKeyDown={e => {
-                        if (e.key === 'Backspace' && !digit && idx > 0) {
-                          otpInputRefs.current[idx - 1]?.focus();
-                        }
-                      }}
-                      onPaste={e => {
-                        e.preventDefault();
-                        const pasteData = e.clipboardData.getData('text').trim().replace(/[^0-9]/g, '');
-                        if (pasteData.length >= 6) {
-                          const newDigits = pasteData.slice(0, 6).split('');
-                          setOtpDigits(newDigits);
-                          otpInputRefs.current[5]?.focus();
-                        }
-                      }}
-                      disabled={isLoading}
-                      aria-label={`Digit ${idx + 1} of verification code`}
-                      className="w-11 h-12 text-center bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 focus:border-[#8C1B2E] focus:ring-1 focus:ring-[#8C1B2E] rounded-xl text-base font-mono font-bold text-stone-900 dark:text-zinc-100 outline-none transition-all disabled:opacity-50 shadow-2xs"
-                    />
-                  ))}
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                disabled={isLoading || otpDigits.some(d => !d)}
-                className="w-full py-2.5 bg-[#8C1B2E] hover:bg-[#721525] active:bg-[#5a111e] disabled:opacity-60 disabled:cursor-not-allowed text-white rounded-lg text-xs font-semibold shadow-xs transition-all flex items-center justify-center gap-2"
-              >
-                {isLoading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    <span>Verifying code...</span>
-                  </>
-                ) : (
-                  <span>Verify code</span>
-                )}
-              </button>
-
-              <div className="flex items-center justify-between pt-1">
-                <button
-                  type="button"
-                  onClick={() => switchMode('forgot_password')}
-                  className="text-xs text-stone-500 hover:text-stone-700 dark:text-zinc-400 dark:hover:text-zinc-200 transition-colors"
-                >
-                  Change email
-                </button>
-                <button
-                  type="button"
-                  onClick={handleResendOtp}
-                  disabled={isLoading || resendCooldown > 0}
-                  className="text-xs font-medium text-[#8C1B2E] dark:text-red-400 hover:underline disabled:opacity-50 disabled:no-underline transition-all"
-                >
-                  {resendCooldown > 0 ? `Resend code (${resendCooldown}s)` : 'Resend code'}
-                </button>
-              </div>
-            </form>
+            <button
+              type="button"
+              onClick={() => switchMode('login')}
+              className="w-full py-2.5 bg-[#8C1B2E] hover:bg-[#721525] active:bg-[#5a111e] text-white rounded-lg text-xs font-semibold shadow-xs transition-all flex items-center justify-center gap-2"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              <span>Return to sign in</span>
+            </button>
           </div>
         )}
 
