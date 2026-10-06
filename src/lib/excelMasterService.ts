@@ -1,4 +1,4 @@
-import * as XLSX from 'xlsx';
+import * as XLSX from '@keep-lts/xlsx';
 import {
   Department,
   Program,
