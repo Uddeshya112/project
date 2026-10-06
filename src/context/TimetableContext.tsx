@@ -203,7 +203,7 @@ interface TimetableContextType {
     scheduledHours: number;
     totalHours: number;
   };
-  updatePublishStatus: (status: TimetablePublishStatus, reviewerName?: string) => void;
+  updatePublishStatus: (status: TimetablePublishStatus, reviewerName?: string) => Promise<{ success: boolean }>;
   bulkImportData: (type: 'faculty' | 'courses' | 'rooms' | 'sections' | 'allocations', records: any[]) => { successCount: number; errors: string[] };
   commitMasterImport: (
     parsedData: ExcelImportPreview['parsedData'],
@@ -221,18 +221,18 @@ interface TimetableContextType {
   }) => StudentSection[];
 
   // Routine Timetable Operations
-  cancelSession: (sessionId: string, reason: string) => void;
-  scheduleMakeup: (opportunityId: string) => void;
-  votePoll: (pollId: string, optionId: string) => void;
+  cancelSession: (sessionId: string, reason: string) => Promise<{ success: boolean }>;
+  scheduleMakeup: (opportunityId: string) => Promise<{ success: boolean }>;
+  votePoll: (pollId: string, optionId: string) => Promise<{ success: boolean }>;
   toggleSessionLock: (sessionId: string, reason?: string) => void;
-  setFacultyProtectedSlot: (facultyId: string, day: DayOfWeek, periodId: string, reason: 'Research' | 'Lunch' | 'Personal' | 'Department' | 'Meeting') => void;
+  setFacultyProtectedSlot: (facultyId: string, day: DayOfWeek, periodId: string, reason: 'Research' | 'Lunch' | 'Personal' | 'Department' | 'Meeting') => Promise<{ success: boolean }>;
   restoreVersion: (versionNumber: number) => void;
   applySimulation: () => void;
   markNotificationRead: (id: string) => void;
   triggerAutoMatchAll: () => void;
-  requestStudentMakeup: (courseId: string, sectionId: string) => void;
-  declineOpportunity: (opportunityId: string) => void;
-  claimMarketplaceSlot: (courseId: string, sectionId: string, day: DayOfWeek, timeSlotId: string, roomId: string, type: string) => void;
+  requestStudentMakeup: (courseId: string, sectionId: string) => Promise<{ success: boolean }>;
+  declineOpportunity: (opportunityId: string) => Promise<{ success: boolean }>;
+  claimMarketplaceSlot: (courseId: string, sectionId: string, day: DayOfWeek, timeSlotId: string, roomId: string, type: string) => Promise<{ success: boolean }>;
   requestSubstituteCover: (substituteFacultyId: string, courseId: string, sectionId: string, day: DayOfWeek, timeSlotId: string) => void;
   addSession: (sessionData: Omit<ClassSession, 'id' | 'version'>) => { isSuccess: boolean; error?: string };
 
@@ -883,7 +883,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
   };
 
   // Publish Status Lifecycle
-  const updatePublishStatus = (status: TimetablePublishStatus, reviewerName?: string) => {
+  const updatePublishStatus = async (status: TimetablePublishStatus, reviewerName?: string): Promise<{ success: boolean }> => {
     setPublishStatus(status);
     setAcademicYear(prev => ({
       ...prev,
@@ -920,6 +920,8 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         body: JSON.stringify({ versionId: `V${versions.length || 1}.0` }),
       }).catch(err => console.warn('[SUPABASE_API] Publish persistence notice:', err));
     }
+
+    return { success: true };
   };
 
   // ---------------------------------------------------------------------------
@@ -2058,9 +2060,9 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
   };
 
   // Cancel Session & Trigger Self-Healing Pipeline
-  const cancelSession = (sessionId: string, reason: string) => {
+  const cancelSession = async (sessionId: string, reason: string): Promise<{ success: boolean }> => {
     const targetSession = sessions.find(s => s.id === sessionId);
-    if (!targetSession) return;
+    if (!targetSession) return { success: false };
 
     setSessions(prev =>
       prev.map(s =>
@@ -2137,14 +2139,16 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       headers: getAuthHeaders(),
       body: JSON.stringify({ sessionId, reason }),
     }).catch(err => console.warn('[SUPABASE_API] Cancel session persistence notice:', err));
+
+    return { success: true };
   };
 
-  const scheduleMakeup = (opportunityId: string) => {
+  const scheduleMakeup = async (opportunityId: string): Promise<{ success: boolean }> => {
     const opp = recoveryOpportunities.find(o => o.id === opportunityId);
-    if (!opp) return;
+    if (!opp) return { success: false };
 
     const makeupTask = makeupTasks.find(t => t.id === opp.makeupTaskId);
-    if (!makeupTask) return;
+    if (!makeupTask) return { success: false };
 
     const newSessionId = `makeup-sess-${Date.now().toString().slice(-4)}`;
     const newSession: ClassSession = {
@@ -2190,9 +2194,11 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       headers: getAuthHeaders(),
       body: JSON.stringify({ opportunityId }),
     }).catch(err => console.warn('[SUPABASE_API] Schedule makeup persistence notice:', err));
+
+    return { success: true };
   };
 
-  const votePoll = (pollId: string, optionId: string) => {
+  const votePoll = async (pollId: string, optionId: string): Promise<{ success: boolean }> => {
     setPolls(prev =>
       prev.map(p => {
         if (p.id !== pollId) return p;
@@ -2213,6 +2219,8 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       headers: getAuthHeaders(),
       body: JSON.stringify({ pollId, optionId }),
     }).catch(err => console.warn('[SUPABASE_API] Vote persistence notice:', err));
+
+    return { success: true };
   };
 
   const toggleSessionLock = (sessionId: string, reason = 'Administrative Lock') => {
@@ -2234,7 +2242,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     day: DayOfWeek,
     periodId: string,
     reason: 'Research' | 'Lunch' | 'Personal' | 'Department' | 'Meeting'
-  ) => {
+  ): Promise<{ success: boolean }> => {
     setFacultyMembers(prev =>
       prev.map(f => {
         if (f.id !== facultyId) return f;
@@ -2253,6 +2261,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         };
       })
     );
+    return { success: true };
   };
 
   const restoreVersion = (versionNumber: number) => {
@@ -2318,20 +2327,21 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const declineOpportunity = (opportunityId: string) => {
+  const declineOpportunity = async (opportunityId: string): Promise<{ success: boolean }> => {
     setRecoveryOpportunities(prev =>
       prev.map(o => (o.id === opportunityId ? { ...o, status: 'Rejected' } : o))
     );
+    return { success: true };
   };
 
-  const claimMarketplaceSlot = (
+  const claimMarketplaceSlot = async (
     courseId: string,
     sectionId: string,
     day: DayOfWeek,
     timeSlotId: string,
     roomId: string,
     type: string
-  ) => {
+  ): Promise<{ success: boolean }> => {
     const newSessionId = `claim-sess-${Date.now().toString().slice(-4)}`;
     const newSession: ClassSession = {
       id: newSessionId,
@@ -2346,6 +2356,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       version: 1,
     };
     setSessions(prev => [...prev, newSession]);
+    return { success: true };
   };
 
   const requestSubstituteCover = (
@@ -2354,7 +2365,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     sectionId: string,
     day: DayOfWeek,
     timeSlotId: string
-  ) => {
+  ): Promise<{ success: boolean }> => {
     const substitute = facultyMembers.find(f => f.id === substituteFacultyId);
     const course = courses.find(c => c.id === courseId);
     setNotifications(prev => [
@@ -2369,9 +2380,10 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       },
       ...prev,
     ]);
+    return { success: true };
   };
 
-  const requestStudentMakeup = (courseId: string, sectionId: string) => {
+  const requestStudentMakeup = async (courseId: string, sectionId: string): Promise<{ success: boolean }> => {
     const course = courses.find(c => c.id === courseId);
     const section = sections.find(s => s.id === sectionId);
     setNotifications(prev => [
@@ -2387,6 +2399,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       },
       ...prev,
     ]);
+    return { success: true };
   };
 
   const addSession = (sessionData: Omit<ClassSession, 'id' | 'version'>): { isSuccess: boolean; error?: string } => {
