@@ -165,6 +165,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       email: data.user.email,
       department: data.user.department,
       authorizedWorkspaces: workspaces,
+      roleCode,
+      roleName,
+      isDemoUser: Boolean(data.user.isDemoUser),
+      rollNumber: data.user.rollNumber ?? data.user.profile?.rollNumber,
+      sectionId: data.user.sectionId ?? data.user.profile?.sectionId,
+      subSectionId: data.user.subSectionId ?? data.user.profile?.subSectionId,
+      crSectionId: data.user.crSectionId ?? data.user.profile?.crSectionId,
+      facultyId: data.user.facultyId ?? data.user.profile?.facultyId,
+      batch: data.user.batch ?? data.user.profile?.batch,
     };
     setAllUsers(prev => existing ? prev.map(u => u.id === existing.id || u.email.toLowerCase() === nextUser.email.toLowerCase() ? nextUser : u) : [nextUser, ...prev]);
     setCurrentUserId(nextUser.id);
