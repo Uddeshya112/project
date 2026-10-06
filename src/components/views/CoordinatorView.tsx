@@ -74,46 +74,28 @@ export function CoordinatorView() {
       let tokenPresent = false;
       let profileFound = false;
       let role = 'UNKNOWN';
-      let backendStatus: 'AUTHENTICATED' | '401' | '403' | 'UNREACHABLE' = '401';
+      let backendStatus: 'AUTHENTICATED' | '401' | '403' | 'UNREACHABLE' | 'CHECKING' = 'CHECKING';
 
       try {
-        const meRes = await fetch(apiUrl('/api/auth/me'), { credentials: 'include', headers: { Accept: 'application/json' } });
+        const meRes = await fetch(apiUrl('/api/auth/me'), {
+          credentials: 'include',
+          headers: { Accept: 'application/json' },
+        });
         if (meRes.status === 200) {
           const meData = await meRes.json();
-          if (meData.authenticated) {
+          if (meData.authenticated && meData.user) {
             backendStatus = 'AUTHENTICATED';
             role = meData.roleCode || 'UNKNOWN';
             profileFound = true;
             sessionFound = true;
-            userFound = Boolean(meData.user?.id);
-          }
-        } else if (meRes.status === 403) {
-          backendStatus = '403';
-        } else if (meRes.status === 401) {
-          backendStatus = '401';
-        }
-      } catch {
-        backendStatus = 'UNREACHABLE';
-      }
-        const token = await getSupabaseAccessToken();
-        const headers: Record<string, string> = {};
-        if (token) headers['Authorization'] = `Bearer ${token}`;
-        const meRes = await fetch(apiUrl('/api/auth/me'), { headers });
-        if (meRes.status === 200) {
-          const meData = await meRes.json();
-          if (meData.authenticated) {
-            backendStatus = 'AUTHENTICATED';
-            if (meData.roleCode) role = meData.roleCode;
-            profileFound = true;
+            userFound = Boolean(meData.user.id);
           } else {
             backendStatus = '401';
           }
         } else if (meRes.status === 403) {
           backendStatus = '403';
-        } else if (meRes.status === 401) {
-          backendStatus = '401';
         } else {
-          backendStatus = 'UNREACHABLE';
+          backendStatus = '401';
         }
       } catch {
         backendStatus = 'UNREACHABLE';
