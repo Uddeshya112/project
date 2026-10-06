@@ -59,7 +59,7 @@ const DEMO_ROLE_EMAILS: Record<string, string> = {
 const SELF_PROFILE_FIELDS = ['phone', 'officeLocation', 'officeHours', 'specialization', 'notificationPreferences'];
 const ADMIN_PROFILE_FIELDS = [...SELF_PROFILE_FIELDS, 'rollNumber', 'sectionId', 'batch', 'avatarUrl', 'facultyId'];
 // Sample staff accounts are linked to records in the sample faculty roster so their portals have data.
-const SAMPLE_FACULTY_LINKS: Record<string, string> = { 'usr-sharma': 'fac-0001', 'usr-gupta': 'fac-0002', 'usr-murthy': 'fac-0003', 'usr-roy': 'fac-0004', 'usr-demo-faculty': 'fac-0002' };
+const SAMPLE_FACULTY_LINKS: Record<string, string> = { 'usr-sharma': 'fac-0001', 'usr-gupta': 'fac-0002', 'usr-murthy': 'fac-0003', 'usr-roy': 'fac-0004', 'usr-demo-faculty': 'fac-0005' };
 
 const SESSION_COOKIE = 'tt_session';
 // Per-IP limits are generous because a campus network puts thousands of users behind a few addresses;
