@@ -33,7 +33,12 @@ export type ViolationCode =
   | 'EXCESSIVE_STUDENT_DAILY_LOAD'
   | 'EXCESSIVE_FACULTY_DAILY_LOAD'
   | 'POOR_COURSE_DISTRIBUTION'
-  | 'UNNECESSARY_ROOM_CHANGE';
+  | 'UNNECESSARY_ROOM_CHANGE'
+  | 'MISSING_REQUIRED_ENTITY'
+  | 'INVALID_TIMESLOT'
+  | 'FACULTY_INACTIVE'
+  | 'FACULTY_NOT_QUALIFIED'
+  | 'ROOM_EQUIPMENT_MISMATCH';
 
 export interface ViolationDetail {
   id: string;
@@ -141,6 +146,35 @@ export function validateTimetableIndependently(
     const room = roomMap.get(session.roomId);
     const section = sectionMap.get(session.sectionId);
     const subgroup = section?.subSections?.find(sub => sub.id === session.subSectionId);
+    const timeSlot = academicYear.timeSlots?.find(ts => ts.id === session.timeSlotId);
+
+    if (!course || !faculty || !section || !room) {
+      violations.push({
+        id: `viol-reference-${session.id}`,
+        code: 'MISSING_REQUIRED_ENTITY',
+        severity: 'CRITICAL',
+        sessionIds: [session.id],
+        entityName: session.id,
+        day: session.day,
+        timeSlotId: session.timeSlotId,
+        message: 'Session references a missing course, faculty member, section, or room.',
+        recommendation: 'Repair the allocation/master-data reference before scheduling this session.',
+      });
+    }
+
+    if (!timeSlot) {
+      violations.push({
+        id: `viol-timeslot-${session.id}`,
+        code: 'INVALID_TIMESLOT',
+        severity: 'CRITICAL',
+        sessionIds: [session.id],
+        entityName: session.timeSlotId,
+        day: session.day,
+        timeSlotId: session.timeSlotId,
+        message: `Time slot ${session.timeSlotId} is not defined for the academic year.`,
+        recommendation: 'Assign the session to a configured teaching period.',
+      });
+    }
 
     // Check A: Non-working day
     if (!workingDays.has(session.day)) {
@@ -222,6 +256,68 @@ export function validateTimetableIndependently(
           recommendation: `Assign a dedicated Computer Lab or Hardware Lab.`
         });
       }
+    }
+
+    // Non-laboratory sessions cannot occupy dedicated laboratory rooms.
+    if (room) {
+      const isLabSession = session.type === 'Lab' || session.type === 'Practical';
+      const isLabRoom = room.type === 'ComputerLab' || room.type === 'HardwareLab';
+      if (!isLabSession && isLabRoom) {
+        violations.push({
+          id: `viol-room-nonlab-${session.id}`,
+          code: 'ROOM_TYPE_MISMATCH',
+          severity: 'CRITICAL',
+          sessionIds: [session.id],
+          entityName: room.name,
+          day: session.day,
+          timeSlotId: session.timeSlotId,
+          message: `Non-laboratory session ${course?.code || session.courseId} cannot be scheduled in laboratory room ${room.name}.`,
+          recommendation: 'Assign a lecture, seminar, or tutorial room appropriate to the session type.',
+        });
+      }
+      if (course && course.requiredEquipment.length > 0) {
+        const missingEquipment = course.requiredEquipment.filter(eq => !room.equipment.includes(eq));
+        if (missingEquipment.length > 0) {
+          violations.push({
+            id: `viol-room-eq-${session.id}`,
+            code: 'ROOM_EQUIPMENT_MISMATCH',
+            severity: 'CRITICAL',
+            sessionIds: [session.id],
+            entityName: room.name,
+            day: session.day,
+            timeSlotId: session.timeSlotId,
+            message: `Room ${room.name} is missing required equipment: ${missingEquipment.join(', ')}.`,
+            recommendation: 'Assign a room that provides every required equipment item.',
+          });
+        }
+      }
+    }
+
+    if (faculty?.status === 'OnLeave' || faculty?.status === 'Inactive') {
+      violations.push({
+        id: `viol-fac-status-${session.id}`,
+        code: 'FACULTY_INACTIVE',
+        severity: 'CRITICAL',
+        sessionIds: [session.id],
+        entityName: faculty.name,
+        day: session.day,
+        timeSlotId: session.timeSlotId,
+        message: `Faculty ${faculty.name} is ${faculty.status} and cannot be scheduled.`,
+        recommendation: 'Assign an active qualified faculty member.',
+      });
+    }
+    if (faculty && course && !faculty.subjectsQualified.includes(course.code) && !faculty.subjectsQualified.includes(course.id)) {
+      violations.push({
+        id: `viol-fac-qual-${session.id}`,
+        code: 'FACULTY_NOT_QUALIFIED',
+        severity: 'CRITICAL',
+        sessionIds: [session.id],
+        entityName: faculty.name,
+        day: session.day,
+        timeSlotId: session.timeSlotId,
+        message: `Faculty ${faculty.name} is not qualified for ${course.code}.`,
+        recommendation: 'Assign a faculty member qualified for the course code or ID.',
+      });
     }
 
     // Check F: Faculty Protected / Unavailable Slots

@@ -47,3 +47,10 @@ The automated test suite evaluates all layers of the platform:
 | `npm run build` | Production Vite Bundle | Clean build output in `dist/` |
 | `curl http://localhost:3000/api/health/live` | Process Liveness Check | HTTP 200 `{"status": "LIVE"}` |
 | `curl http://localhost:3000/api/health/ready` | Operational Readiness Check | HTTP 200 `{"status": "READY"}` |
+
+
+## 3. Solver Hardening Gate — Task 2
+
+The independent timetable validator is authoritative for candidate acceptance. Solver candidates are revalidated before they can be returned, and blocking violations reject the candidate. `scripts/run_solver_tests.ts` covers seeded determinism, property-based allocation sizes from 20–600, and an explicit infeasibility case.
+
+Run: `npm run test:solver`.

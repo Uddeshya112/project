@@ -10,6 +10,7 @@ import {
   DayOfWeek,
   ValidationReport,
 } from '../types';
+import { validateTimetableIndependently } from './independentValidator';
 
 /**
  * High-Performance Timetable Optimization Engine
@@ -489,6 +490,21 @@ export function executeOptimizationEngine(
         allocAssignedSlots,
         options.optimizationProfile || 'BALANCED'
       );
+
+      const validation = validateTimetableIndependently(candidate.sessions, {
+        academicYear,
+        allocations,
+        facultyMembers,
+        rooms,
+        sections,
+        courses,
+        constraints,
+      });
+      candidate.hardConstraintViolations = validation.hardViolationsCount;
+      if (!validation.isValid || !validation.canPublish) {
+        candidatesPruned++;
+        return false;
+      }
       candidatesFound.push(candidate);
 
       if (mode === 'FAST' || candidatesFound.length >= maxCandidates) {
