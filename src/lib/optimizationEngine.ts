@@ -578,8 +578,7 @@ export function executeOptimizationEngine(
         if (isSubgroupAlloc) {
           subSectionOccupancy[currentAlloc.subSectionIdx!] |= blockBit;
           for (const idx of block) sectionSubgroupCounts[secIdx][idx]++;
-          return false;
-    } else {
+        } else {
           sectionWholeOccupancy[secIdx] |= blockBit;
         }
         allocHoursAssigned[currentAlloc.allocIdx] += currentAlloc.durationPeriods;
