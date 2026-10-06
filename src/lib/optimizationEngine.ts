@@ -63,6 +63,7 @@ export interface OptimizationMetrics {
 
 export interface GeneratedCandidate {
   candidateId: string;
+  versionNumber?: number;
   seed: number;
   sessions: ClassSession[];
   hardConstraintViolations: number;
