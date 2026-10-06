@@ -427,6 +427,44 @@ export function createAuth(opts: AuthOptions) {
     return res.json({ success: true });
   });
 
+  router.post('/api/auth/register', async (req, res) => {
+    const email = normEmail(req.body?.email);
+    const name = String(req.body?.name ?? '').trim();
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+    if (!isEmail(email) || !name || !password) {
+      return res.status(400).json({ success: false, message: 'Valid name, institutional email and password are required.' });
+    }
+    if (password.length > MAX_PASSWORD_LENGTH) {
+      return res.status(400).json({ success: false, message: `Password must be ${MAX_PASSWORD_LENGTH} characters or fewer.` });
+    }
+    const domain = email.split('@')[1];
+    if (!domain || (opts.allowedDomains.length && !opts.allowedDomains.includes(domain))) {
+      return res.status(403).json({ success: false, message: 'Registration is limited to an authorized institutional email domain.' });
+    }
+    const policy = evaluatePasswordPolicy(password);
+    if (!policy.isValid) {
+      return res.status(400).json({ success: false, message: `Password needs: ${policy.errors.join(', ')}.` });
+    }
+    const wait = await persistentRateLimit(`register-ip:${req.ip}`, 10, 15 * 60_000);
+    if (wait) {
+      res.setHeader('Retry-After', String(wait));
+      return res.status(429).json({ success: false, message: `Too many registration attempts. Try again in ${wait} seconds.` });
+    }
+    if (await userByEmail(email)) {
+      return res.status(409).json({ success: false, message: 'An account with this email already exists.' });
+    }
+    const [row] = await db.query<UserRow>(
+      `insert into ${T}.users (id, email, name, role_code, department, password_hash, profile)
+       values ($1, $2, $3, 'STUDENT', '', $4, '{}'::jsonb) returning *`,
+      [`usr-${crypto.randomUUID()}`, email, name, await hashPasswordBcrypt(password)],
+    );
+    await db.query(
+      `insert into ${T}.audit_log (id, at, user_name, action, entity_type, entity_id, details)
+       values ($1, now(), $2, 'USER_REGISTERED', 'User', $3, $4)`,
+      [`audit-${crypto.randomUUID()}`, name, row.id, `Student account registered for ${email}.`],
+    );
+    return res.status(201).json({ success: true, message: 'Account created successfully. Please sign in.', email: row.email });
+  });
   router.patch('/api/auth/profile', requireAuth, async (req, res) => {
     const user = req.user!;
     const name = req.body?.name === undefined ? user.name : String(req.body.name).trim();
