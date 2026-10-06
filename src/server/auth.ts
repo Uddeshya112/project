@@ -242,6 +242,38 @@ export function createAuth(opts: AuthOptions) {
     });
     return token;
   }
+  /** Loads the authenticated user from the secure session cookie or API bearer token. */
+  async function loadUser(req: Request, _res: Response, next: NextFunction) {
+    try {
+      const cookieToken = readCookie(req, SESSION_COOKIE);
+      const bearer = req.headers.authorization?.replace(/^Bearer\s+/i, '').trim();
+      const token = cookieToken || bearer;
+      if (!token) return next();
+      const rows = await db.query<UserRow>(
+        `select u.* from ${T}.auth_sessions s
+          join ${T}.users u on u.id = s.user_id
+         where s.token_hash = $1
+           and s.expires_at > now()
+           and s.absolute_expires_at > now()
+           and s.last_seen_at > now() - ($2::text || ' minutes')::interval
+           and u.status = 'ACTIVE'`,
+        [sha256(token), String(Math.round(IDLE_TIMEOUT_MS / 60000))],
+      );
+      const user = rows[0];
+      if (!user || (user.is_demo && !opts.demoMode)) return next();
+      req.user = user;
+      await db.query(
+        `update ${T}.auth_sessions
+            set last_seen_at = now(),
+                expires_at = least(absolute_expires_at, now() + ($2::text || ' minutes')::interval)
+          where token_hash = $1`,
+        [sha256(token), String(Math.round(IDLE_TIMEOUT_MS / 60000))],
+      );
+      return next();
+    } catch {
+      return next();
+    }
+  }
   /** First start: load the sample accounts; optionally ensure a bootstrap admin. */
   async function seedUsers() {
     const [{ n }] = await db.query<{ n: number }>(`select count(*)::int as n from ${T}.users`);
@@ -301,11 +333,33 @@ export function createAuth(opts: AuthOptions) {
   }
 
   setInterval(() => {
-    db.query(`delete from ${T}.auth_sessions where expires_at < now()`).catch(() => {});
+    db.query(`delete from ${T}.auth_sessions where expires_at < now() or absolute_expires_at < now()`).catch(() => {});
     db.query(`delete from ${T}.oauth_states where created_at < now() - interval '10 minutes'`).catch(() => {});
+    db.query(`delete from ${T}.password_reset_tokens where expires_at < now()`).catch(() => {});
+    db.query(`delete from ${T}.rate_limits where reset_at < now()`).catch(() => {});
   }, 3600_000).unref();
 
   const router = Router();
+  async function persistentRateLimit(key: string, max: number, windowMs: number): Promise<number> {
+    const rows = await db.query<{ count: number; reset_at: Date }>(
+      `insert into ${T}.rate_limits (key, window_start, reset_at, count)
+       values ($1, now(), now() + ($2::text || ' milliseconds')::interval, 1)
+       on conflict (key) do update
+         set count = case when ${T}.rate_limits.reset_at <= now() then 1 else ${T}.rate_limits.count + 1 end,
+             window_start = case when ${T}.rate_limits.reset_at <= now() then now() else ${T}.rate_limits.window_start end,
+             reset_at = case when ${T}.rate_limits.reset_at <= now() then now() + ($2::text || ' milliseconds')::interval else ${T}.rate_limits.reset_at end,
+             updated_at = now()
+       returning count, reset_at`,
+      [key, String(windowMs)],
+    );
+    const row = rows[0];
+    if (!row || row.count <= max) return 0;
+    return Math.max(1, Math.ceil((new Date(row.reset_at).getTime() - Date.now()) / 1000));
+  }
+
+  async function clearPersistentRateLimits(): Promise<void> {
+    await db.query(`delete from ${T}.rate_limits`);
+  }
 
   router.get('/api/auth/config', (_req, res) => {
     res.json({ googleEnabled, demoEnabled: opts.demoMode, allowedDomains: opts.allowedDomains });
@@ -320,17 +374,16 @@ export function createAuth(opts: AuthOptions) {
     if (password.length > MAX_PASSWORD_LENGTH) {
       return res.status(400).json({ success: false, message: `Password must be ${MAX_PASSWORD_LENGTH} characters or fewer.` });
     }
-    const wait = rateLimit(`login-ip:${req.ip}`, IP_LIMIT_PER_MIN, 60_000) || rateLimit(`login-acct:${email}`, 10, 15 * 60_000);
+    const wait = await persistentRateLimit(`login-ip:${req.ip}`, IP_LIMIT_PER_MIN, 60_000) || await persistentRateLimit(`login-acct:${email}`, 10, 15 * 60_000);
     if (wait) {
       res.setHeader('Retry-After', String(wait));
       return res.status(429).json({ success: false, message: `Too many sign-in attempts. Try again in ${wait} seconds.` });
     }
 
     const user = await userByEmail(email);
-    // Compare against a dummy hash when there is no usable password so timing does not reveal accounts.
-    dummyHash ??= await hashPassword(crypto.randomUUID());
-    const ok = await bcrypt.compare(password, user?.password_hash ?? dummyHash);
-    if (!user || !user.password_hash || !ok) {
+    dummyHash ??= await hashPasswordBcrypt(crypto.randomUUID());
+    const verification = await verifyPassword(password, user?.password_hash ?? dummyHash);
+    if (!user || !user.password_hash || !verification.isValid) {
       return res.status(401).json({ success: false, message: 'Invalid email or password.' });
     }
     if (user.status === 'LOCKED') {
@@ -339,8 +392,13 @@ export function createAuth(opts: AuthOptions) {
     if (user.is_demo && !opts.demoMode) {
       return res.status(403).json({ success: false, message: 'Demo accounts are disabled on this server.' });
     }
-    await startSession(req, res, user);
-    return res.json({ success: true, user: publicUser(user) });
+    const sessionToken = await startSession(req, res, user);
+    if (verification.needsRehash) {
+      await db.query(`update ${T}.users set password_hash = $2 where id = $1`, [user.id, await hashPasswordBcrypt(password)]);
+    }
+    const payload: Record<string, unknown> = { success: true, user: publicUser(user) };
+    if (process.env.NODE_ENV === 'test') payload.token = sessionToken;
+    return res.json(payload);
   });
 
   router.post('/api/auth/demo-login', async (req, res) => {
