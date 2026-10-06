@@ -1,8 +1,10 @@
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
+import { OAuth2Client } from 'google-auth-library';
+import { sendPasswordResetMail } from './mailer';
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import type { Db } from './db';
-import { evaluatePasswordPolicy, MAX_PASSWORD_LENGTH } from '../lib/passwordUtils';
+import { evaluatePasswordPolicy, MAX_PASSWORD_LENGTH, hashPasswordBcrypt, verifyPassword } from '../lib/passwordUtils';
 import { USERS as SAMPLE_USERS, INITIAL_MEMBERSHIPS } from '../lib/authData';
 
 export type RoleCode =
@@ -61,6 +63,10 @@ const ADMIN_PROFILE_FIELDS = [...SELF_PROFILE_FIELDS, 'rollNumber', 'sectionId',
 const SAMPLE_FACULTY_LINKS: Record<string, string> = { 'usr-sharma': 'fac-0001', 'usr-gupta': 'fac-0002', 'usr-murthy': 'fac-0003', 'usr-roy': 'fac-0004' };
 
 const SESSION_COOKIE = 'tt_session';
+const CSRF_COOKIE = 'tt_csrf';
+const MAX_ACTIVE_SESSIONS = 5;
+const IDLE_TIMEOUT_MS = Math.max(15 * 60_000, Number(process.env.SESSION_IDLE_MINUTES || 240) * 60_000);
+const ABSOLUTE_SESSION_MS = Math.max(IDLE_TIMEOUT_MS, Number(process.env.SESSION_ABSOLUTE_HOURS || 24) * 3600_000);
 // Per-IP limits are generous because a campus network puts thousands of users behind a few addresses;
 // brute force is stopped by the per-account limit.
 const IP_LIMIT_PER_MIN = Number(process.env.LOGIN_RATE_LIMIT_PER_IP) || 300;
@@ -128,29 +134,6 @@ export function publicUser(u: UserRow) {
     createdAt: u.created_at,
     lastLoginAt: u.last_login_at,
   };
-}
-
-// ---------------------------------------------------------------------------
-// Rate limiting
-// ponytail: per-process buckets; move to the database if the API ever runs on several instances.
-// ---------------------------------------------------------------------------
-const buckets = new Map<string, { count: number; resetAt: number }>();
-setInterval(() => {
-  const now = Date.now();
-  for (const [k, b] of buckets) if (b.resetAt < now) buckets.delete(k);
-}, 60_000).unref();
-
-/** Returns seconds to wait, or 0 when the call is allowed. */
-export function rateLimit(key: string, max: number, windowMs: number): number {
-  const now = Date.now();
-  const b = buckets.get(key);
-  if (!b || b.resetAt < now) {
-    buckets.set(key, { count: 1, resetAt: now + windowMs });
-    return 0;
-  }
-  if (b.count >= max) return Math.ceil((b.resetAt - now) / 1000);
-  b.count++;
-  return 0;
 }
 
 const sha256 = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
