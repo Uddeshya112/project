@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import type { Db } from './db';
-import { evaluatePasswordPolicy } from '../lib/passwordUtils';
+import { evaluatePasswordPolicy, MAX_PASSWORD_LENGTH } from '../lib/passwordUtils';
 import { USERS as SAMPLE_USERS, INITIAL_MEMBERSHIPS } from '../lib/authData';
 
 export type RoleCode =
@@ -248,8 +248,15 @@ export function createAuth(opts: AuthOptions) {
         'role-cr': 'CLASS_REPRESENTATIVE',
         'role-student': 'STUDENT',
       };
-      const samplePwd = process.env.SAMPLE_ACCOUNTS_PASSWORD || 'ThaparInstitute@2026!';
-      const demoPwd = process.env.DEMO_ACCOUNTS_PASSWORD || 'ThaparDemo@2026Test!';
+      const samplePwd =
+        process.env.SAMPLE_ACCOUNTS_PASSWORD ||
+        (process.env.NODE_ENV === 'production' ? '' : crypto.randomBytes(24).toString('base64url'));
+      const demoPwd =
+        process.env.DEMO_ACCOUNTS_PASSWORD ||
+        (process.env.NODE_ENV === 'production' ? '' : crypto.randomBytes(24).toString('base64url'));
+      if (!samplePwd || !demoPwd) {
+        throw new Error('Sample/demo account passwords must be supplied explicitly in production.');
+      }
       const [sampleHash, demoHash] = await Promise.all([hashPassword(samplePwd), hashPassword(demoPwd)]);
       for (const u of SAMPLE_USERS) {
         const membership = INITIAL_MEMBERSHIPS.find((m) => m.userId === u.id);
@@ -302,6 +309,9 @@ export function createAuth(opts: AuthOptions) {
     const password = typeof req.body?.password === 'string' ? req.body.password : '';
     if (!email || !password) {
       return res.status(400).json({ success: false, message: 'Email and password are required.' });
+    }
+    if (password.length > MAX_PASSWORD_LENGTH) {
+      return res.status(400).json({ success: false, message: `Password must be ${MAX_PASSWORD_LENGTH} characters or fewer.` });
     }
     const wait = rateLimit(`login-ip:${req.ip}`, IP_LIMIT_PER_MIN, 60_000) || rateLimit(`login-acct:${email}`, 10, 15 * 60_000);
     if (wait) {
@@ -368,6 +378,9 @@ export function createAuth(opts: AuthOptions) {
     }
     if (rateLimit(`chpwd:${user.id}`, 5, 15 * 60_000)) {
       return res.status(429).json({ success: false, message: 'Too many attempts. Try again later.' });
+    }
+    if (String(currentPassword ?? '').length > MAX_PASSWORD_LENGTH || String(newPassword ?? '').length > MAX_PASSWORD_LENGTH) {
+      return res.status(400).json({ success: false, message: `Password must be ${MAX_PASSWORD_LENGTH} characters or fewer.` });
     }
     if (!(await bcrypt.compare(String(currentPassword ?? ''), user.password_hash))) {
       return res.status(400).json({ success: false, message: 'Current password is incorrect.' });
@@ -514,6 +527,9 @@ export function createAuth(opts: AuthOptions) {
     if (!isEmail(email) || !name || !ROLE_CODES.includes(roleCode)) {
       return res.status(400).json({ success: false, message: 'Valid email, name and role are required.' });
     }
+    if (password.length > MAX_PASSWORD_LENGTH) {
+      return res.status(400).json({ success: false, message: `Password must be ${MAX_PASSWORD_LENGTH} characters or fewer.` });
+    }
     if (password && !evaluatePasswordPolicy(password).isValid) {
       return res.status(400).json({ success: false, message: `Password needs: ${evaluatePasswordPolicy(password).errors.join(', ')}.` });
     }
@@ -544,6 +560,9 @@ export function createAuth(opts: AuthOptions) {
     }
     if (b.roleCode !== undefined && !ROLE_CODES.includes(b.roleCode)) return res.status(400).json({ success: false, message: 'Unknown role.' });
     if (b.status !== undefined && !['ACTIVE', 'LOCKED'].includes(b.status)) return res.status(400).json({ success: false, message: 'Unknown status.' });
+    if (b.password && String(b.password).length > MAX_PASSWORD_LENGTH) {
+      return res.status(400).json({ success: false, message: `Password must be ${MAX_PASSWORD_LENGTH} characters or fewer.` });
+    }
     if (b.password && !evaluatePasswordPolicy(String(b.password)).isValid) {
       return res.status(400).json({ success: false, message: `Password needs: ${evaluatePasswordPolicy(String(b.password)).errors.join(', ')}.` });
     }
