@@ -827,9 +827,15 @@ function buildCandidateFromState(
     const internalAlloc = problem.allocations[i];
     const assigned = allocAssignedSlots[internalAlloc.allocIdx];
 
-    for (const item of assigned) {
+    for (let offset = 0; offset < assigned.length; offset++) {
+      const item = assigned[offset];
       const slotRef = problem.slots[item.slotIdx];
       const room = problem.rooms[item.roomIdx];
+      const isBlock = internalAlloc.durationPeriods > 1;
+      const blockIndex = isBlock ? Math.floor(offset / internalAlloc.durationPeriods) : offset;
+      const blockId = isBlock
+        ? 'cand-' + candidateNum + '-alloc-' + internalAlloc.allocIdx + '-block-' + (blockIndex + 1)
+        : undefined;
 
       sessions.push({
         id: `sess-cand${candidateNum}-${sessionCounter++}`,
@@ -841,6 +847,8 @@ function buildCandidateFromState(
         day: slotRef.day,
         timeSlotId: slotRef.timeSlotId,
         type: internalAlloc.sessionType as any,
+        durationPeriods: internalAlloc.durationPeriods,
+        ...(blockId ? { blockId } : {}),
         status: 'Planned',
         version: 1,
       });
