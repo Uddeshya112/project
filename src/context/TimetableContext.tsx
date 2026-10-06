@@ -63,8 +63,8 @@ import {
 } from '../lib/recoveryEngine';
 import { validateAcademicSetup, generateTimetableFromConfiguration } from '../lib/timetableGenerator';
 import { ExcelImportPreview } from '../lib/excelMasterService';
-import { supabaseClient, getSupabaseAccessToken } from '../lib/supabaseClient';
-import { apiUrl, getActiveSupabaseTokenFromStorage } from '../lib/apiConfig';
+import { api } from '../lib/api';
+import { apiUrl } from '../lib/apiConfig';
 
 export type UserRole = 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin';
 export type ViewTab =
@@ -338,30 +338,9 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
   const [selectedRoomId, setSelectedRoomId] = useState<string>('room-204');
   const [latestGeneratedRoutines, setLatestGeneratedRoutines] = useState<GenerationRoutine[] | null>(null);
 
-  const getAuthHeaders = (): Record<string, string> => {
-    let token: string | null = null;
-    if (typeof window !== 'undefined') {
-      token = getActiveSupabaseTokenFromStorage() || localStorage.getItem('auth_token');
-    }
-    return {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    };
-  };
-
-  const getAuthHeadersAsync = async (): Promise<Record<string, string>> => {
-    const token = await getSupabaseAccessToken();
-    const storageToken = !token ? getActiveSupabaseTokenFromStorage() : null;
-    const finalToken = token || storageToken;
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-    if (finalToken) {
-      headers['Authorization'] = `Bearer ${finalToken}`;
-    }
-    return headers;
-  };
-
+  // Authentication is provided by the httpOnly session cookie; the global fetch wrapper adds CSRF for mutations.
+  const getAuthHeaders = (): Record<string, string> => ({ 'Content-Type': 'application/json' });
+  const getAuthHeadersAsync = async (): Promise<Record<string, string>> => ({ 'Content-Type': 'application/json' });
   // Synchronize initial state from Supabase / Backend API on mount
   useEffect(() => {
     let isMounted = true;
