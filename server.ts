@@ -35,6 +35,7 @@ const DEFAULT_ALLOWED_ORIGINS = [
   'https://tiet-timetable-six.vercel.app',
   'http://localhost:3000',
   'http://127.0.0.1:3000',
+  'http://localhost:5173',
 ];
 
 function envList(name: string, fallback: string[]) {
