@@ -471,14 +471,14 @@ async function runTestSuite() {
   try {
     const logoutRes = await fetch(`${BASE_URL}/api/auth/logout`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${coordinatorToken}` },
+      headers: authHeaders(coordinatorCookie),
     });
     const logoutData = await logoutRes.json();
     assert(logoutRes.status === 200 && logoutData.success === true, 'Auth API', 'Logout endpoint revokes session');
 
     // Verify the session cookie is now invalid
     const meRes = await fetch(`${BASE_URL}/api/auth/me`, {
-      headers: { Authorization: `Bearer ${coordinatorToken}` },
+      headers: { Authorization: coordinatorCookie },
     });
     assert(meRes.status === 401, 'Auth API', 'Revoked session cannot access /api/auth/me');
   } catch (err) {
@@ -513,15 +513,15 @@ async function runTestSuite() {
 
   // Test 3.3: Google Authorization Initiation Endpoint
   try {
-    const res = await fetch(`${BASE_URL}/api/auth/google/authorize`, {
-      headers: { Accept: 'application/json' },
+    const res = await fetch(`${BASE_URL}/api/auth/google/start`, {
+      headers: { Accept: 'text/html' },
+      redirect: 'manual',
     });
-    const data = await res.json();
+    const location = res.headers.get('location') ?? '';
     assert(
-      (res.status === 200 && typeof data.configured === 'boolean') ||
-        (res.status === 503 && data.message === 'Google sign-in not configured'),
+      res.status === 302 && /auth_error=|accounts\.google\.com/.test(location),
       'Google OAuth',
-      'Authorization initiation endpoint safely responds with structured JSON'
+      'Authorization initiation endpoint safely redirects to Google or reports configuration failure'
     );
   } catch (err) {
     assert(false, 'Google OAuth', 'Google authorization initiation failed', String(err));
@@ -529,14 +529,12 @@ async function runTestSuite() {
 
   // Test 3.4: Google OAuth Cancellation Handling
   try {
-    const res = await fetch(`${BASE_URL}/api/auth/google/callback?error=access_denied`, {
-      headers: { Accept: 'application/json' },
-    });
-    const data = await res.json();
+    const res = await fetch(`${BASE_URL}/api/auth/google/callback?error=access_denied`, { redirect: 'manual' });
+    const location = res.headers.get('location') ?? '';
     assert(
-      res.status === 400 && data.error === 'OAUTH_PROVIDER_ERROR',
+      res.status === 302 && /auth_error=/.test(location),
       'Google OAuth',
-      'User cancellation or denial handled safely without session creation'
+      'User cancellation or denial safely redirects without creating a session'
     );
   } catch (err) {
     assert(false, 'Google OAuth', 'Google cancellation test failed', String(err));
@@ -544,14 +542,12 @@ async function runTestSuite() {
 
   // Test 3.5: Google OAuth Callback Missing Parameters
   try {
-    const res = await fetch(`${BASE_URL}/api/auth/google/callback`, {
-      headers: { Accept: 'application/json' },
-    });
-    const data = await res.json();
+    const res = await fetch(`${BASE_URL}/api/auth/google/callback`, { redirect: 'manual' });
+    const location = res.headers.get('location') ?? '';
     assert(
-      res.status === 400 && data.error === 'INVALID_PARAMETERS',
+      res.status === 302 && /auth_error=/.test(location),
       'Google OAuth',
-      'Missing code and state parameters safely rejected with HTTP 400'
+      'Missing code and state parameters safely rejected with a redirect'
     );
   } catch (err) {
     assert(false, 'Google OAuth', 'Missing parameters test failed', String(err));
@@ -559,14 +555,12 @@ async function runTestSuite() {
 
   // Test 3.6: Google OAuth Callback Invalid State Token
   try {
-    const res = await fetch(`${BASE_URL}/api/auth/google/callback?code=test_code_123&state=unregistered_state_xyz`, {
-      headers: { Accept: 'application/json' },
-    });
-    const data = await res.json();
+    const res = await fetch(`${BASE_URL}/api/auth/google/callback?code=test_code_123&state=unregistered_state_xyz`, { redirect: 'manual' });
+    const location = res.headers.get('location') ?? '';
     assert(
-      res.status === 400 && data.error === 'INVALID_STATE',
+      res.status === 302 && /auth_error=/.test(location),
       'Google OAuth',
-      'Unregistered/expired state token safely rejected with HTTP 400'
+      'Unregistered/expired state safely rejected with a redirect'
     );
   } catch (err) {
     assert(false, 'Google OAuth', 'Invalid state test failed', String(err));
