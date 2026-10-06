@@ -550,94 +550,47 @@ export function validateTimetableIndependently(
     }
   });
 
-  // Check Lab Atomicity & Duration Rules
-  labCohortDayMap.forEach((labSessions, labKey) => {
-    const [secId, subSecId, courseId, day] = labKey.split('_') as [string, string, string, DayOfWeek];
-    const course = courseMap.get(courseId);
-    const section = sectionMap.get(secId);
-    const subObj = section?.subSections?.find(sub => sub.id === subSecId);
-    const cohortName = `${section?.name || secId}${subObj ? `/${subObj.name}` : ''}`;
-
-    if (labSessions.length === 1) {
-      violations.push({
-        id: `viol-lab-dur-${labKey}`,
-        code: 'LAB_DURATION_VIOLATION',
-        severity: 'CRITICAL',
-        sessionIds: labSessions.map(s => s.id),
-        entityName: cohortName,
-        day,
-        timeSlotId: labSessions[0].timeSlotId,
-        message: `Laboratory session for ${course?.code || courseId} (${cohortName}) on ${day} is only 1 hour. Labs must occupy exactly 2 consecutive periods.`,
-        recommendation: `Schedule lab as a 2-hour contiguous block.`,
-      });
-    } else if (labSessions.length >= 2) {
-      labSessions.sort((a, b) => {
-        const pA = parseInt(a.timeSlotId.replace('ts-', ''), 10) || 1;
-        const pB = parseInt(b.timeSlotId.replace('ts-', ''), 10) || 1;
-        return pA - pB;
-      });
-
-      for (let i = 0; i < labSessions.length - 1; i += 2) {
-        const s1 = labSessions[i];
-        const s2 = labSessions[i + 1];
-        if (!s2) {
-          violations.push({
-            id: `viol-lab-dur-odd-${labKey}`,
-            code: 'LAB_DURATION_VIOLATION',
-            severity: 'CRITICAL',
-            sessionIds: [s1.id],
-            entityName: cohortName,
-            day,
-            timeSlotId: s1.timeSlotId,
-            message: `Laboratory session for ${course?.code || courseId} (${cohortName}) on ${day} has an odd duration (${labSessions.length} hrs).`,
-            recommendation: `Labs must be scheduled in 2-hour contiguous blocks.`,
-          });
+  // Check Lab/Practical atomic blocks: exact 2- or 3-period duration, same day/room/faculty, no lunch crossing.
+  const labBlocks = new Map<string, ClassSession[]>();
+  activeSessions.filter(s => s.type === 'Lab' || s.type === 'Practical').forEach(session => {
+    const inferredDuration = session.durationPeriods ?? 2;
+    const key = `${session.blockId || `${session.sectionId}|${session.subSectionId || 'ALL'}|${session.courseId}|${session.day}|${session.roomId}|${session.facultyId}`}`;
+    const list = labBlocks.get(key) || [];
+    list.push(session);
+    labBlocks.set(key, list);
+  });
+  labBlocks.forEach((blockSessions, blockKey) => {
+    const first = blockSessions[0];
+    const section = sectionMap.get(first.sectionId);
+    const course = courseMap.get(first.courseId);
+    const expectedDuration = first.durationPeriods ?? 2;
+    const sorted = [...blockSessions].sort((a, b) => {
+      const ta = academicYear.timeSlots?.find(ts => ts.id === a.timeSlotId)?.periodNumber ?? 0;
+      const tb = academicYear.timeSlots?.find(ts => ts.id === b.timeSlotId)?.periodNumber ?? 0;
+      return ta - tb;
+    });
+    const validDuration = [2, 3].includes(expectedDuration) && sorted.length === expectedDuration;
+    if (!validDuration) {
+      violations.push({ id: `viol-lab-dur-${blockKey}`, code: 'LAB_DURATION_VIOLATION', severity: 'CRITICAL', sessionIds: sorted.map(s => s.id), entityName: section?.name || first.sectionId, day: first.day, timeSlotId: first.timeSlotId, message: `Laboratory activity ${course?.code || first.courseId} must occupy exactly ${expectedDuration} contiguous periods (2 or 3); found ${sorted.length}.`, recommendation: 'Set durationPeriods to 2 or 3 and schedule the complete contiguous block.' });
+      return;
+    }
+    for (let i = 0; i < sorted.length; i++) {
+      const current = sorted[i];
+      const slot = academicYear.timeSlots?.find(ts => ts.id === current.timeSlotId);
+      if (!slot || slot.isLunch || slot.isBreak) {
+        violations.push({ id: `viol-lab-break-${current.id}`, code: 'LAB_DURATION_VIOLATION', severity: 'CRITICAL', sessionIds: sorted.map(s => s.id), entityName: section?.name || first.sectionId, day: first.day, timeSlotId: current.timeSlotId, message: `Laboratory block for ${course?.code || first.courseId} contains a break/lunch period.`, recommendation: 'Move the complete lab block to contiguous teaching periods on one side of lunch.' });
+        break;
+      }
+      if (current.roomId !== first.roomId || current.facultyId !== first.facultyId || current.day !== first.day) {
+        violations.push({ id: `viol-lab-res-${blockKey}`, code: 'LAB_DURATION_VIOLATION', severity: 'CRITICAL', sessionIds: sorted.map(s => s.id), entityName: section?.name || first.sectionId, day: first.day, timeSlotId: first.timeSlotId, message: 'All periods in a laboratory block must use the same room, faculty member, and day.', recommendation: 'Keep the entire atomic lab block with one qualified faculty member in one compatible room.' });
+        break;
+      }
+      if (i > 0) {
+        const previous = sorted[i - 1];
+        const prevSlot = academicYear.timeSlots?.find(ts => ts.id === previous.timeSlotId);
+        if (!prevSlot || prevSlot.endTime !== slot.startTime || (slot.periodNumber !== prevSlot.periodNumber + 1)) {
+          violations.push({ id: `viol-lab-cont-${blockKey}`, code: 'LAB_DURATION_VIOLATION', severity: 'CRITICAL', sessionIds: sorted.map(s => s.id), entityName: section?.name || first.sectionId, day: first.day, timeSlotId: first.timeSlotId, message: 'Laboratory periods must be contiguous atomic periods.', recommendation: 'Reschedule the block to consecutive periods without lunch or breaks.' });
           break;
-        }
-
-        const p1 = parseInt(s1.timeSlotId.replace('ts-', ''), 10) || 1;
-        const p2 = parseInt(s2.timeSlotId.replace('ts-', ''), 10) || 1;
-
-        if (p2 !== p1 + 1 || p1 === 5 || p2 === 5) {
-          violations.push({
-            id: `viol-lab-cont-${labKey}-${i}`,
-            code: 'LAB_DURATION_VIOLATION',
-            severity: 'CRITICAL',
-            sessionIds: [s1.id, s2.id],
-            entityName: cohortName,
-            day,
-            timeSlotId: s1.timeSlotId,
-            message: `Laboratory session for ${course?.code || courseId} (${cohortName}) on ${day} is not contiguous or crosses lunch (periods ${p1} & ${p2}).`,
-            recommendation: `Labs must be 2 consecutive periods on the same side of lunch.`,
-          });
-        }
-
-        if (s1.roomId !== s2.roomId) {
-          violations.push({
-            id: `viol-lab-room-${labKey}-${i}`,
-            code: 'LAB_DURATION_VIOLATION',
-            severity: 'CRITICAL',
-            sessionIds: [s1.id, s2.id],
-            entityName: cohortName,
-            day,
-            timeSlotId: s1.timeSlotId,
-            message: `Laboratory session for ${course?.code || courseId} (${cohortName}) changes rooms between period 1 (${s1.roomId}) and period 2 (${s2.roomId}).`,
-            recommendation: `Both periods of a lab must use the same laboratory room.`,
-          });
-        }
-
-        if (s1.facultyId !== s2.facultyId) {
-          violations.push({
-            id: `viol-lab-fac-${labKey}-${i}`,
-            code: 'LAB_DURATION_VIOLATION',
-            severity: 'CRITICAL',
-            sessionIds: [s1.id, s2.id],
-            entityName: cohortName,
-            day,
-            timeSlotId: s1.timeSlotId,
-            message: `Laboratory session for ${course?.code || courseId} (${cohortName}) changes faculty between period 1 and period 2.`,
-            recommendation: `Both periods of a lab must be led by the same faculty instructor.`,
-          });
         }
       }
     }

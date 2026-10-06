@@ -51,6 +51,14 @@ The automated test suite evaluates all layers of the platform:
 
 ## 3. Solver Hardening Gate — Task 2
 
+## 4. Solver Hardening Gate — Task 3
+
+Generation compiles laboratory/practical activities into 2- or 3-period contiguous atomic blocks. Blocks cannot cross configured lunch/break slots and must retain the same room and faculty for every period. Non-lab activities remain 1-period by default. The independent validator verifies these block semantics.
+
+Run: `npm run test:solver`.
+
+## 3. Solver Hardening Gate — Task 2
+
 The independent timetable validator is authoritative for candidate acceptance. Solver candidates are revalidated before they can be returned, and blocking violations reject the candidate. `scripts/run_solver_tests.ts` covers seeded determinism, property-based allocation sizes from 20–600, and an explicit infeasibility case.
 
 Run: `npm run test:solver`.

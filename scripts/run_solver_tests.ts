@@ -31,6 +31,11 @@ function main() {
     { seed: SEED, numRuns: 20 }
   );
 
+  const candidateSessions = first.bestCandidate?.sessions || [];
+  const labSessions = candidateSessions.filter(s => s.type === 'Lab' || s.type === 'Practical');
+  if (labSessions.some(s => (s.durationPeriods ?? 2) < 2)) throw new Error('Lab duration defaulting failed');
+  console.log('PASS: lab activities use atomic multi-period metadata');
+
   const impossible = executeOptimizationEngine(INITIAL_ACADEMIC_YEAR, INITIAL_ALLOCATIONS.slice(0, 20), FACULTY_MEMBERS, ROOMS.map(r => ({ ...r, isAvailable: false })), SECTIONS, COURSES, INITIAL_CONSTRAINTS, { budgetMode: 'FAST', timeBudgetMs: 100, seed: SEED });
   if (impossible.isFeasible || !impossible.infeasibilityDiagnostics?.length) throw new Error('Infeasible case did not produce diagnostics');
   console.log('PASS: solver hardening tests');

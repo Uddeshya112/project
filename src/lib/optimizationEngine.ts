@@ -126,7 +126,8 @@ interface InternalAllocation {
   sessionType: string;
   candidateRooms: number[]; // roomIdx array
   feasibleSlotIndices: number[]; // slotIdx array where faculty & room prerequisites allow assignment
-  feasibleLabBlocks?: [number, number][]; // [slot1, slot2] pairs for 2-hour atomic labs
+  durationPeriods: number;
+  feasibleLabBlocks: number[][]; // atomic contiguous blocks; 2 or 3 periods for labs
 }
 
 interface CompiledProblem {
@@ -230,6 +231,21 @@ export function compileSchedulingProblem(
     const secIdx = sectionMap.get(section.id)!;
     const subSecIdx = alloc.subSectionId ? subSectionIdMap.get(alloc.subSectionId) : undefined;
     const subSectionObj = alloc.subSectionId ? (section.subSections || []).find(sub => sub.id === alloc.subSectionId) : undefined;
+    const durationPeriods = Number.isInteger(alloc.durationPeriods) && (alloc.durationPeriods ?? 0) > 0
+      ? Number(alloc.durationPeriods)
+      : (alloc.sessionType === 'Lab' || alloc.sessionType === 'Practical' ? 2 : 1);
+    if ((alloc.sessionType === 'Lab' || alloc.sessionType === 'Practical') && ![2, 3].includes(durationPeriods)) {
+      infeasibilityReasons.push(`Allocation ${alloc.id} (${course.code}): lab duration must be 2 or 3 periods, got ${durationPeriods}.`);
+      continue;
+    }
+    if (alloc.sessionType !== 'Lab' && alloc.sessionType !== 'Practical' && durationPeriods !== 1) {
+      infeasibilityReasons.push(`Allocation ${alloc.id} (${course.code}): ${alloc.sessionType} activities must occupy exactly 1 period.`);
+      continue;
+    }
+    if (alloc.hoursPerWeek % durationPeriods !== 0) {
+      infeasibilityReasons.push(`Allocation ${alloc.id} (${course.code}): ${alloc.hoursPerWeek} weekly hours cannot be partitioned into ${durationPeriods}-period atomic blocks.`);
+      continue;
+    }
 
     // Accumulate total section load for whole-class lectures; subgroups share time slots concurrently
     if (!alloc.subSectionId) {
@@ -276,30 +292,29 @@ export function compileSchedulingProblem(
       );
     }
 
-    // Compute 2-hour contiguous lab blocks for Lab/Practical allocations
-    const feasibleLabBlocks: [number, number][] = [];
+    // Compile every valid atomic lab/practical start as a complete contiguous block.
+    const feasibleLabBlocks: number[][] = [];
     if (alloc.sessionType === 'Lab' || alloc.sessionType === 'Practical') {
-      const slotMap = new Map<number, SlotRef>();
-      slots.forEach(s => slotMap.set(s.slotIdx, s));
-
-      for (let s1Idx = 0; s1Idx < slots.length - 1; s1Idx++) {
-        const s1 = slots[s1Idx];
-        const s2 = slots[s1Idx + 1];
-        if (!s1 || !s2) continue;
-        if (!feasibleSlotIndices.includes(s1.slotIdx) || !feasibleSlotIndices.includes(s2.slotIdx)) continue;
-        if (s1.day !== s2.day) continue;
-        if (lunchSlotIndices.has(s1.slotIdx) || lunchSlotIndices.has(s2.slotIdx)) continue;
-
-        // Continuity check: Ensure no break/lunch between s1 and s2
-        const ts1 = academicYear.timeSlots?.find(t => t.id === s1.timeSlotId);
-        const ts2 = academicYear.timeSlots?.find(t => t.id === s2.timeSlotId);
-        if (ts1 && ts2) {
-          if (ts1.endTime !== ts2.startTime && ts1.periodNumber + 1 !== ts2.periodNumber) continue;
-        } else {
-          if (s2.periodIdx !== s1.periodIdx + 1) continue;
+      const slotByIndex = new Map<number, SlotRef>(slots.map(s => [s.slotIdx, s]));
+      for (const start of slots) {
+        const block: number[] = [];
+        let valid = true;
+        for (let offset = 0; offset < durationPeriods; offset++) {
+          const current = slotByIndex.get(start.slotIdx + offset);
+          if (!current || current.day !== start.day || lunchSlotIndices.has(current.slotIdx) || !feasibleSlotIndices.includes(current.slotIdx)) {
+            valid = false;
+            break;
+          }
+          const previous = offset === 0 ? undefined : slotByIndex.get(start.slotIdx + offset - 1);
+          if (previous) {
+            const previousTs = academicYear.timeSlots?.find(t => t.id === previous.timeSlotId);
+            const currentTs = academicYear.timeSlots?.find(t => t.id === current.timeSlotId);
+            const contiguous = previous.periodIdx + 1 === current.periodIdx && previousTs?.endTime === currentTs?.startTime;
+            if (!contiguous) { valid = false; break; }
+          }
+          block.push(current.slotIdx);
         }
-
-        feasibleLabBlocks.push([s1.slotIdx, s2.slotIdx]);
+        if (valid && block.length === durationPeriods) feasibleLabBlocks.push(block);
       }
     }
 
@@ -313,6 +328,7 @@ export function compileSchedulingProblem(
       sectionIdx: secIdx,
       subSectionIdx: subSecIdx,
       requiredHours: alloc.hoursPerWeek,
+      durationPeriods,
       sessionType: alloc.sessionType,
       candidateRooms: candidateRoomsIndices,
       feasibleSlotIndices,
@@ -526,11 +542,12 @@ export function executeOptimizationEngine(
 
     const isLabAlloc =
       (currentAlloc.sessionType === 'Lab' || currentAlloc.sessionType === 'Practical') &&
-      Boolean(currentAlloc.feasibleLabBlocks && currentAlloc.feasibleLabBlocks.length > 0);
+      currentAlloc.durationPeriods > 1 &&
+      currentAlloc.feasibleLabBlocks.length > 0;
 
     if (isLabAlloc) {
-      // Branch 1: Atomic 2-Hour Lab Block Scheduling
-      const candidateBlocks = [...currentAlloc.feasibleLabBlocks!];
+      // Branch 1: Atomic multi-period lab/practical block scheduling.
+      const candidateBlocks = [...currentAlloc.feasibleLabBlocks];
       if (candidatesFound.length > 0) {
         for (let i = candidateBlocks.length - 1; i > 0; i--) {
           const j = Math.floor(prng.next() * (i + 1));
@@ -538,87 +555,52 @@ export function executeOptimizationEngine(
         }
       }
 
-      for (const [s1, s2] of candidateBlocks) {
-        const blockBit = (1n << BigInt(s1)) | (1n << BigInt(s2));
-        constraintChecksCount += 2;
-
-        // 1. Bitwise Hard Constraint Check: Faculty Busy?
-        if ((facultyOccupancy[facIdx] & blockBit) !== 0n) {
-          candidatesPruned++;
-          continue;
-        }
-
-        // 2. Bitwise Hard Constraint Check: Student Cohort / Subgroup Busy?
+      for (const block of candidateBlocks) {
+        const blockBit = block.reduce((mask, idx) => mask | (1n << BigInt(idx)), 0n);
+        constraintChecksCount += block.length;
+        if ((facultyOccupancy[facIdx] & blockBit) !== 0n) { candidatesPruned++; continue; }
         if (isSubgroupAlloc) {
           const subSecIdx = currentAlloc.subSectionIdx!;
-          if ((sectionWholeOccupancy[secIdx] & blockBit) !== 0n || (subSectionOccupancy[subSecIdx] & blockBit) !== 0n) {
-            candidatesPruned++;
-            continue;
-          }
-        } else {
-          if (
-            (sectionWholeOccupancy[secIdx] & blockBit) !== 0n ||
-            sectionSubgroupCounts[secIdx][s1] > 0 ||
-            sectionSubgroupCounts[secIdx][s2] > 0
-          ) {
-            candidatesPruned++;
-            continue;
-          }
+          if ((sectionWholeOccupancy[secIdx] & blockBit) !== 0n || (subSectionOccupancy[subSecIdx] & blockBit) !== 0n) { candidatesPruned++; continue; }
+        } else if ((sectionWholeOccupancy[secIdx] & blockBit) !== 0n || block.some(idx => sectionSubgroupCounts[secIdx][idx] > 0)) {
+          candidatesPruned++; continue;
         }
 
-        // 3. Find Available Compatible Room for both s1 and s2
         let chosenRoomIdx = -1;
         for (const rIdx of currentAlloc.candidateRooms) {
-          constraintChecksCount += 2;
-          if ((roomOccupancy[rIdx] & blockBit) === 0n) {
-            chosenRoomIdx = rIdx;
-            break;
-          }
+          constraintChecksCount += block.length;
+          if ((roomOccupancy[rIdx] & blockBit) === 0n) { chosenRoomIdx = rIdx; break; }
         }
+        if (chosenRoomIdx === -1) { candidatesPruned++; continue; }
 
-        if (chosenRoomIdx === -1) {
-          candidatesPruned++;
-          continue;
-        }
-
-        // Apply 2-hour assignment
         facultyOccupancy[facIdx] |= blockBit;
         roomOccupancy[chosenRoomIdx] |= blockBit;
         if (isSubgroupAlloc) {
           subSectionOccupancy[currentAlloc.subSectionIdx!] |= blockBit;
-          sectionSubgroupCounts[secIdx][s1]++;
-          sectionSubgroupCounts[secIdx][s2]++;
-        } else {
+          for (const idx of block) sectionSubgroupCounts[secIdx][idx]++;
+          return false;
+    } else {
           sectionWholeOccupancy[secIdx] |= blockBit;
         }
-
-        allocHoursAssigned[currentAlloc.allocIdx] += 2;
-        allocAssignedSlots[currentAlloc.allocIdx].push(
-          { slotIdx: s1, roomIdx: chosenRoomIdx },
-          { slotIdx: s2, roomIdx: chosenRoomIdx }
-        );
+        allocHoursAssigned[currentAlloc.allocIdx] += currentAlloc.durationPeriods;
+        for (const idx of block) allocAssignedSlots[currentAlloc.allocIdx].push({ slotIdx: idx, roomIdx: chosenRoomIdx });
 
         const success = solvePhaseA(allocOrderIdx);
         if (success) return true;
 
-        // Backtrack
         backtracksCount++;
         facultyOccupancy[facIdx] &= ~blockBit;
         roomOccupancy[chosenRoomIdx] &= ~blockBit;
         if (isSubgroupAlloc) {
           subSectionOccupancy[currentAlloc.subSectionIdx!] &= ~blockBit;
-          sectionSubgroupCounts[secIdx][s1]--;
-          sectionSubgroupCounts[secIdx][s2]--;
+          for (const idx of block) sectionSubgroupCounts[secIdx][idx]--;
         } else {
           sectionWholeOccupancy[secIdx] &= ~blockBit;
         }
-
-        allocHoursAssigned[currentAlloc.allocIdx] -= 2;
-        allocAssignedSlots[currentAlloc.allocIdx].pop();
-        allocAssignedSlots[currentAlloc.allocIdx].pop();
+        allocHoursAssigned[currentAlloc.allocIdx] -= currentAlloc.durationPeriods;
+        for (let i = 0; i < block.length; i++) allocAssignedSlots[currentAlloc.allocIdx].pop();
       }
 
-      return false;
     } else {
       // Branch 2: Single-Hour Lecture / Tutorial Scheduling (with 1-lecture/day/course distribution)
       let candidateSlots = [...currentAlloc.feasibleSlotIndices];

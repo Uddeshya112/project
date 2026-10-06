@@ -182,6 +182,10 @@ export interface ClassSession {
   facultyId: string;
   sectionId: string;
   subSectionId?: string;
+  /** Number of contiguous academic periods represented by this atomic activity. Defaults to 1 for non-labs and 2 for labs. */
+  durationPeriods?: number;
+  /** Shared identifier for all grid cells belonging to one atomic multi-period block. */
+  blockId?: string;
   roomId: string;
   day: DayOfWeek;
   timeSlotId: string;
