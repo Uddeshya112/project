@@ -868,7 +868,7 @@ export function validateTimetableIndependently(
 
   const labSessionsCount = activeSessions.filter(s => s.type === 'Lab' || s.type === 'Practical').length;
   const labRoomsCount = rooms.filter(r => r.type === 'ComputerLab' || r.type === 'HardwareLab').length;
-  const teachingSlotsPerDay = Math.max(1, activeTimeSlots.length);
+  const teachingSlotsPerDay = Math.max(1, (academicYear.timeSlots || []).filter((ts) => !ts.isLunch && !ts.isBreak).length);
   const totalRoomCapacitySlots = Math.max(1, rooms.length * Math.max(1, academicYear.workingDays.length) * teachingSlotsPerDay);
   const totalLabCapacitySlots = Math.max(1, labRoomsCount * Math.max(1, academicYear.workingDays.length) * teachingSlotsPerDay);
 
