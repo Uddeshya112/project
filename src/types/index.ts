@@ -141,6 +141,10 @@ export interface CourseAllocation {
   facultyId: string;
   sectionId: string;
   subSectionId?: string;
+  /** Number of atomic teaching periods; 1 for lecture/tutorial/elective, 2 or 3 for labs/practicals. */
+  durationPeriods?: number;
+  /** Explicit key allowing alternative elective offerings to share a slot. */
+  electiveGroupId?: string;
   sessionType: SessionType;
   hoursPerWeek: number;
   preferredRoomId?: string;
