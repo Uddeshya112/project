@@ -3,7 +3,7 @@
 **Institution:** Thapar Institute of Engineering and Technology (TIET)  
 **Current branch:** `codex/full-hardening`  
 **Base:** `main`  
-**Status:** Hardening implementation in progress; production release must wait for CI and deployment verification.
+**Status:** Hardening implementation in progress; fresh CI verification is required before merge.
 
 ## Completed on this branch
 
