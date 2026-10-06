@@ -16,7 +16,7 @@ const ctx = { academicYear: AY, allocations: d.allocations, facultyMembers: d.fa
 
 test('schedules every allocated hour with zero hard violations', () => {
   const r = run();
-  assert.equal(r.isFeasible, true);
+  assert.equal(r.isFeasible, true, r.infeasibilityDiagnostics?.join(' | ') || 'no diagnostic');
   assert.equal(r.bestCandidate!.sessions.length, totalHours(d.allocations));
   assert.equal(validateTimetableIndependently(r.bestCandidate!.sessions, ctx).hardViolationsCount, 0);
 });
