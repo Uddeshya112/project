@@ -95,10 +95,10 @@ export function startTimetableGenerationJob(payload: JobPayload): TimetableGener
     }
     if (message.type === 'completed') {
       try {
-        const routines = (message.routines || []).map((r: any) => supabaseStore.persistGeneratedRoutine({
+        const routines = (message.routines || []).map((r: any, index: number) => supabaseStore.persistGeneratedRoutine({
           ...r,
           candidate: r.candidate,
-        }, payload.userId));
+        }, payload.userId, index === 0));
         const feasible = routines.every(r => r.validation.valid);
         current.status = feasible ? 'completed' : 'failed';
         current.progress = 100;
