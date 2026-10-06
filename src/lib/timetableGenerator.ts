@@ -70,7 +70,7 @@ export function validateAcademicSetup(
   }
 
   // 2. Check Faculty
-  const activeFaculty = facultyMembers.filter(f => f.status !== 'Inactive');
+  const activeFaculty = facultyMembers.filter(f => f.status === 'Active');
   if (activeFaculty.length === 0) {
     items.push({
       id: 'val-faculty-empty',
@@ -226,7 +226,7 @@ export function validateAcademicSetup(
         title: 'No Compatible Room for Allocation',
         category: 'Infrastructure',
         status: 'Error',
-        message: `Allocation ${alloc.id} for ${course.code} (${alloc.sessionType}) in ${section.name} has no available room that satisfies type and capacity.${equipmentText}`,
+        message: `Allocation ${alloc.id} for ${course.code} (${alloc.sessionType}) in ${section.name} has no available compatible room for the required type/capacity.${equipmentText} Fix: add/restore a compatible room, increase capacity/equipment, or change the allocation requirements before generating.`,
         fixTab: 'rooms_mgmt',
       });
     }
@@ -255,7 +255,68 @@ export function validateAcademicSetup(
     });
   }
 
-  // 9. Check Faculty Workload Caps
+    // 9. Hard faculty eligibility preflight.
+  let facultyEligibilityErrors = 0;
+  for (const alloc of allocations) {
+    const faculty = facultyMembers.find(f => f.id === alloc.facultyId);
+    const course = courses.find(c => c.id === alloc.courseId);
+    if (!faculty || !course) continue;
+    const qualified = faculty.subjectsQualified.includes(course.code) || faculty.subjectsQualified.includes(course.id);
+    if (!qualified || faculty.status !== 'Active') {
+      facultyEligibilityErrors++;
+      items.push({
+        id: `val-faculty-eligibility-${alloc.id}`,
+        title: 'Faculty Not Eligible for Allocation',
+        category: 'Faculty',
+        status: 'Error',
+        message: `Allocation ${alloc.id} assigns ${course.code} to ${faculty.name}, but the faculty member is ${faculty.status || 'not active'} or not qualified. Fix: assign an active qualified faculty member.`,
+        fixTab: 'faculty_mgmt',
+      });
+    }
+  }
+  if (facultyEligibilityErrors === 0) {
+    items.push({
+      id: 'val-faculty-eligibility-ok',
+      title: 'Faculty Eligibility',
+      category: 'Faculty',
+      status: 'Passed',
+      message: 'All allocations have active, course-qualified faculty members.',
+    });
+  }
+
+  // 10. Section weekly capacity preflight.
+  const sectionHours = new Map<string, number>();
+  for (const alloc of allocations) {
+    if (alloc.subSectionId) continue;
+    sectionHours.set(alloc.sectionId, (sectionHours.get(alloc.sectionId) || 0) + alloc.hoursPerWeek);
+  }
+  const teachingSlotsPerWeek = activeSlots.length * academicYear.workingDays.length;
+  let sectionCapacityErrors = 0;
+  for (const [sectionId, hours] of sectionHours) {
+    if (hours > teachingSlotsPerWeek) {
+      sectionCapacityErrors++;
+      const section = sections.find(s => s.id === sectionId);
+      items.push({
+        id: `val-section-capacity-${sectionId}`,
+        title: 'Section Weekly Capacity Exceeded',
+        category: 'Sections',
+        status: 'Error',
+        message: `Section ${section?.name || sectionId} requires ${hours} whole-class teaching hours but only ${teachingSlotsPerWeek} teaching periods/week are configured. Fix: add teaching periods/working days or reduce/reassign weekly course hours.`,
+        fixTab: 'academic_year',
+      });
+    }
+  }
+  if (sectionCapacityErrors === 0) {
+    items.push({
+      id: 'val-section-capacity-ok',
+      title: 'Section Weekly Capacity',
+      category: 'Sections',
+      status: 'Passed',
+      message: 'Whole-class weekly teaching demand fits within the configured teaching grid.',
+    });
+  }
+
+  // 11. Check Faculty Workload Caps
   const facultyHoursMap: Record<string, number> = {};
   allocations.forEach(a => {
     facultyHoursMap[a.facultyId] = (facultyHoursMap[a.facultyId] || 0) + a.hoursPerWeek;
