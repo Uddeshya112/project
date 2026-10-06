@@ -41,7 +41,10 @@ try {
           : parsed;
         const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));
         const requestInit: RequestInit = { ...init, headers, credentials: init?.credentials ?? 'include' };
-        return originalFetch(target.toString(), requestInit);
+        const request = input instanceof Request
+          ? new Request(target.toString(), input)
+          : target.toString();
+        return originalFetch(request, requestInit);
       } catch {
         return originalFetch(input, init);
       }
