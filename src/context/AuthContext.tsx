@@ -254,9 +254,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  /**
-   * REST Backend & Supabase Auth Login (POST /api/auth/login) - Strictly Authoritative
-   */
+  /** Backend-authoritative password login. Session is stored in an httpOnly cookie. */
   const login = async (
     email: string,
     password?: string
@@ -267,100 +265,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     authorizedWorkspaces?: WorkspaceType[];
     user?: AuthUser;
   }> => {
+    if (!password) return { success: false, message: 'Password is required.' };
     try {
-      const normalizedEmail = email.trim().toLowerCase();
-
-      // Sign in directly with Supabase Auth to establish the authoritative client session
-      if (supabaseClient && password) {
-        try {
-          const { data: supaData, error: supaErr } = await supabaseClient.auth.signInWithPassword({
-            email: normalizedEmail,
-            password,
-          });
-          if (import.meta.env.DEV) {
-            console.info('[AUTH TRACE client login]', {
-              success: !supaErr && Boolean(supaData?.session),
-              error: supaErr?.message || null,
-              sessionExists: Boolean(supaData?.session),
-            });
-          }
-        } catch (err) {
-          console.warn('[AUTH TRACE] Direct Supabase sign-in notice:', err);
-        }
-      }
-
-      const resp = await fetch(apiUrl('/api/auth/login'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ email: normalizedEmail, password }),
-      });
-
-      const data = await resp.json().catch(() => ({}));
-
-      if (resp.ok && data.success && data.user) {
-        let user = allUsers.find(u => u.id === data.user.id || u.email.toLowerCase() === normalizedEmail);
-        if (!user) {
-          user = {
-            id: data.user.id,
-            name: data.user.name,
-            email: data.user.email,
-            status: 'ACTIVE',
-            emailVerified: true,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            lastLoginAt: new Date().toISOString(),
-            department: data.user.department,
-            authorizedWorkspaces: data.authorizedWorkspaces,
-          };
-          setAllUsers(prev => [user!, ...prev]);
-        }
-
-        setCurrentUserId(user.id);
-
-        if (data.authorizedWorkspaces && Array.isArray(data.authorizedWorkspaces)) {
-          setAuthorizedWorkspaces(data.authorizedWorkspaces);
-          setCurrentWorkspace(data.authorizedWorkspaces[0]);
-        }
-
-        setIsAuthenticated(true);
-        setAuthStatus('AUTHENTICATED');
-        if (data.token) {
-          localStorage.setItem('auth_token', data.token);
-        }
-
-        return {
-          success: true,
-          message: data.message,
-          roleKey: data.role as 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin',
-          authorizedWorkspaces: data.authorizedWorkspaces,
-          user,
-        };
-      } else {
-        setIsAuthenticated(false);
-        setAuthStatus('UNAUTHENTICATED');
-        setCurrentUserId(null);
-        return {
-          success: false,
-          message: data.message || 'Invalid institutional credentials. Please check your email and password.',
-        };
-      }
-    } catch {
-      setIsAuthenticated(false);
-      setAuthStatus('UNAUTHENTICATED');
-      setCurrentUserId(null);
+      const data = await api('/api/auth/login', { method: 'POST', body: { email: email.trim().toLowerCase(), password } });
+      if (!data.success || !data.user) return { success: false, message: data.message || 'Invalid email or password.' };
+      applyServerUser(data);
       return {
-        success: false,
-        message: 'Network error connecting to authentication service.',
+        success: true,
+        message: data.message || `Welcome, ${data.user.name}`,
+        roleKey: resolveRoleKey(data.user.roleCode),
+        authorizedWorkspaces: data.user.authorizedWorkspaces,
       };
+    } catch (err) {
+      return { success: false, message: err instanceof Error ? err.message : 'Network error connecting to authentication service.' };
     }
   };
 
-  /**
-   * Google Workspace Sign-In (POST /api/auth/google/signin)
-   */
+  /** Server-side Google OAuth. The browser receives only the secure session cookie. */
   const loginWithGoogle = async (
-    email: string,
-    name?: string
+    _email: string,
+    _name?: string
   ): Promise<{
     success: boolean;
     message: string;
@@ -368,68 +292,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     authorizedWorkspaces?: WorkspaceType[];
     user?: AuthUser;
   }> => {
-    try {
-      const resp = await fetch('/api/auth/google/signin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ email: email.trim().toLowerCase(), name }),
-      });
-
-      const data = await resp.json().catch(() => ({}));
-
-      if (resp.ok && data.success && data.user) {
-        let user = allUsers.find(u => u.id === data.user.id || u.email.toLowerCase() === email.trim().toLowerCase());
-        if (!user) {
-          user = {
-            id: data.user.id,
-            name: data.user.name,
-            email: data.user.email,
-            status: 'ACTIVE',
-            emailVerified: true,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            lastLoginAt: new Date().toISOString(),
-            department: data.user.department,
-            authorizedWorkspaces: data.authorizedWorkspaces,
-          };
-          setAllUsers(prev => [user!, ...prev]);
-        }
-
-        setCurrentUserId(user.id);
-
-        if (data.authorizedWorkspaces && Array.isArray(data.authorizedWorkspaces)) {
-          setAuthorizedWorkspaces(data.authorizedWorkspaces);
-          setCurrentWorkspace(data.authorizedWorkspaces[0]);
-        }
-
-        setIsAuthenticated(true);
-        if (data.token) {
-          localStorage.setItem('auth_token', data.token);
-        }
-
-        return {
-          success: true,
-          message: data.message,
-          roleKey: data.role as 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin',
-          authorizedWorkspaces: data.authorizedWorkspaces,
-          user,
-        };
-      } else {
-        setIsAuthenticated(false);
-        setCurrentUserId(null);
-        return {
-          success: false,
-          message: data.message || 'Google authentication failed.',
-        };
-      }
-    } catch {
-      setIsAuthenticated(false);
-      setCurrentUserId(null);
-      return {
-        success: false,
-        message: 'Could not connect to Google authentication provider.',
-      };
-    }
+    if (typeof window !== 'undefined') window.location.assign(apiUrl('/api/auth/google/start'));
+    return { success: true, message: 'Redirecting to Google sign-in.' };
   };
 
   /**
@@ -491,209 +355,59 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  /**
-   * One-Click Secure Demo Authentication
-   */
+  /** Public demo authentication is disabled. */
   const loginAsDemoRole = async (
-    roleKey: 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin'
+    _roleKey: 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin'
   ): Promise<{
     success: boolean;
     message: string;
     roleKey?: 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin';
     authorizedWorkspaces?: WorkspaceType[];
     user?: AuthUser;
-  }> => {
-    try {
-      const roleEmailMap: Record<string, string> = {
-        Coordinator: 'coordinator.demo@demo.thapar.local',
-        Faculty: 'faculty.demo@demo.thapar.local',
-        Student: 'student.demo@demo.thapar.local',
-        Admin: 'admin.demo@demo.thapar.local',
-        HOD: 'hod.demo@demo.thapar.local',
-      };
-      const demoEmail = roleEmailMap[roleKey];
+  }> => ({ success: false, message: 'Demo authentication is disabled.' });
 
-      const resp = await fetch(apiUrl('/api/auth/demo-login'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ roleKey }),
-      });
+  const resetDemoData = async (): Promise<{ success: boolean; message: string }> => ({
+    success: false,
+    message: 'Demo data reset is disabled.',
+  });
 
-      const data = await resp.json().catch(() => ({}));
-      if (resp.ok && data.success && data.user) {
-        let user = allUsers.find(u => u.id === data.user.id || u.email.toLowerCase() === data.user.email.toLowerCase());
-        if (!user) {
-          user = {
-            id: data.user.id,
-            name: data.user.name,
-            email: data.user.email,
-            status: 'ACTIVE',
-            emailVerified: true,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            lastLoginAt: new Date().toISOString(),
-            department: data.user.department,
-            authorizedWorkspaces: data.authorizedWorkspaces,
-            isDemoUser: true,
-          };
-          setAllUsers(prev => [user!, ...prev]);
-        }
-
-        setCurrentUserId(user.id);
-
-        if (data.authorizedWorkspaces && Array.isArray(data.authorizedWorkspaces)) {
-          setAuthorizedWorkspaces(data.authorizedWorkspaces);
-          setCurrentWorkspace(data.authorizedWorkspaces[0]);
-        }
-
-        setIsAuthenticated(true);
-        setAuthStatus('AUTHENTICATED');
-        if (data.token) {
-          localStorage.setItem('auth_token', data.token);
-        }
-
-        return {
-          success: true,
-          message: data.message,
-          roleKey: data.role as 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin',
-          authorizedWorkspaces: data.authorizedWorkspaces,
-          user,
-        };
-      } else {
-        setIsAuthenticated(false);
-        setAuthStatus('UNAUTHENTICATED');
-        setCurrentUserId(null);
-        return {
-          success: false,
-          message: data.message || 'Demo authentication failed.',
-        };
-      }
-    } catch {
-      setIsAuthenticated(false);
-      setAuthStatus('UNAUTHENTICATED');
-      setCurrentUserId(null);
-      return {
-        success: false,
-        message: 'Could not connect to demo authentication service.',
-      };
-    }
-  };
-
-  /**
-   * Reset Demo Data
-   */
-  const resetDemoData = async (): Promise<{ success: boolean; message: string }> => {
-    try {
-      await fetch('/api/demo/reset', { method: 'POST' });
-    } catch {
-      // ignore
-    }
-    return {
-      success: true,
-      message: 'Demo dataset restored to initial state.',
-    };
-  };
-
-  /**
-   * REST Backend Forgot Password (POST /api/auth/forgot-password)
-   */
-  const requestPasswordReset = async (
-    email: string
-  ): Promise<{
+  /** Backend-only password reset request; the server never reveals account existence. */
+  const requestPasswordReset = async (email: string): Promise<{
     success: boolean;
     message: string;
     resetToken?: string;
   }> => {
     try {
-      const resp = await fetch('/api/auth/forgot-password', {
+      const data = await api('/api/auth/forgot-password', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email.trim().toLowerCase() }),
+        body: { email: email.trim().toLowerCase() },
       });
-
-      const data = await resp.json();
-      return {
-        success: true,
-        message: data.message || 'If an account exists for this email, a password reset link has been sent.',
-        resetToken: data.resetToken,
-      };
-    } catch {
-      return {
-        success: true,
-        message: 'If an account exists for this email, a password reset link has been sent.',
-      };
+      return { success: Boolean(data.success), message: data.message || 'If an account exists for this email, password-reset instructions have been sent.', resetToken: data.resetToken };
+    } catch (err) {
+      return { success: true, message: err instanceof Error ? err.message : 'If an account exists for this email, password-reset instructions have been sent.' };
     }
   };
 
-  /**
-   * REST Backend Validate Token (GET /api/auth/validate-token)
-   */
-  const validateResetToken = async (
-    token: string
-  ): Promise<{ valid: boolean; email?: string; message?: string }> => {
-    try {
-      const resp = await fetch(`/api/auth/validate-token?token=${encodeURIComponent(token)}`);
-      const data = await resp.json();
-      return {
-        valid: data.valid,
-        email: data.email,
-        message: data.message,
-      };
-    } catch {
-      return { valid: false, message: 'Could not reach token verification service.' };
-    }
+  const validateResetToken = async (token: string): Promise<{ valid: boolean; email?: string; message?: string }> => {
+    try { return await api('/api/auth/validate-token?token=' + encodeURIComponent(token)); }
+    catch (err) { return { valid: false, message: err instanceof Error ? err.message : 'Could not validate reset token.' }; }
   };
 
-  /**
-   * REST Backend Reset Password (POST /api/auth/reset-password)
-   */
-  const resetPassword = async (
-    token: string,
-    newPassword: string
-  ): Promise<{ success: boolean; message: string }> => {
+  const resetPassword = async (token: string, newPassword: string): Promise<{ success: boolean; message: string }> => {
     try {
-      const resp = await fetch('/api/auth/reset-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, newPassword }),
-      });
-
-      const data = await resp.json();
-      return {
-        success: data.success,
-        message: data.message,
-      };
-    } catch {
-      return {
-        success: false,
-        message: 'Network error resetting password.',
-      };
+      return await api('/api/auth/reset-password', { method: 'POST', body: { token, newPassword } });
+    } catch (err) {
+      return { success: false, message: err instanceof Error ? err.message : 'Network error resetting password.' };
     }
   };
 
   const logout = async () => {
-    if (supabaseClient) {
-      try {
-        await supabaseClient.auth.signOut();
-      } catch (err) {
-        console.warn('[AUTH TRACE] Supabase signOut notice:', err);
-      }
-    }
-    try {
-      await fetch(apiUrl('/api/auth/logout'), { method: 'POST' });
-    } catch {
-      // Ignore network errors on logout
-    }
+    try { await api('/api/auth/logout', { method: 'POST', body: {} }); } catch {}
     setIsAuthenticated(false);
     setAuthStatus('UNAUTHENTICATED');
     setCurrentUserId(null);
     setAuthorizedWorkspaces(['Student']);
     setCurrentWorkspace('Student');
-    
-    // Clear user tokens from storage
-    localStorage.removeItem('auth_token');
-    localStorage.removeItem('app_session_token');
-    sessionStorage.clear();
   };
 
   const switchUser = (userId: string) => {
