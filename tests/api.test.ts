@@ -217,6 +217,9 @@ test('generate -> select -> publish workflow with role checks', async () => {
   assert.ok(routine.versionNumber > 1);
   assert.equal(routine.validation.hardViolations, 0);
   const draft = (await coord.get('/api/academic/bootstrap')).body;
+  assert.equal(draft.roster.sectionId, null, 'coordinator is not section-scoped');
+  const activeVersion = draft.versions.find((v: any) => v.versionNumber === gen.body.routines[0].versionNumber);
+  assert.equal(activeVersion?.sessionsCount, gen.body.routines[0].sessions.length, 'active version stores the complete first routine');
   assert.equal(draft.activeVersionNumber, gen.body.routines[0].versionNumber, 'first routine is the working draft');
   assert.deepEqual(draft.sessions.map(scheduleKey).sort(), gen.body.routines[0].sessions.map(scheduleKey).sort());
 
