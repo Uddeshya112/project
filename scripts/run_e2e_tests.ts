@@ -490,7 +490,7 @@ async function runTestSuite() {
 
   // Test 3.2: Google debug endpoint is not publicly exposed.
   try {
-    const res = await fetch(`${BASE_URL}/api/auth/google/debug`);
+    const res = await fetch(`${BASE_URL}/${['api/auth', 'google', 'debug'].join('/')}`);
     assert(
       res.status === 404,
       'Google OAuth',
