@@ -730,6 +730,7 @@ export function executeOptimizationEngine(
         for (let i = 0; i < block.length; i++) allocAssignedSlots[currentAlloc.allocIdx].pop();
       }
 
+      return false;
     } else {
       // Branch 2: Single-Hour Lecture / Tutorial Scheduling (with 1-lecture/day/course distribution)
       let candidateSlots = [...currentAlloc.feasibleSlotIndices];
@@ -896,7 +897,7 @@ export function executeOptimizationEngine(
   solvePhaseA(0);
   const feasibilityTimeMs = Number((performance.now() - feasibilityStart).toFixed(2));
 
-  // Phase B: Local Search Soft Constraint Optimization (if budget allows and feasible solution exists)
+  // Phase B: Deterministic Simulated Annealing Soft Constraint Optimization (if budget allows)
   const optimizationStart = performance.now();
   if (candidatesFound.length > 0 && mode !== 'FAST') {
     optimizeCandidatesPhaseB(
@@ -988,6 +989,7 @@ function buildCandidateFromState(
         roomId: room.id,
         day: slotRef.day,
         timeSlotId: slotRef.timeSlotId,
+        electiveGroupId: internalAlloc.allocation.electiveGroupId,
         type: internalAlloc.sessionType as any,
         durationPeriods: internalAlloc.durationPeriods,
         ...(blockId ? { blockId } : {}),
@@ -1015,6 +1017,10 @@ function buildCandidateFromState(
     scheduledHours,
     totalRequestedHours,
     unscheduledAllocations: [],
+    optimizationMethod: 'Constructive Bitset MRV',
+    objectiveValue: softPenalty.totalPenalty,
+    bestBound: null,
+    optimalityGap: null,
   };
 }
 
@@ -1103,7 +1109,7 @@ function calculateSoftPenalties(
     for(let i=1;i<periods.length;i++){
       const gap=periods[i]-periods[i-1]-1;
       const intermediate=problem.slots.find(s=>s.periodIdx===periods[i-1]+1);
-      if(gap>0 && !intermediate?.isLunch){
+      if(gap>0 && !(intermediate && problem.lunchSlotIndices.has(intermediate.slotIdx))){
         const p=gap*softWeights.facultyGap;
         facultyGapsPenalty+=p; addFaculty(facultyId,p);
       }
