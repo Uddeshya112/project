@@ -295,35 +295,71 @@ export class TimetableStore {
 
   getBootstrapState(viewer: Viewer) {
     const staff = STAFF_ROLES.includes(viewer.roleCode);
+    const roster = this.rosterContext(viewer);
+    const allSessions = staff ? this.activeSessions : this.publishedSessions;
+    const visibleSessions = viewer.roleCode === 'STUDENT' || viewer.roleCode === 'CLASS_REPRESENTATIVE'
+      ? allSessions.filter((s) => !roster.sectionId || s.sectionId === roster.sectionId)
+      : allSessions;
+
+    const visibleCourseIds = new Set(visibleSessions.map((s) => s.courseId));
+    const visibleFacultyIds = new Set(visibleSessions.map((s) => s.facultyId));
+    const visibleRoomIds = new Set(visibleSessions.map((s) => s.roomId));
+
+    const courses = staff ? [...this.courses.values()] : [...this.courses.values()].filter((c) => visibleCourseIds.has(c.id));
+    const facultyMembers = staff
+      ? [...this.facultyMembers.values()]
+      : [...this.facultyMembers.values()]
+          .filter((f) => visibleFacultyIds.has(f.id))
+          .map((f) => ({ ...f, email: '', avatarUrl: undefined, employeeId: undefined }));
+    const rooms = staff ? [...this.rooms.values()] : [...this.rooms.values()].filter((r) => visibleRoomIds.has(r.id));
+    const sections = staff
+      ? [...this.groups.values()]
+      : roster.sectionId
+        ? [...this.groups.values()].filter((s) => s.id === roster.sectionId)
+        : [];
+
     return {
       academicYear: this.academicYear,
       departments: [...this.departments.values()],
       programs: [...this.programs.values()],
-      courses: [...this.courses.values()],
-      facultyMembers: [...this.facultyMembers.values()],
-      rooms: [...this.rooms.values()],
-      sections: [...this.groups.values()],
-      allocations: [...this.allocations.values()],
-      constraints: [...this.constraints.values()],
-      studentsCount: this.students.size,
-      // Students and faculty see the published timetable; staff work on the draft.
-      sessions: staff ? this.activeSessions : this.publishedSessions,
-      publishedSessions: this.publishedSessions,
+      courses,
+      facultyMembers,
+      rooms,
+      sections,
+      allocations: staff
+        ? [...this.allocations.values()]
+        : [...this.allocations.values()].filter((a) => !roster.sectionId || a.sectionId === roster.sectionId),
+      constraints: staff ? [...this.constraints.values()] : [],
+      studentsCount: staff ? this.students.size : undefined,
+      sessions: visibleSessions,
+      publishedSessions: viewer.roleCode === 'STUDENT' || viewer.roleCode === 'CLASS_REPRESENTATIVE'
+        ? visibleSessions
+        : this.publishedSessions,
       activeVersionNumber: this.activeVersionNumber,
       publishedVersionNumber: this.publishedVersionNumber,
-      versions: this.versions.map(({ sessions, ...v }) => ({ ...v, sessions: [], sessionsCount: v.sessionsCount ?? sessions.length })),
+      versions: this.versions.map(({ sessions, ...v }) => ({
+        ...v,
+        sessions: [],
+        sessionsCount: v.sessionsCount ?? sessions.length,
+      })),
       notifications: this.notifications
         .filter((n) => !n.recipientRole || staff || n.recipientRole === roleKeyOf(viewer.roleCode))
         .map(({ readBy, ...n }) => ({ ...n, read: (readBy ?? []).includes(viewer.id) })),
-      makeupTasks: this.makeupTasks,
-      recoveryOpportunities: this.recoveryOpportunities,
-      polls: this.polls.map((p) => {
-        const voted = this.votes.get(`${p.id}:${viewer.id}`);
-        return { ...p, userHasVoted: Boolean(voted), userVotedOptionId: voted };
-      }),
+      makeupTasks: staff || viewer.roleCode === 'FACULTY'
+        ? this.makeupTasks
+        : this.makeupTasks.filter((t) => t.sectionId === roster.sectionId),
+      recoveryOpportunities: staff || viewer.roleCode === 'FACULTY'
+        ? this.recoveryOpportunities
+        : [],
+      polls: this.polls
+        .filter((p) => staff || !roster.sectionId || p.sectionId === roster.sectionId)
+        .map((p) => {
+          const voted = this.votes.get(`${p.id}:${viewer.id}`);
+          return { ...p, userHasVoted: Boolean(voted), userVotedOptionId: voted };
+        }),
       auditLogs: staff ? this.auditEvents.slice(0, 200) : [],
       publishStatus: this.academicYear.publishStatus,
-      roster: this.rosterContext(viewer),
+      roster,
     };
   }
 
