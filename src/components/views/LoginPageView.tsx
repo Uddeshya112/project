@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useTimetable } from '../../context/TimetableContext';
 import { ThaparLogo } from '../ThaparLogo';
 import { evaluatePasswordPolicy } from '../../lib/passwordUtils';
-import { supabaseClient, apiFetch } from '../../lib/supabaseClient';
+import { apiUrl } from '../../lib/apiConfig';
 import {
   Mail,
   Lock,
@@ -60,9 +60,6 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
 
   // Forgot Password & OTP States
   const [forgotEmail, setForgotEmail] = useState('');
-  const [otpDigits, setOtpDigits] = useState<string[]>(['', '', '', '', '', '']);
-  const [resendCooldown, setResendCooldown] = useState<number>(0);
-  const otpInputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   useEffect(() => {
     let timer: any;
@@ -115,133 +112,38 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
     }
   };
 
-  // Check URL parameters for OAuth errors or completed callbacks on mount
+  // Restore only server-managed session state and handle OAuth/recovery query parameters.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const authError = params.get('auth_error');
+    const resetToken = params.get('token');
+
     if (authError) {
-      setErrorMessage(decodeURIComponent(authError));
-      window.history.replaceState({}, document.title, window.location.pathname);
-      return;
+      setErrorMessage(authError);
+      params.delete('auth_error');
     }
-
-    const tokenFromUrl = params.get('token');
-    if (tokenFromUrl) {
-      window.history.replaceState({}, document.title, window.location.pathname);
+    if (resetToken) {
+      setScreenMode('reset_password');
     }
+    const cleanQuery = params.toString();
+    window.history.replaceState({}, document.title, window.location.pathname + (cleanQuery ? `?${cleanQuery}` : ''));
 
-    // Verify if already authenticated via session cookie or token (e.g. returning from Google OAuth)
-    const checkSession = async () => {
-      try {
-        const headers: Record<string, string> = {};
-        if (tokenFromUrl) {
-          headers['Authorization'] = `Bearer ${tokenFromUrl}`;
+    fetch(apiUrl('/api/auth/me'), { credentials: 'include', headers: { Accept: 'application/json' } })
+      .then(async (resp) => {
+        if (!resp.ok) return null;
+        return resp.json();
+      })
+      .then((data) => {
+        if (data?.authenticated && data.user) {
+          setCurrentRole(data.role || 'Student');
+          onSuccessLogin(data.user.authorizedWorkspaces);
         }
-        const resp = await fetch('/api/auth/me', { headers });
-        if (resp.ok) {
-          const data = await resp.json();
-          if (data.authenticated && data.role) {
-            setCurrentRole(data.role);
-            onSuccessLogin(data.authorizedWorkspaces);
-          }
-        }
-      } catch {
-        // Not authenticated, remain on login
-      }
-    };
-    checkSession();
-
-    // Listen for cross-origin popup postMessage events from OAuth callback
-    const handleAuthMessage = async (event: MessageEvent) => {
-      if (event.data?.type === 'GOOGLE_AUTH_SUCCESS') {
-        setIsGoogleLoading(true);
-        setErrorMessage(null);
-        setSuccessMessage('Google authentication successful! Loading dashboard...');
-        
-        try {
-          const headers: Record<string, string> = {};
-          if (event.data.token) {
-            headers['Authorization'] = `Bearer ${event.data.token}`;
-          }
-          const resp = await fetch('/api/auth/me', { headers });
-          if (resp.ok) {
-            const data = await resp.json();
-            if (data.authenticated && data.role) {
-              setCurrentRole(data.role);
-              setTimeout(() => {
-                onSuccessLogin(data.authorizedWorkspaces);
-              }, 300);
-              return;
-            }
-          }
-          if (event.data.roleKey) {
-            setCurrentRole(event.data.roleKey);
-            setTimeout(() => {
-              onSuccessLogin(event.data.authorizedWorkspaces);
-            }, 300);
-          }
-        } catch {
-          if (event.data.roleKey) {
-            setCurrentRole(event.data.roleKey);
-            onSuccessLogin(event.data.authorizedWorkspaces);
-          }
-        } finally {
-          setIsGoogleLoading(false);
-        }
-      } else if (event.data?.type === 'GOOGLE_AUTH_ERROR') {
-        setIsGoogleLoading(false);
-        setErrorMessage(event.data.message || 'Google sign-in could not be completed. Please try again.');
-      }
-    };
-
-    window.addEventListener('message', handleAuthMessage);
-
-    // Check Supabase recovery link session on mount
-    const checkSupabaseRecovery = async () => {
-      const hash = window.location.hash;
-      const search = window.location.search;
-      const isRecoveryUrl =
-        hash.includes('type=recovery') ||
-        hash.includes('access_token=') ||
-        hash.includes('token_hash=') ||
-        search.includes('type=recovery') ||
-        search.includes('code=');
-
-      if (isRecoveryUrl) {
-        setScreenMode('reset_password');
-      }
-
-      if (supabaseClient) {
-        const { data: { session } } = await supabaseClient.auth.getSession();
-        if (session && isRecoveryUrl) {
-          setScreenMode('reset_password');
-        } else if (isRecoveryUrl && !session) {
-          setTimeout(async () => {
-            const { data } = await supabaseClient?.auth.getSession() || { data: { session: null } };
-            if (!data.session) {
-              setScreenMode('recovery_invalid');
-            }
-          }, 1200);
-        }
-
-        const { data: { subscription } } = supabaseClient.auth.onAuthStateChange((event) => {
-          if (event === 'PASSWORD_RECOVERY' || (event === 'SIGNED_IN' && isRecoveryUrl)) {
-            setScreenMode('reset_password');
-          }
-        });
-
-        return () => {
-          subscription.unsubscribe();
-        };
-      }
-    };
-    checkSupabaseRecovery();
-
-    return () => window.removeEventListener('message', handleAuthMessage);
-  }, [setCurrentRole, onSuccessLogin]);
+      })
+      .catch(() => {});
+  }, [onSuccessLogin, setCurrentRole]);
 
   // Password Requirement Checks
-  const reqLength = newPassword.length >= 8;
+  const reqLength = newPassword.length >= 12 && newPassword.length <= 128;
   const reqUpper = /[A-Z]/.test(newPassword);
   const reqLower = /[a-z]/.test(newPassword);
   const reqNumber = /[0-9]/.test(newPassword);
@@ -306,61 +208,9 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
     setErrorMessage(null);
     setSuccessMessage(null);
     setIsGoogleLoading(true);
-
-    try {
-      const resp = await fetch('/api/auth/google/authorize', {
-        headers: { Accept: 'application/json' },
-      });
-
-      const contentType = resp.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
-        const data = await resp.json();
-
-        if (resp.ok && data.success && data.redirectUrl) {
-          // Calculate centered popup coordinates
-          const width = 520;
-          const height = 650;
-          const left = window.screenX + Math.max(0, (window.outerWidth - width) / 2);
-          const top = window.screenY + Math.max(0, (window.outerHeight - height) / 2);
-
-          const popup = window.open(
-            data.redirectUrl,
-            'google_oauth_popup',
-            `width=${width},height=${height},left=${left},top=${top},status=no,menubar=no,toolbar=no`
-          );
-
-          if (!popup || popup.closed || typeof popup.closed === 'undefined') {
-            // If popup is blocked by browser, fallback to standard top-level navigation
-            window.location.href = data.redirectUrl;
-          }
-          return;
-        } else if (data.message) {
-          setErrorMessage(data.message);
-          setIsGoogleLoading(false);
-          return;
-        }
-      }
-    } catch {
-      // Backend unreachable, proceed with client-side Google authentication fallback
-    }
-
-    // Direct Google authentication client fallback for static/preview hosting
-    try {
-      const googleEmail = 'bhaukaalgaming44@gmail.com';
-      const res = await loginWithGoogle(googleEmail, 'Bhaukaal Gaming');
-      setIsGoogleLoading(false);
-      if (res.success && res.authorizedWorkspaces) {
-        setSuccessMessage('Signed in with Google successfully!');
-        onSuccessLogin?.(res.authorizedWorkspaces);
-      } else {
-        setSuccessMessage('Signed in with Google as Student!');
-        onSuccessLogin?.(['Student']);
-      }
-    } catch {
-      setIsGoogleLoading(false);
-      onSuccessLogin?.(['Student']);
-    }
+    window.location.assign(apiUrl('/api/auth/google/start'));
   };
+
 
   /**
    * Handle Register Submit (POST /api/auth/register)
@@ -419,120 +269,44 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
     e.preventDefault();
     setErrorMessage(null);
     setSuccessMessage(null);
-
     const emailTrim = forgotEmail.trim();
     if (!emailTrim) {
       setErrorMessage('Please enter your email.');
       return;
     }
-
     setIsLoading(true);
-
     try {
-      if (supabaseClient) {
-        console.info('[AUTH RECOVERY] request started');
-        const productionFrontendUrl = 'https://tiet-timetable-six.vercel.app';
-        const redirectToUrl = window.location.origin.includes('localhost') || window.location.origin.includes('run.app')
-          ? window.location.origin
-          : productionFrontendUrl;
-
-        const { data, error } = await supabaseClient.auth.resetPasswordForEmail(emailTrim, {
-          redirectTo: redirectToUrl,
-        });
-
-        if (error) {
-          console.warn('[AUTH RECOVERY] Supabase request failed:', error.message || error);
-        } else {
-          console.info('[AUTH RECOVERY] Supabase request succeeded');
-        }
-      } else {
-        console.info('[AUTH RECOVERY] request started (backend fallback)');
-        await apiFetch('/api/auth/forgot-password', {
-          method: 'POST',
-          body: JSON.stringify({ email: emailTrim }),
-        }).catch(() => {});
-        console.info('[AUTH RECOVERY] backend request succeeded');
+      const res = await requestPasswordReset(emailTrim);
+      if (!res.success) {
+        setErrorMessage(res.message);
+        return;
       }
-
-      setSuccessMessage("If an account exists for this email, we've sent password-reset instructions.");
+      setSuccessMessage(res.message);
       setScreenMode('forgot_success');
-    } catch (err: any) {
-      console.warn('[AUTH RECOVERY] Supabase request exception:', err?.message || err);
-      // Never reveal account existence
-      setSuccessMessage("If an account exists for this email, we've sent password-reset instructions.");
-      setScreenMode('forgot_success');
+    } catch {
+      setErrorMessage('Could not contact the password recovery service.');
     } finally {
       setIsLoading(false);
     }
   };
+
 
   /**
    * Handle Verify OTP (Step 2: Verify 6-digit OTP token)
    */
   const handleVerifyOtpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setErrorMessage(null);
-    setSuccessMessage(null);
-
-    const otpStr = otpDigits.join('');
-    if (otpStr.length !== 6) {
-      setErrorMessage('Please enter the complete 6-digit verification code.');
-      return;
-    }
-
-    setIsLoading(true);
-
-    try {
-      if (supabaseClient) {
-        const { error } = await supabaseClient.auth.verifyOtp({
-          email: forgotEmail.trim(),
-          token: otpStr,
-          type: 'recovery',
-        });
-        if (error) throw error;
-      } else {
-        const res = await apiFetch('/api/auth/validate-token', {
-          method: 'POST',
-          body: JSON.stringify({ email: forgotEmail.trim(), token: otpStr }),
-        });
-        if (!res.success) throw new Error(res.message || 'Invalid verification code.');
-      }
-
-      setSuccessMessage('Verification code confirmed successfully.');
-      setScreenMode('reset_password');
-    } catch (err: any) {
-      setErrorMessage(err?.message || 'Invalid or expired verification code.');
-    } finally {
-      setIsLoading(false);
-    }
+    setErrorMessage('Verification codes are no longer used. Open the reset link from your email to continue.');
   };
+
 
   /**
    * Handle Resend OTP
    */
   const handleResendOtp = async () => {
-    if (resendCooldown > 0) return;
-    setErrorMessage(null);
-    setSuccessMessage(null);
-    setIsLoading(true);
-
-    try {
-      if (supabaseClient) {
-        await supabaseClient.auth.resetPasswordForEmail(forgotEmail.trim(), {
-          redirectTo: window.location.origin,
-        });
-      }
-      setSuccessMessage('A new verification code has been sent.');
-      setResendCooldown(60);
-      setOtpDigits(['', '', '', '', '', '']);
-    } catch {
-      setSuccessMessage('A new verification code has been sent.');
-      setResendCooldown(60);
-      setOtpDigits(['', '', '', '', '', '']);
-    } finally {
-      setIsLoading(false);
-    }
+    setResendCooldown(0);
   };
+
 
   /**
    * Handle Reset Password Submit (Step 3: Update Password)
@@ -551,44 +325,33 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
       return;
     }
 
+    const token = new URLSearchParams(window.location.search).get('token') || '';
+    if (!token) {
+      setScreenMode('recovery_invalid');
+      setErrorMessage('Your password reset link is missing or invalid.');
+      return;
+    }
+
     setIsLoading(true);
-
     try {
-      if (supabaseClient) {
-        const { data: { session } } = await supabaseClient.auth.getSession();
-        if (!session) {
-          setScreenMode('recovery_invalid');
-          setIsLoading(false);
-          return;
-        }
-
-        const { error } = await supabaseClient.auth.updateUser({
-          password: newPassword,
-        });
-        if (error) throw error;
-      } else {
-        await apiFetch('/api/auth/reset-password', {
-          method: 'POST',
-          body: JSON.stringify({ email: forgotEmail.trim(), password: newPassword }),
-        });
-      }
-
+      const res = await resetPassword(token, newPassword);
+      if (!res.success) throw new Error(res.message || 'Failed to reset password.');
       setScreenMode('reset_success');
       setSuccessMessage('Password reset successfully.');
       setLoginEmail('');
       setLoginPassword('');
+      setNewPassword('');
+      setConfirmNewPassword('');
       window.history.replaceState({}, document.title, window.location.pathname);
     } catch (err: any) {
       const msg = err?.message || 'Failed to update password. Please try again.';
-      if (msg.toLowerCase().includes('expired') || msg.toLowerCase().includes('invalid') || msg.toLowerCase().includes('session') || msg.toLowerCase().includes('auth')) {
-        setScreenMode('recovery_invalid');
-      } else {
-        setErrorMessage(msg);
-      }
+      setErrorMessage(msg);
+      if (/expired|invalid|missing/i.test(msg)) setScreenMode('recovery_invalid');
     } finally {
       setIsLoading(false);
     }
   };
+
 
   return (
     <div className="min-h-screen w-full bg-[#F7F6F2] dark:bg-[#0c0c0e] text-stone-900 dark:text-zinc-100 flex flex-col justify-center items-center p-4 sm:p-6 lg:p-8 font-sans relative overflow-x-hidden selection:bg-[#8C1B2E]/20 selection:text-[#8C1B2E]">
