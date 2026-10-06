@@ -15,6 +15,20 @@ interface AdversarialTestResult {
 }
 
 const testResults: AdversarialTestResult[] = [];
+async function loginCookie(email: string, password: string): Promise<string> {
+  const response = await fetch(`${BASE_URL}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!response.ok) throw new Error(`Failed to authenticate ${email}: HTTP ${response.status}`);
+  const setCookie = response.headers.get('set-cookie') || '';
+  const match = /tt_session=([^;]+)/.exec(setCookie);
+  if (!match) throw new Error(`No session cookie returned for ${email}`);
+  return `tt_session=${match[1]}`;
+}
+const authHeaders = (cookie: string, extra: Record<string, string> = {}) => ({ ...extra, Cookie: cookie });
+
 
 function recordTest(passed: boolean, category: string, name: string, httpStatus: number, expectedStatus: number, details?: string) {
   testResults.push({ category, name, passed, httpStatus, expectedStatus, details });
@@ -124,14 +138,14 @@ async function runAdversarialSuite() {
   // 3.1 Student attempting Timetable Generation
   const studentGen = await fetch(`${BASE_URL}/api/timetable/generate`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${studentToken}` },
+    headers: authHeaders(studentToken),
   });
   recordTest(studentGen.status === 403, 'Privilege Escalation', 'Student attempting master timetable generation', studentGen.status, 403);
 
   // 3.2 Student attempting Master Timetable Publish
   const studentPub = await fetch(`${BASE_URL}/api/timetable/publish`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${studentToken}`, 'Content-Type': 'application/json' },
+    headers: authHeaders(studentToken, { 'Content-Type': 'application/json' }),
     body: JSON.stringify({ versionId: 'V1.0' }),
   });
   recordTest(studentPub.status === 403, 'Privilege Escalation', 'Student attempting master timetable publishing', studentPub.status, 403);
@@ -139,7 +153,7 @@ async function runAdversarialSuite() {
   // 3.3 Student attempting Department Creation
   const studentDept = await fetch(`${BASE_URL}/api/academic/departments`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${studentToken}`, 'Content-Type': 'application/json' },
+    headers: authHeaders(studentToken, { 'Content-Type': 'application/json' }),
     body: JSON.stringify({ name: 'Malicious Department', code: 'MAL_DEPT' }),
   });
   recordTest(studentDept.status === 403, 'Privilege Escalation', 'Student attempting department creation', studentDept.status, 403);
@@ -147,7 +161,7 @@ async function runAdversarialSuite() {
   // 3.4 Student attempting Course Allocation
   const studentAlloc = await fetch(`${BASE_URL}/api/academic/allocations`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${studentToken}`, 'Content-Type': 'application/json' },
+    headers: authHeaders(studentToken, { 'Content-Type': 'application/json' }),
     body: JSON.stringify({ courseId: 'CS501', facultyId: 'fac-sharma', sectionId: 'sec-cse-a' }),
   });
   recordTest(studentAlloc.status === 403, 'Privilege Escalation', 'Student attempting course allocation modification', studentAlloc.status, 403);
@@ -155,7 +169,7 @@ async function runAdversarialSuite() {
   // 3.5 Faculty attempting Timetable Publish (Coordinator/Dean only)
   const facultyPub = await fetch(`${BASE_URL}/api/timetable/publish`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${facultyToken}`, 'Content-Type': 'application/json' },
+    headers: authHeaders(facultyToken, { 'Content-Type': 'application/json' }),
     body: JSON.stringify({ versionId: 'V1.0' }),
   });
   recordTest(facultyPub.status === 403, 'Privilege Escalation', 'Faculty attempting timetable publishing', facultyPub.status, 403);
@@ -163,7 +177,7 @@ async function runAdversarialSuite() {
   // 3.6 Coordinator attempting Timetable Publish (Only Dean/Admin can publish)
   const coordPub = await fetch(`${BASE_URL}/api/timetable/publish`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${coordToken}`, 'Content-Type': 'application/json' },
+    headers: authHeaders(coordToken, { 'Content-Type': 'application/json' }),
     body: JSON.stringify({ versionId: 'V1.0' }),
   });
   recordTest(coordPub.status === 403, 'Privilege Escalation', 'Coordinator attempting timetable publishing (Admin/Dean only)', coordPub.status, 403);
@@ -211,13 +225,14 @@ async function runAdversarialSuite() {
   });
   const injectLoginData = await injectLoginRes.json();
   const injectedToken = injectLoginData.token;
+  const injectedCookie = await loginCookie(injectedRegEmail, 'AttackerPassword2026!');
   
   const injectAdminAccess = await fetch(`${BASE_URL}/api/timetable/publish`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${injectedToken}` },
+    headers: authHeaders(injectedCookie),
   });
   recordTest(
-    injectLoginData.roleCode === 'STUDENT' && injectAdminAccess.status === 403,
+    injectLoginData.user?.roleCode === 'STUDENT' && injectAdminAccess.status === 403,
     'Role Injection',
     'Injected account blocked from admin endpoints and enforced as STUDENT role',
     injectAdminAccess.status,
@@ -284,14 +299,14 @@ async function runAdversarialSuite() {
   // 7.1 Coordinator generates timetable
   const coordGen = await fetch(`${BASE_URL}/api/timetable/generate`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${coordToken}` },
+    headers: authHeaders(coordToken),
   });
   recordTest(coordGen.status === 200, 'Authorized Role', 'Coordinator successfully generates draft timetable', coordGen.status, 200);
 
   // 7.2 Admin / Dean approves and publishes timetable
   const adminPub = await fetch(`${BASE_URL}/api/timetable/publish`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${adminToken}`, 'Content-Type': 'application/json' },
+    headers: authHeaders(adminToken, { 'Content-Type': 'application/json' }),
     body: JSON.stringify({ versionId: 'V1.0' }),
   });
   recordTest(adminPub.status === 200, 'Authorized Role', 'Admin / Dean successfully publishes master timetable', adminPub.status, 200);
@@ -305,7 +320,7 @@ async function runAdversarialSuite() {
 
   const facultyCancel = await fetch(`${BASE_URL}/api/recovery/cancel-class`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${facultyToken}`, 'Content-Type': 'application/json' },
+    headers: authHeaders(facultyToken, { 'Content-Type': 'application/json' }),
     body: JSON.stringify({ sessionId: sessionToCancel, reason: 'Conference Attendance' }),
   });
   recordTest(facultyCancel.status === 200, 'Authorized Role', 'Faculty successfully initiates class cancellation', facultyCancel.status, 200);
