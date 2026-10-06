@@ -649,7 +649,7 @@ export async function createApp(db: import('./src/server/db').Db, jobManager?: T
     res.json({ success: true, enabled: demoEnabled, accounts: demoEnabled ? ['Coordinator', 'Faculty', 'Student', 'Admin', 'HOD'] : [] });
   });
 
-  if (process.env.NODE_ENV !== 'production') {
+  if (process.env.NODE_ENV !== 'production' && process.env.NODE_ENV !== 'test') {
     try {
       const { createServer: createVite } = await import('vite');
       const vite = await createVite({
