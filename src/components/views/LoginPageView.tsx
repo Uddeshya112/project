@@ -18,7 +18,6 @@ import {
   KeyRound,
   ShieldCheck,
   Check,
-  X,
   Loader2,
   ShieldAlert
 } from 'lucide-react';
@@ -1130,85 +1129,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
         Thapar Institute of Engineering & Technology
       </div>
 
-      {/* Demo Information Modal */}
-      {showDemoModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/60 dark:bg-black/80 backdrop-blur-xs animate-in fade-in duration-200">
-          <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-2xl max-w-lg w-full p-6 shadow-xl space-y-4 max-h-[90vh] overflow-y-auto text-stone-900 dark:text-zinc-100">
-            <div className="flex items-center justify-between border-b border-[#E5E2D9] dark:border-zinc-800 pb-3">
-              <div className="flex items-center gap-2">
-                <ShieldCheck className="h-5 w-5 text-amber-600 dark:text-amber-400" />
-                <div>
-                  <h3 className="text-sm font-bold font-serif text-stone-900 dark:text-zinc-100">Public Demo Directory</h3>
-                  <p className="text-[11px] text-stone-500 dark:text-zinc-400">Pre-seeded accounts for independent review</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowDemoModal(false)}
-                className="p-1 rounded-lg text-stone-400 hover:text-stone-700 dark:text-zinc-400 dark:hover:text-white hover:bg-stone-100 dark:hover:bg-zinc-800 transition-colors"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
 
-            <div className="space-y-3">
-              <div className="space-y-2">
-                <div className="p-3 bg-white dark:bg-zinc-950 rounded-xl border border-[#E5E2D9] dark:border-zinc-800/80 space-y-1">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200">Coordinator</span>
-                    <span className="text-[10px] font-mono text-stone-500 dark:text-zinc-400">coordinator.demo@demo.thapar.local</span>
-                  </div>
-                  <p className="text-[11px] text-stone-500 dark:text-zinc-400">Full academic scheduling, constraint solvers, conflict diagnosis & master publish.</p>
-                </div>
-
-                <div className="p-3 bg-white dark:bg-zinc-950 rounded-xl border border-[#E5E2D9] dark:border-zinc-800/80 space-y-1">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200">Faculty</span>
-                    <span className="text-[10px] font-mono text-stone-500 dark:text-zinc-400">faculty.demo@demo.thapar.local</span>
-                  </div>
-                  <p className="text-[11px] text-stone-500 dark:text-zinc-400">Faculty personal routine, class cancellation, substitute cover & availability.</p>
-                </div>
-
-                <div className="p-3 bg-white dark:bg-zinc-950 rounded-xl border border-[#E5E2D9] dark:border-zinc-800/80 space-y-1">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200">Student</span>
-                    <span className="text-[10px] font-mono text-stone-500 dark:text-zinc-400">student.demo@demo.thapar.local</span>
-                  </div>
-                  <p className="text-[11px] text-stone-500 dark:text-zinc-400">Weekly student schedule, room numbers, faculty info & syllabus tracking.</p>
-                </div>
-
-                <div className="p-3 bg-white dark:bg-zinc-950 rounded-xl border border-[#E5E2D9] dark:border-zinc-800/80 space-y-1">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200">College Admin / Dean</span>
-                    <span className="text-[10px] font-mono text-stone-500 dark:text-zinc-400">admin.demo@demo.thapar.local</span>
-                  </div>
-                  <p className="text-[11px] text-stone-500 dark:text-zinc-400">UGC academic calendar, regulatory workload limits & master publication approval.</p>
-                </div>
-
-                <div className="p-3 bg-white dark:bg-zinc-950 rounded-xl border border-[#E5E2D9] dark:border-zinc-800/80 space-y-1">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200">Head of Department (HOD)</span>
-                    <span className="text-[10px] font-mono text-stone-500 dark:text-zinc-400">hod.demo@demo.thapar.local</span>
-                  </div>
-                  <p className="text-[11px] text-stone-500 dark:text-zinc-400">Department load balance, elective allocation & syllabus progress oversight.</p>
-                </div>
-              </div>
-
-              <div className="text-[11px] text-stone-500 dark:text-zinc-500 leading-relaxed border-t border-[#E5E2D9] dark:border-zinc-800/60 pt-2.5">
-                🔒 Security Note: Demo accounts use the application's real bcrypt password hashing and server-authoritative RBAC. Data modifications can be reverted anytime with the <strong className="text-stone-700 dark:text-zinc-400">Reset Demo Data</strong> button in the top navigation bar.
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setShowDemoModal(false)}
-              className="w-full py-2 bg-stone-200 dark:bg-zinc-800 hover:bg-stone-300 dark:hover:bg-zinc-700 text-stone-800 dark:text-white text-xs font-semibold rounded-lg transition-colors"
-            >
-              Close Directory
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
