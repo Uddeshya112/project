@@ -59,12 +59,13 @@ export function GenerateTimetablePage() {
   const [selectedCandidateIdx, setSelectedCandidateIdx] = useState<number>(0);
   const [publishFeedback, setPublishFeedback] = useState<{ success: boolean; message: string } | null>(null);
 
-  const activeCoursesCount = courses.filter(c => c.status !== 'Archived').length;
+  const activeCoursesCount = courses.filter(c => c.status === 'Active').length;
   const allocatedCoursesCount = new Set(allocations.map(a => a.courseId)).size;
-  const activeFacultyCount = facultyMembers.filter(f => f.status !== 'Inactive').length;
+  const activeFacultyCount = facultyMembers.filter(f => f.status === 'Active').length;
   const activeRoomsCount = rooms.filter(r => r.isAvailable).length;
   const activeSectionsCount = sections.filter(s => s.status !== 'Inactive').length;
   const totalSubgroupsCount = sections.reduce((acc, s) => acc + (s.subSections?.length || 0), 0);
+  const totalRequestedHours = allocations.reduce((sum, a) => sum + a.hoursPerWeek, 0);
 
   // Automatically initialize generation output if routines exist
   useEffect(() => {
@@ -93,7 +94,7 @@ export function GenerateTimetablePage() {
           },
           healthScore: r.healthScore,
           scheduledHours: r.sessions.length,
-          totalRequestedHours: 736,
+          totalRequestedHours: allocations.reduce((sum, a) => sum + a.hoursPerWeek, 0),
           unscheduledAllocations: [],
         })),
         validationReports: latestGeneratedRoutines.map(r => ({
@@ -103,24 +104,24 @@ export function GenerateTimetablePage() {
           warningCount: 0,
           violations: [],
           totalSessionsEvaluated: r.sessions.length,
-          requiredSessionsCount: 736,
+          requiredSessionsCount: r.sessions.length + r.validation.unscheduled,
           scheduledSessionsCount: r.sessions.length,
-          completionRate: 100,
+          completionRate: r.validation.unscheduled === 0 ? 100 : Math.round((r.sessions.length / Math.max(1, r.sessions.length + r.validation.unscheduled)) * 100),
           metrics: {
-            facultyConflictFreeRate: 100,
+            facultyConflictFreeRate: r.validation.facultyConflicts === 0 ? 100 : 0,
             roomUtilizationRate: Math.round(r.metrics.roomUtilization),
             labUtilizationRate: Math.round(r.metrics.labUtilization),
-            capacityComplianceRate: 100,
-            subgroupParallelEfficiency: 96,
+            capacityComplianceRate: r.validation.capacityViolations === 0 ? 100 : 0,
+            subgroupParallelEfficiency: r.metrics.subgroupParallelEfficiency ?? 0,
             sameCourseSameDayCount: r.metrics.sameCourseSameDayCount ?? 0,
             sameCourseConsecutiveCount: r.metrics.sameCourseConsecutiveCount ?? 0,
             totalStudentGaps: r.metrics.studentGaps,
             totalFacultyGaps: r.metrics.facultyGaps,
-            avgStudentDailyLoad: r.metrics.avgStudentDailyLoad ?? 4.2,
-            maxStudentDailyLoad: r.metrics.maxStudentDailyLoad ?? 5,
-            avgFacultyDailyLoad: r.metrics.avgFacultyDailyLoad ?? 2.8,
-            maxFacultyDailyLoad: r.metrics.maxFacultyDailyLoad ?? 4,
-            courseDistributionQualityRate: r.metrics.courseDistributionQualityRate ?? 100,
+            avgStudentDailyLoad: r.metrics.avgStudentDailyLoad ?? 0,
+            maxStudentDailyLoad: r.metrics.maxStudentDailyLoad ?? 0,
+            avgFacultyDailyLoad: r.metrics.avgFacultyDailyLoad ?? 0,
+            maxFacultyDailyLoad: r.metrics.maxFacultyDailyLoad ?? 0,
+            courseDistributionQualityRate: r.metrics.courseDistributionQualityRate ?? 0,
           },
           auditTimestamp: new Date().toISOString(),
         })),
@@ -148,12 +149,18 @@ export function GenerateTimetablePage() {
               studentWorkloadImbalancePenalty: 0,
               courseDistributionPenalty: 0,
               roomCapacityFitPenalty: 0,
-              facultyPreferenceBonus: 0,
-              totalPenalty: 100 - r.healthScore,
+              facultyPreferenceBonus: r.metrics.facultyPreferenceBonus ?? 0,
+              studentConsecutivePenalty: r.metrics.studentConsecutivePenalty ?? 0,
+              travelPenalty: r.metrics.travelPenalty ?? 0,
+              courseSpreadPenalty: r.metrics.courseSpreadPenalty ?? 0,
+              repeatedPeriodPenalty: r.metrics.repeatedPeriodPenalty ?? 0,
+              byFaculty: r.metrics.byFaculty ?? {},
+              bySection: r.metrics.bySection ?? {},
+              totalPenalty: r.healthScore >= 0 ? Math.max(0, 100 - r.healthScore) : 0,
             },
             healthScore: r.healthScore,
             scheduledHours: r.sessions.length,
-            totalRequestedHours: 736,
+            totalRequestedHours: allocations.reduce((sum, a) => sum + a.hoursPerWeek, 0),
             unscheduledAllocations: [],
           })),
           validationReports: res.routines.map((r: any) => ({
@@ -163,9 +170,9 @@ export function GenerateTimetablePage() {
             warningCount: 0,
             violations: [],
             totalSessionsEvaluated: r.sessions.length,
-            requiredSessionsCount: 736,
+            requiredSessionsCount: r.sessions.length + r.validation.unscheduled,
             scheduledSessionsCount: r.sessions.length,
-            completionRate: 100,
+            completionRate: r.validation.unscheduled === 0 ? 100 : Math.round((r.sessions.length / Math.max(1, r.sessions.length + r.validation.unscheduled)) * 100),
             metrics: {
               facultyConflictFreeRate: 100,
               roomUtilizationRate: Math.round(r.metrics.roomUtilization),
@@ -176,11 +183,11 @@ export function GenerateTimetablePage() {
               sameCourseConsecutiveCount: r.metrics.sameCourseConsecutiveCount ?? 0,
               totalStudentGaps: r.metrics.studentGaps,
               totalFacultyGaps: r.metrics.facultyGaps,
-              avgStudentDailyLoad: r.metrics.avgStudentDailyLoad ?? 4.2,
-              maxStudentDailyLoad: r.metrics.maxStudentDailyLoad ?? 5,
-              avgFacultyDailyLoad: r.metrics.avgFacultyDailyLoad ?? 2.8,
-              maxFacultyDailyLoad: r.metrics.maxFacultyDailyLoad ?? 4,
-              courseDistributionQualityRate: r.metrics.courseDistributionQualityRate ?? 100,
+              avgStudentDailyLoad: r.metrics.avgStudentDailyLoad ?? 0,
+              maxStudentDailyLoad: r.metrics.maxStudentDailyLoad ?? 0,
+              avgFacultyDailyLoad: r.metrics.avgFacultyDailyLoad ?? 0,
+              maxFacultyDailyLoad: r.metrics.maxFacultyDailyLoad ?? 0,
+              courseDistributionQualityRate: r.metrics.courseDistributionQualityRate ?? 0,
             },
             auditTimestamp: new Date().toISOString(),
           })),
