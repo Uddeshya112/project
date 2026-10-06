@@ -35,7 +35,7 @@ Historical credentials or secrets that appeared in older Git revisions must stil
 
 ## Spreadsheet import
 
-Workbook parsing uses the security-maintained `@keep-lts/xlsx` package as a drop-in replacement for the abandoned npm `xlsx@0.18.5` baseline. The upstream SheetJS npm registry is frozen at 0.18.5; the maintained fork backports relevant security fixes while preserving the API. citeturn106225search0turn106225search1
+Workbook parsing uses the security-maintained `@keep-lts/xlsx` package as a drop-in replacement for the abandoned npm `xlsx@0.18.5` baseline. The upstream SheetJS npm registry is frozen at 0.18.5; the maintained fork backports relevant security fixes while preserving the API.
 
 ## Verification
 
