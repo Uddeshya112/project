@@ -90,7 +90,7 @@ export function GenerateTimetablePage() {
           },
           healthScore: r.healthScore,
           scheduledHours: r.sessions.length,
-          totalRequestedHours: 736,
+          totalRequestedHours: r.sessions.length + (r.validation.unscheduled || 0),
           unscheduledAllocations: [],
         })),
         validationReports: latestGeneratedRoutines.map(r => ({
@@ -102,7 +102,7 @@ export function GenerateTimetablePage() {
           totalSessionsEvaluated: r.sessions.length,
           requiredSessionsCount: 736,
           scheduledSessionsCount: r.sessions.length,
-          completionRate: 100,
+          completionRate: r.sessions.length + (r.validation.unscheduled || 0) > 0 ? Math.round((r.sessions.length / (r.sessions.length + (r.validation.unscheduled || 0))) * 10000) / 100 : 0,
           metrics: {
             facultyConflictFreeRate: 100,
             roomUtilizationRate: Math.round(r.metrics.roomUtilization),
@@ -130,7 +130,7 @@ export function GenerateTimetablePage() {
     setPublishFeedback(null);
 
     try {
-      const res = await generateDualRoutinesAPI();
+      const res = await generateDualRoutinesAPI({ budgetMode, timeBudgetMs, maxCandidates: numCandidates });
       if (res.success && res.routines && res.routines.length > 0) {
         setGenerationOutput({
           candidates: res.routines.map((r: any, i: number) => ({
@@ -153,7 +153,7 @@ export function GenerateTimetablePage() {
             },
             healthScore: r.healthScore,
             scheduledHours: r.sessions.length,
-            totalRequestedHours: 736,
+            totalRequestedHours: r.sessions.length + (r.validation.unscheduled || 0),
             unscheduledAllocations: [],
           })),
           validationReports: res.routines.map((r: any) => ({
@@ -165,7 +165,7 @@ export function GenerateTimetablePage() {
             totalSessionsEvaluated: r.sessions.length,
             requiredSessionsCount: 736,
             scheduledSessionsCount: r.sessions.length,
-            completionRate: 100,
+            completionRate: r.sessions.length + (r.validation.unscheduled || 0) > 0 ? Math.round((r.sessions.length / (r.sessions.length + (r.validation.unscheduled || 0))) * 10000) / 100 : 0,
             metrics: {
               facultyConflictFreeRate: 100,
               roomUtilizationRate: Math.round(r.metrics.roomUtilization),
@@ -429,7 +429,7 @@ export function GenerateTimetablePage() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {generationOutput.candidates.slice(0, 2).map((cand, idx) => {
+            {generationOutput.candidates.map((cand, idx) => {
               const valReport = generationOutput.validationReports[idx];
               const isSelected = selectedCandidateIdx === idx;
               const routineName = idx === 0 ? 'Routine A — Student-Focused' : 'Routine B — Faculty/Resource-Focused';
