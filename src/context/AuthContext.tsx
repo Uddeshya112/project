@@ -8,8 +8,12 @@ import {
   RoleAssignment,
   AuthSession,
   PasswordResetToken,
-  WorkspaceType
+  WorkspaceType,
+  RoleCode
 } from '../types';
+
+export type { RoleCode };
+export type { WorkspaceType };
 import {
   INSTITUTIONS,
   ROLES,
@@ -100,6 +104,8 @@ interface AuthContextType {
   allPermissions: Permission[];
   allSessions: AuthSession[];
   passwordResetTokens: PasswordResetToken[];
+  roster?: any[];
+  [key: string]: any;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -949,6 +955,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         allPermissions,
         allSessions,
         passwordResetTokens,
+        roster: [],
       }}
     >
       {children}

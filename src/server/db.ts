@@ -41,7 +41,7 @@ async function connectPg(url: string): Promise<Db> {
     max: Number(process.env.PG_POOL_MAX) || 5,
     ssl: isLocal ? false : ca ? { ca } : { rejectUnauthorized: false },
   });
-  pool.on('error', (err) => console.error('[db] idle client error:', err.message));
+  pool.on('error', (err: Error) => console.error('[db] idle client error:', err.message));
 
   const query: Query = async (sql, params) => (await pool.query(sql, params as any[])).rows;
   return {
@@ -83,7 +83,7 @@ async function connectPglite(dir: string): Promise<Db> {
     params?.length ? (await target.query(sql, params)).rows : ((await target.exec(sql)).at(-1)?.rows ?? []);
   return {
     query: (sql, params) => run(pg, sql, params),
-    tx: (fn) => pg.transaction((tx) => fn((sql, params) => run(tx, sql, params))),
+    tx: (fn) => pg.transaction((tx: any) => fn((sql, params) => run(tx, sql, params))),
     close: () => pg.close(),
   };
 }

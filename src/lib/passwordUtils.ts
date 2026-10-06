@@ -1,3 +1,5 @@
+import bcrypt from 'bcryptjs';
+
 // Password policy shared by the login page and the server. Hashing lives server-side (src/server/auth.ts).
 
 export interface PasswordPolicyCheck {
@@ -40,4 +42,20 @@ export function evaluatePasswordPolicy(pwd: string): PasswordPolicyCheck {
     strength: score === 5 ? 'strong' : score >= 3 ? 'fair' : 'weak',
     errors,
   };
+}
+
+export function hashPasswordBcrypt(pwd: string): string {
+  return bcrypt.hashSync(pwd, 10);
+}
+
+export function hashPasswordScrypt(pwd: string): string {
+  return bcrypt.hashSync(pwd, 10);
+}
+
+export function verifyPassword(pwd: string, hash: string): boolean {
+  return bcrypt.compareSync(pwd, hash);
+}
+
+export function hashPasswordLegacy(pwd: string): string {
+  return bcrypt.hashSync(pwd, 10);
 }

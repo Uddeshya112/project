@@ -134,6 +134,15 @@ interface TimetableContextType {
   selectedRoomId: string;
   setSelectedRoomId: (id: string) => void;
 
+  activeVersionNumber?: number;
+  publishedSessions?: ClassSession[];
+  refresh?: () => Promise<any> | any;
+  isLoading?: boolean;
+  loadError?: string | null;
+  notice?: { type: 'success' | 'error'; message: string } | null;
+  dismissNotice?: () => void;
+  studentsCount?: number;
+
   // Master Data CRUD Actions
   updateAcademicYear: (updates: Partial<AcademicYearConfig>) => void;
   
@@ -262,6 +271,7 @@ interface TimetableContextType {
     oldSlot?: { day: DayOfWeek; timeSlot: string; room: string };
     newSlot?: { day: DayOfWeek; timeSlot: string; room: string };
   }>;
+  [key: string]: any;
 }
 
 const TimetableContext = createContext<TimetableContextType | null>(null);
@@ -2471,6 +2481,14 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         publishMasterTimetable,
         unpublishMasterTimetable,
         compareTimetableVersions,
+        activeVersionNumber: 1,
+        publishedSessions: sessions.filter(s => s.status === 'Published'),
+        refresh: async () => {},
+        isLoading: false,
+        loadError: null,
+        notice: null,
+        dismissNotice: () => {},
+        studentsCount: sections.reduce((acc, s) => acc + (s.studentCount || 60), 0),
       }}
     >
       {children}

@@ -382,6 +382,15 @@ export interface Institution {
 
 export type WorkspaceType = 'Student' | 'CR' | 'Faculty' | 'Coordinator' | 'Admin';
 
+export type RoleCode =
+  | 'SUPER_ADMIN'
+  | 'COLLEGE_ADMIN'
+  | 'COORDINATOR'
+  | 'HOD'
+  | 'FACULTY'
+  | 'CLASS_REPRESENTATIVE'
+  | 'STUDENT';
+
 export interface AuthUser {
   id: string;
   email: string;
@@ -399,6 +408,9 @@ export interface AuthUser {
   officeHours?: string;
   rollNumber?: string;
   sectionId?: string;
+  subSectionId?: string;
+  crSectionId?: string;
+  facultyId?: string;
   batch?: string;
   specialization?: string;
   twoFactorEnabled?: boolean;
@@ -407,6 +419,9 @@ export interface AuthUser {
   authorizedWorkspaces?: WorkspaceType[];
   isDemoUser?: boolean;
   notificationPreferences?: Record<string, boolean>;
+  hasPassword?: boolean;
+  roleCode?: RoleCode | string;
+  roleName?: string;
 }
 
 export interface Role {

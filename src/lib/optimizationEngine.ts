@@ -29,6 +29,7 @@ export interface EngineOptions {
   timeBudgetMs?: number; // Max time limit for optimization
   seed?: number; // Deterministic seed
   maxCandidates?: number; // Number of top candidate schedules to generate
+  fixedSessions?: ClassSession[];
 }
 
 export interface SoftPenaltyBreakdown {
