@@ -1,7 +1,5 @@
 -- IntelliSchedule runtime schema. Applied automatically at server start (idempotent).
--- Lives in its own schema: Supabase's REST API only exposes `public`, so these tables are
--- reachable solely through the server's direct Postgres connection. RLS is enabled with no
--- policies as a second lock in case the schema is ever exposed.
+-- Direct Postgres access is server-only; public Supabase roles have no policies here.
 
 create schema if not exists intellischedule;
 
@@ -12,47 +10,78 @@ create table if not exists intellischedule.users (
   role_code     text not null check (role_code in
                   ('SUPER_ADMIN','COLLEGE_ADMIN','COORDINATOR','HOD','FACULTY','CLASS_REPRESENTATIVE','STUDENT')),
   department    text not null default '',
-  password_hash text,                    -- null = Google sign-in only
+  password_hash text,
   google_sub    text unique,
   status        text not null default 'ACTIVE' check (status in ('ACTIVE','LOCKED')),
   is_demo       boolean not null default false,
-  profile       jsonb not null default '{}'::jsonb,  -- phone, office, roll number, section, avatar, ...
+  profile       jsonb not null default '{}'::jsonb,
   created_at    timestamptz not null default now(),
   last_login_at timestamptz
 );
 
 create table if not exists intellischedule.auth_sessions (
-  token_hash  text primary key,          -- sha256 of the session token; the raw token is never stored
-  user_id     text not null references intellischedule.users(id) on delete cascade,
-  created_at  timestamptz not null default now(),
-  expires_at  timestamptz not null
+  token_hash           text primary key,
+  user_id              text not null references intellischedule.users(id) on delete cascade,
+  created_at           timestamptz not null default now(),
+  last_seen_at         timestamptz not null default now(),
+  expires_at           timestamptz not null,
+  absolute_expires_at  timestamptz not null,
+  user_agent           text not null default '',
+  ip_address           text not null default ''
 );
 create index if not exists auth_sessions_user_idx on intellischedule.auth_sessions(user_id);
 create index if not exists auth_sessions_expiry_idx on intellischedule.auth_sessions(expires_at);
+create index if not exists auth_sessions_absolute_expiry_idx on intellischedule.auth_sessions(absolute_expires_at);
 
 create table if not exists intellischedule.oauth_states (
-  state       text primary key,
+  state         text primary key,
+  code_verifier text not null,
+  created_at    timestamptz not null default now()
+);
+
+create table if not exists intellischedule.password_reset_tokens (
+  token_hash  text primary key,
+  user_id     text not null references intellischedule.users(id) on delete cascade,
+  expires_at  timestamptz not null,
+  used_at     timestamptz,
   created_at  timestamptz not null default now()
 );
+create index if not exists password_reset_tokens_expiry_idx on intellischedule.password_reset_tokens(expires_at);
 
--- Academic master data and the live timetable, one JSON document per area.
--- `version` gives optimistic concurrency: a writer that lost a race fails instead of overwriting.
-create table if not exists intellischedule.app_state (
-  key         text primary key,
-  data        jsonb not null,
-  version     integer not null default 1,
-  updated_at  timestamptz not null default now()
+create table if not exists intellischedule.rate_limits (
+  key            text primary key,
+  window_start   timestamptz not null,
+  reset_at       timestamptz not null,
+  count          integer not null default 0,
+  updated_at     timestamptz not null default now()
 );
+create index if not exists rate_limits_reset_idx on intellischedule.rate_limits(reset_at);
 
--- Timetable versions: append-only except the published flag.
-create table if not exists intellischedule.timetable_versions (
-  version_number integer primary key,
-  data           jsonb not null,
-  is_published   boolean not null default false,
-  created_at     timestamptz not null default now()
+create table if not exists intellischedule.replacement_votes (
+  poll_id     text not null,
+  user_id     text not null references intellischedule.users(id) on delete cascade,
+  option_id   text not null,
+  created_at  timestamptz not null default now(),
+  primary key (poll_id, user_id)
 );
+create index if not exists replacement_votes_poll_idx on intellischedule.replacement_votes(poll_id);
 
--- Append-only audit trail.
+create table if not exists intellischedule.jobs (
+  job_id         text primary key,
+  status         text not null check (status in ('PENDING','RUNNING','COMPLETED','FAILED','CANCELLED')),
+  progress       integer not null default 0 check (progress between 0 and 100),
+  created_at     timestamptz not null default now(),
+  started_at     timestamptz,
+  completed_at   timestamptz,
+  requested_by   text references intellischedule.users(id) on delete set null,
+  payload        jsonb not null,
+  result         jsonb,
+  error          text,
+  cancel_requested boolean not null default false
+);
+create index if not exists jobs_status_idx on intellischedule.jobs(status);
+create index if not exists jobs_created_idx on intellischedule.jobs(created_at desc);
+
 create table if not exists intellischedule.audit_log (
   id          text primary key,
   at          timestamptz not null,
@@ -64,9 +93,14 @@ create table if not exists intellischedule.audit_log (
 );
 create index if not exists audit_log_at_idx on intellischedule.audit_log(at desc);
 
-alter table intellischedule.users              enable row level security;
-alter table intellischedule.auth_sessions      enable row level security;
-alter table intellischedule.oauth_states       enable row level security;
-alter table intellischedule.app_state          enable row level security;
-alter table intellischedule.timetable_versions enable row level security;
-alter table intellischedule.audit_log          enable row level security;
+-- Backfill columns for older deployments of this migration.
+alter table intellischedule.auth_sessions add column if not exists last_seen_at timestamptz not null default now();
+alter table intellischedule.auth_sessions add column if not exists absolute_expires_at timestamptz;
+alter table intellischedule.auth_sessions add column if not exists user_agent text not null default '';
+alter table intellischedule.auth_sessions add column if not exists ip_address text not null default '';
+update intellischedule.auth_sessions
+   set absolute_expires_at = coalesce(absolute_expires_at, expires_at)
+ where absolute_expires_at is null;
+alter table intellischedule.auth_sessions alter column absolute_expires_at set not null;
+
+alter table intellischedule.oauth_states add column if not exists code_verifier text;
