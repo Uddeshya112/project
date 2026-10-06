@@ -501,20 +501,77 @@ export function createAuth(opts: AuthOptions) {
     return res.json({ success: true, message: 'Password changed. Other devices have been signed out.' });
   });
 
-  // No mail server is configured, so resets go through an administrator. Same reply for every
-  // address so the endpoint cannot be used to discover accounts.
-  router.post('/api/auth/forgot-password', (req, res) => {
-    if (rateLimit(`forgot:${req.ip}`, 30, 60_000)) {
-      return res.status(429).json({ success: false, message: 'Too many requests. Try again in a minute.' });
+  router.post('/api/auth/forgot-password', async (req, res) => {
+    const email = normEmail(req.body?.email);
+    if (!isEmail(email)) {
+      return res.status(400).json({ success: false, message: 'Institutional email is required.' });
     }
-    return res.json({
-      success: true,
-      message: googleEnabled
-        ? 'Sign in with your Thapar Google account, or ask the timetable administrator to reset your password.'
-        : 'Ask the timetable administrator to reset your password from Admin -> Users.',
-    });
+    const wait = await persistentRateLimit(`forgot-ip:${req.ip}`, 5, 60_000) || await persistentRateLimit(`forgot-email:${email}`, 3, 15 * 60_000);
+    if (wait) {
+      res.setHeader('Retry-After', String(wait));
+      return res.status(429).json({ success: true, message: 'If an account exists for this email, password-reset instructions have been sent.' });
+    }
+    const generic = { success: true, message: 'If an account exists for this email, password-reset instructions have been sent.' };
+    const user = await userByEmail(email);
+    if (!user || user.status !== 'ACTIVE' || user.is_demo) return res.json(generic);
+    if (!process.env.MAILER_SERVICE_URL && process.env.NODE_ENV === 'production') {
+      return res.status(503).json({ success: false, message: 'Password reset service is temporarily unavailable.' });
+    }
+
+    const rawToken = crypto.randomBytes(32).toString('base64url');
+    const tokenHash = sha256(rawToken);
+    await db.query(`delete from ${T}.password_reset_tokens where user_id = $1`, [user.id]);
+    await db.query(
+      `insert into ${T}.password_reset_tokens (token_hash, user_id, expires_at) values ($1, $2, now() + interval '15 minutes')`,
+      [tokenHash, user.id],
+    );
+    const base = opts.appUrl?.replace(/\/+$/, '') || `${req.protocol}://${req.get('host')}`;
+    const resetUrl = `${base}/#reset-password?token=${encodeURIComponent(rawToken)}`;
+    try {
+      await sendPasswordResetMail({ to: user.email, resetUrl });
+    } catch (err) {
+      await db.query(`delete from ${T}.password_reset_tokens where token_hash = $1`, [tokenHash]);
+      if (process.env.NODE_ENV === 'production') return res.status(503).json({ success: false, message: 'Password reset service is temporarily unavailable.' });
+    }
+    if (process.env.NODE_ENV === 'test' && process.env.ALLOW_TEST_RESET_TOKEN === 'true') {
+      return res.json({ ...generic, resetToken: rawToken });
+    }
+    return res.json(generic);
   });
 
+  router.get('/api/auth/validate-token', async (req, res) => {
+    const token = typeof req.query.token === 'string' ? req.query.token : '';
+    if (!token) return res.status(400).json({ valid: false, message: 'Reset token required.' });
+    const rows = await db.query<UserRow & { expires_at: Date }>(
+      `select u.*, t.expires_at from ${T}.password_reset_tokens t join ${T}.users u on u.id = t.user_id
+       where t.token_hash = $1 and t.used_at is null and t.expires_at > now()`,
+      [sha256(token)],
+    );
+    if (!rows[0]) return res.status(400).json({ valid: false, message: 'Invalid or expired password reset token.' });
+    return res.json({ valid: true, email: rows[0].email });
+  });
+
+  router.post('/api/auth/reset-password', async (req, res) => {
+    const token = typeof req.body?.token === 'string' ? req.body.token : '';
+    const newPassword = typeof req.body?.newPassword === 'string' ? req.body.newPassword : '';
+    if (!token || !newPassword) return res.status(400).json({ success: false, message: 'Token and new password are required.' });
+    if (newPassword.length > MAX_PASSWORD_LENGTH) return res.status(400).json({ success: false, message: `Password must be ${MAX_PASSWORD_LENGTH} characters or fewer.` });
+    const policy = evaluatePasswordPolicy(newPassword);
+    if (!policy.isValid) return res.status(400).json({ success: false, message: `Password needs: ${policy.errors.join(', ')}.` });
+    const tokenHash = sha256(token);
+    const consumed = await db.tx(async (q) => {
+      const rows = await q<UserRow>(`select u.* from ${T}.password_reset_tokens t join ${T}.users u on u.id=t.user_id where t.token_hash=$1 and t.used_at is null and t.expires_at>now() for update`, [tokenHash]);
+      const user = rows[0];
+      if (!user) return null;
+      await q(`update ${T}.password_reset_tokens set used_at=now() where token_hash=$1 and used_at is null`, [tokenHash]);
+      await q(`update ${T}.users set password_hash=$2 where id=$1`, [user.id, await hashPasswordBcrypt(newPassword)]);
+      await q(`delete from ${T}.auth_sessions where user_id=$1`, [user.id]);
+      await q(`insert into ${T}.audit_log (id, at, user_name, action, entity_type, entity_id, details) values ($1, now(), $2, 'PASSWORD_RESET', 'User', $3, $4)`, [`audit-${crypto.randomUUID()}`, user.name, user.id, 'Password reset completed.']);
+      return user;
+    });
+    if (!consumed) return res.status(400).json({ success: false, message: 'Invalid or expired password reset token.' });
+    return res.json({ success: true, message: 'Your password has been reset successfully. You can now sign in.' });
+  });
   // ---------------------------------------------------------------------------
   // Google sign-in (authorization-code flow, full-page redirect)
   // ---------------------------------------------------------------------------
