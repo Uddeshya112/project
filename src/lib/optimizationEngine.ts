@@ -30,6 +30,12 @@ export interface EngineOptions {
   timeBudgetMs?: number; // Max time limit for optimization
   seed?: number; // Deterministic seed
   maxCandidates?: number; // Number of top candidate schedules to generate
+  /** Existing locked sessions that must remain immutable. */
+  pinnedSessions?: ClassSession[];
+  /** Optional inter-building travel times in minutes; unspecified pairs default to 10. */
+  buildingTravelMinutes?: Record<string, number>;
+  /** Explicit soft-constraint overrides; values supersede profile defaults and AcademicConstraint values. */
+  softWeights?: Partial<SoftWeightConfig>;
 }
 
 export interface SoftPenaltyBreakdown {
@@ -40,7 +46,73 @@ export interface SoftPenaltyBreakdown {
   courseDistributionPenalty: number;
   roomCapacityFitPenalty: number;
   facultyPreferenceBonus: number;
+  studentConsecutivePenalty: number;
+  travelPenalty: number;
+  courseSpreadPenalty: number;
+  repeatedPeriodPenalty: number;
+  byFaculty: Record<string, number>;
+  bySection: Record<string, number>;
   totalPenalty: number;
+}
+
+export interface SoftWeightConfig {
+  facultyGap: number;
+  facultyConsecutive: number;
+  studentGap: number;
+  studentWorkload: number;
+  studentConsecutive: number;
+  courseDistribution: number;
+  repeatedCoursePeriod: number;
+  roomCapacityFit: number;
+  facultyPreferenceBonus: number;
+  travel: number;
+}
+
+const DEFAULT_SOFT_WEIGHTS_BY_PROFILE: Record<OptimizationProfile, SoftWeightConfig> = {
+  BALANCED: {
+    facultyGap: 2, facultyConsecutive: 3, studentGap: 2, studentWorkload: 3,
+    studentConsecutive: 3, courseDistribution: 5, repeatedCoursePeriod: 2,
+    roomCapacityFit: 1, facultyPreferenceBonus: 1, travel: 1
+  },
+  STUDENT_FOCUSED: {
+    facultyGap: 2, facultyConsecutive: 3, studentGap: 12, studentWorkload: 6,
+    studentConsecutive: 5, courseDistribution: 10, repeatedCoursePeriod: 3,
+    roomCapacityFit: 1, facultyPreferenceBonus: 1, travel: 1
+  },
+  FACULTY_FOCUSED: {
+    facultyGap: 12, facultyConsecutive: 6, studentGap: 2, studentWorkload: 3,
+    studentConsecutive: 2, courseDistribution: 5, repeatedCoursePeriod: 2,
+    roomCapacityFit: 1, facultyPreferenceBonus: 1, travel: 1
+  }
+};
+
+function resolveSoftWeights(
+  constraints: AcademicConstraint[],
+  profile: OptimizationProfile,
+  overrides: Partial<SoftWeightConfig> = {}
+): SoftWeightConfig {
+  const base = { ...DEFAULT_SOFT_WEIGHTS_BY_PROFILE[profile] };
+  const aliasMap: Record<keyof SoftWeightConfig, string[]> = {
+    facultyGap: ['FACULTY_GAP', 'SOFT_FACULTY_GAP', 'MAX_FACULTY_GAPS'],
+    facultyConsecutive: ['FACULTY_CONSECUTIVE', 'SOFT_FACULTY_CONSECUTIVE'],
+    studentGap: ['STUDENT_GAP', 'SOFT_STUDENT_GAP', 'MIN_STUDENT_GAPS'],
+    studentWorkload: ['STUDENT_WORKLOAD', 'SOFT_STUDENT_WORKLOAD'],
+    studentConsecutive: ['STUDENT_CONSECUTIVE', 'MAX_STUDENT_CONSECUTIVE'],
+    courseDistribution: ['COURSE_DISTRIBUTION', 'COURSE_SPREAD', 'SOFT_COURSE_DISTRIBUTION'],
+    repeatedCoursePeriod: ['REPEATED_COURSE_PERIOD', 'SAME_COURSE_PERIOD'],
+    roomCapacityFit: ['ROOM_CAPACITY_FIT', 'ROOM_UTILIZATION'],
+    facultyPreferenceBonus: ['FACULTY_PREFERENCE_BONUS', 'FACULTY_PREFERENCES'],
+    travel: ['BUILDING_TRAVEL', 'ROOM_TRAVEL', 'TRAVEL_TIME'],
+  };
+  for (const key of Object.keys(aliasMap) as (keyof SoftWeightConfig)[]) {
+    const aliases = aliasMap[key];
+    const constraint = constraints.find(c => c.isActive && c.type === 'Soft' && aliases.includes((c.code || '').toUpperCase()));
+    const parsed = constraint ? Number(constraint.parameterValue) : NaN;
+    if (Number.isFinite(parsed)) base[key] = Math.max(0, parsed);
+    const override = Number(overrides[key]);
+    if (Number.isFinite(override)) base[key] = Math.max(0, override);
+  }
+  return base;
 }
 
 export interface OptimizationMetrics {
@@ -430,6 +502,8 @@ export function executeOptimizationEngine(
   const maxCandidates = options.maxCandidates || 3;
 
   const prng = new SeededPRNG(seed);
+  const profile = options.optimizationProfile || 'BALANCED';
+  const softWeights = resolveSoftWeights(constraints, profile, options.softWeights);
 
   // Phase 0: Problem Compilation
   const compileStart = performance.now();
@@ -827,7 +901,8 @@ export function executeOptimizationEngine(
       problem,
       prng,
       timeBudgetMs - (performance.now() - startTime),
-      options.optimizationProfile || 'BALANCED'
+      profile,
+      softWeights
     );
   }
   const optimizationTimeMs = Number((performance.now() - optimizationStart).toFixed(2));
@@ -871,7 +946,8 @@ function buildCandidateFromState(
   problem: CompiledProblem,
   allocAssignedSlots: { slotIdx: number; roomIdx: number }[][],
   profile: OptimizationProfile = 'BALANCED',
-  pinnedSessionsForCandidate: ClassSession[] = []
+  pinnedSessionsForCandidate: ClassSession[] = [],
+  softWeights: SoftWeightConfig = DEFAULT_SOFT_WEIGHTS_BY_PROFILE[profile]
 ): GeneratedCandidate {
   const sessions: ClassSession[] = [];
   let scheduledHours = 0;
@@ -919,7 +995,7 @@ function buildCandidateFromState(
   }
 
   const totalRequestedHours = problem.allocations.reduce((sum, a) => sum + a.requiredHours, 0);
-  const softPenalty = calculateSoftPenalties(sessions, problem, profile);
+  const softPenalty = calculateSoftPenalties(sessions, problem, profile, softWeights);
 
   // Health Score: 100 - softPenalty.totalPenalty, clamped to [10, 100]
   const healthScore = Math.max(10, Math.min(100, Math.round(100 - softPenalty.totalPenalty)));
@@ -943,95 +1019,168 @@ function buildCandidateFromState(
 function calculateSoftPenalties(
   sessions: ClassSession[],
   problem: CompiledProblem,
-  profile: OptimizationProfile = 'BALANCED'
+  profile: OptimizationProfile = 'BALANCED',
+  softWeights: SoftWeightConfig = DEFAULT_SOFT_WEIGHTS_BY_PROFILE[profile]
 ): SoftPenaltyBreakdown {
   let facultyGapsPenalty = 0;
   let facultyConsecutivePenalty = 0;
+  let studentGapsPenalty = 0;
   let studentWorkloadImbalancePenalty = 0;
   let courseDistributionPenalty = 0;
   let roomCapacityFitPenalty = 0;
   let facultyPreferenceBonus = 0;
+  let studentConsecutivePenalty = 0;
+  let travelPenalty = 0;
+  let courseSpreadPenalty = 0;
+  let repeatedPeriodPenalty = 0;
 
-  // Map sessions by faculty & day and section & day
+  const byFaculty: Record<string, number> = {};
+  const bySection: Record<string, number> = {};
+  const addFaculty = (id: string, value: number) => { byFaculty[id] = (byFaculty[id] || 0) + value; };
+  const addSection = (id: string, value: number) => { bySection[id] = (bySection[id] || 0) + value; };
+
+  const slotByKey = new Map<string, SlotRef>();
+  for (const slot of problem.slots) slotByKey.set(slot.day + '|' + slot.timeSlotId, slot);
+  const roomById = new Map(problem.rooms.map(r => [r.id, r]));
+  const sectionById = new Map(problem.sections.map(s => [s.id, s]));
+  const facultyById = new Map(problem.faculty.map(f => [f.id, f]));
   const facultyDayMap = new Map<string, number[]>();
   const sectionDayMap = new Map<string, number[]>();
-  const sectionCourseDayMap = new Map<string, number>();
+  const courseDays = new Map<string, Set<number>>();
+  const coursePeriods = new Map<string, Map<number, Set<number>>>();
+  const sectionDaySessions = new Map<string, ClassSession[]>();
 
   for (const sess of sessions) {
-    const slotRef = problem.slots.find(s => s.day === sess.day && s.timeSlotId === sess.timeSlotId);
-    if (!slotRef) continue;
+    const slot = slotByKey.get(sess.day + '|' + sess.timeSlotId);
+    if (!slot) continue;
 
-    const facKey = `${sess.facultyId}_${sess.day}`;
-    if (!facultyDayMap.has(facKey)) facultyDayMap.set(facKey, []);
-    facultyDayMap.get(facKey)!.push(slotRef.periodIdx);
+    const facKey = sess.facultyId + '|' + sess.day;
+    const facPeriods = facultyDayMap.get(facKey) || [];
+    facPeriods.push(slot.periodIdx);
+    facultyDayMap.set(facKey, facPeriods);
 
-    const secKey = `${sess.sectionId}_${sess.day}`;
-    if (!sectionDayMap.has(secKey)) sectionDayMap.set(secKey, []);
-    sectionDayMap.get(secKey)!.push(slotRef.periodIdx);
+    const secKey = sess.sectionId + '|' + sess.day;
+    const secPeriods = sectionDayMap.get(secKey) || [];
+    secPeriods.push(slot.periodIdx);
+    sectionDayMap.set(secKey, secPeriods);
 
-    const courseKey = `${sess.sectionId}_${sess.courseId}_${sess.day}`;
-    sectionCourseDayMap.set(courseKey, (sectionCourseDayMap.get(courseKey) || 0) + 1);
+    const courseKey = sess.sectionId + '|' + (sess.subSectionId || 'ALL') + '|' + sess.courseId;
+    const days = courseDays.get(courseKey) || new Set<number>();
+    days.add(slot.dayIdx);
+    courseDays.set(courseKey, days);
+    const periods = coursePeriods.get(courseKey) || new Map<number, Set<number>>();
+    const daySet = periods.get(slot.periodIdx) || new Set<number>();
+    daySet.add(slot.dayIdx);
+    periods.set(slot.periodIdx, daySet);
+    coursePeriods.set(courseKey, periods);
 
-    // Room Capacity Fit: Reward tight capacity fits
-    const room = problem.rooms.find(r => r.id === sess.roomId);
-    const section = problem.sections.find(s => s.id === sess.sectionId);
+    const sdKey = sess.sectionId + '|' + sess.day;
+    const daySessions = sectionDaySessions.get(sdKey) || [];
+    daySessions.push(sess);
+    sectionDaySessions.set(sdKey, daySessions);
+
+    const room = roomById.get(sess.roomId);
+    const section = sectionById.get(sess.sectionId);
     if (room && section) {
-      const unusedChairs = room.capacity - section.studentCount;
+      const unusedChairs = Math.max(0, room.capacity - section.studentCount);
       if (unusedChairs > 40) {
-        roomCapacityFitPenalty += 1.0;
+        roomCapacityFitPenalty += softWeights.roomCapacityFit;
+        addSection(sess.sectionId, softWeights.roomCapacityFit);
       }
+    }
+
+    const faculty = facultyById.get(sess.facultyId);
+    if (faculty && faculty.preferences.preferredDays.includes(sess.day) && faculty.preferences.preferredPeriods.includes(slot.periodIdx + 1)) {
+      facultyPreferenceBonus += softWeights.facultyPreferenceBonus;
+      addFaculty(sess.facultyId, -softWeights.facultyPreferenceBonus);
     }
   }
 
-  // 1. Faculty Gap & Consecutive Class Penalties
-  for (const periods of facultyDayMap.values()) {
+  for (const [key, periods] of facultyDayMap) {
     periods.sort((a, b) => a - b);
-
-    if (periods.length > 1) {
-      let gapCount = 0;
-      for (let i = 0; i < periods.length - 1; i++) {
-        const diff = periods[i + 1] - periods[i] - 1;
-        if (diff > 0) gapCount += diff;
-      }
-      facultyGapsPenalty += gapCount * (profile === 'FACULTY_FOCUSED' ? 12.0 : 2.0);
-    }
-
+    const facultyId = key.split('|')[0];
     let consecutive = 1;
     for (let i = 1; i < periods.length; i++) {
+      const gap = periods[i] - periods[i - 1] - 1;
+      if (gap > 0) {
+        const penalty = gap * softWeights.facultyGap;
+        facultyGapsPenalty += penalty;
+        addFaculty(facultyId, penalty);
+      }
       if (periods[i] === periods[i - 1] + 1) {
         consecutive++;
         if (consecutive > 3) {
-          facultyConsecutivePenalty += (profile === 'FACULTY_FOCUSED' ? 6.0 : 3.0);
+          facultyConsecutivePenalty += softWeights.facultyConsecutive;
+          addFaculty(facultyId, softWeights.facultyConsecutive);
         }
-      } else {
-        consecutive = 1;
-      }
+      } else consecutive = 1;
     }
   }
 
-  // 2. Student Gap, Workload Imbalance & Course Clumping Penalties
-  let studentGapsPenalty = 0;
-  for (const periods of sectionDayMap.values()) {
+  for (const [key, periods] of sectionDayMap) {
     periods.sort((a, b) => a - b);
-    if (periods.length > 1) {
-      let gapCount = 0;
-      for (let i = 0; i < periods.length - 1; i++) {
-        const diff = periods[i + 1] - periods[i] - 1;
-        if (diff > 0) gapCount += diff;
+    const sectionId = key.split('|')[0];
+    let consecutive = 1;
+    for (let i = 1; i < periods.length; i++) {
+      const gap = periods[i] - periods[i - 1] - 1;
+      if (gap > 0) {
+        const intermediate = periods[i - 1] + 1;
+        const isLunch = problem.slots.find(s => s.periodIdx === intermediate && s.isLunch);
+        if (!isLunch) {
+          const penalty = gap * softWeights.studentGap;
+          studentGapsPenalty += penalty;
+          addSection(sectionId, penalty);
+        }
       }
-      studentGapsPenalty += gapCount * (profile === 'STUDENT_FOCUSED' ? 12.0 : 2.0);
+      if (periods[i] === periods[i - 1] + 1) {
+        consecutive++;
+        if (consecutive > 3) {
+          studentConsecutivePenalty += softWeights.studentConsecutive;
+          addSection(sectionId, softWeights.studentConsecutive);
+        }
+      } else consecutive = 1;
     }
-
     if (periods.length > 5) {
-      studentWorkloadImbalancePenalty += (periods.length - 5) * (profile === 'STUDENT_FOCUSED' ? 6.0 : 3.0);
-    } else if (periods.length === 1) {
-      studentWorkloadImbalancePenalty += (profile === 'STUDENT_FOCUSED' ? 3.0 : 1.0);
+      const penalty = (periods.length - 5) * softWeights.studentWorkload;
+      studentWorkloadImbalancePenalty += penalty;
+      addSection(sectionId, penalty);
     }
   }
 
-  for (const count of sectionCourseDayMap.values()) {
-    if (count > 1) {
-      courseDistributionPenalty += (count - 1) * (profile === 'STUDENT_FOCUSED' ? 10.0 : 5.0);
+  for (const [key, days] of courseDays) {
+    const sessionCount = sessions.filter(s => (s.sectionId + '|' + (s.subSectionId || 'ALL') + '|' + s.courseId) === key).length;
+    const blockLength = Math.max(1, sessions.find(s => (s.sectionId + '|' + (s.subSectionId || 'ALL') + '|' + s.courseId) === key)?.durationPeriods || 1);
+    const desiredDays = Math.min(3, Math.max(1, Math.ceil(sessionCount / blockLength)));
+    if (days.size < desiredDays) {
+      const penalty = (desiredDays - days.size) * softWeights.courseDistribution;
+      courseDistributionPenalty += penalty;
+      addSection(key.split('|')[0], penalty);
+    }
+  }
+
+  for (const [key, periodMap] of coursePeriods) {
+    for (const daySet of periodMap.values()) {
+      if (daySet.size > 1) {
+        const penalty = (daySet.size - 1) * softWeights.repeatedCoursePeriod;
+        repeatedPeriodPenalty += penalty;
+        addSection(key.split('|')[0], penalty);
+      }
+    }
+  }
+
+  for (const [key, arr] of sectionDaySessions) {
+    arr.sort((a, b) => (slotByKey.get(a.day + '|' + a.timeSlotId)?.periodIdx || 0) - (slotByKey.get(b.day + '|' + b.timeSlotId)?.periodIdx || 0));
+    for (let i = 0; i < arr.length - 1; i++) {
+      const a = arr[i], b = arr[i + 1];
+      const pa = slotByKey.get(a.day + '|' + a.timeSlotId)?.periodIdx;
+      const pb = slotByKey.get(b.day + '|' + b.timeSlotId)?.periodIdx;
+      if (pa === undefined || pb !== pa + 1) continue;
+      const ra = roomById.get(a.roomId), rb = roomById.get(b.roomId);
+      if (!ra || !rb || ra.building === rb.building) continue;
+      const minutes = Math.max(10, softWeights.travel > 0 ? Number(problem.slots.length ? 10 : 10) : 10);
+      const penalty = (minutes / 10) * softWeights.travel;
+      travelPenalty += penalty;
+      addSection(key.split('|')[0], penalty);
     }
   }
 
@@ -1042,7 +1191,10 @@ function calculateSoftPenalties(
       studentGapsPenalty +
       studentWorkloadImbalancePenalty +
       courseDistributionPenalty +
-      roomCapacityFitPenalty -
+      roomCapacityFitPenalty +
+      studentConsecutivePenalty +
+      travelPenalty +
+      repeatedPeriodPenalty -
       facultyPreferenceBonus
   );
 
@@ -1054,6 +1206,12 @@ function calculateSoftPenalties(
     courseDistributionPenalty: Number(courseDistributionPenalty.toFixed(1)),
     roomCapacityFitPenalty: Number(roomCapacityFitPenalty.toFixed(1)),
     facultyPreferenceBonus: Number(facultyPreferenceBonus.toFixed(1)),
+    studentConsecutivePenalty: Number(studentConsecutivePenalty.toFixed(1)),
+    travelPenalty: Number(travelPenalty.toFixed(1)),
+    courseSpreadPenalty: Number(courseDistributionPenalty.toFixed(1)),
+    repeatedPeriodPenalty: Number(repeatedPeriodPenalty.toFixed(1)),
+    byFaculty: Object.fromEntries(Object.entries(byFaculty).map(([k,v]) => [k, Number(v.toFixed(1))])),
+    bySection: Object.fromEntries(Object.entries(bySection).map(([k,v]) => [k, Number(v.toFixed(1))])),
     totalPenalty: Number(totalPenalty.toFixed(1)),
   };
 }
@@ -1066,7 +1224,8 @@ function optimizeCandidatesPhaseB(
   problem: CompiledProblem,
   prng: SeededPRNG,
   remainingBudgetMs: number,
-  profile: OptimizationProfile = 'BALANCED'
+  profile: OptimizationProfile = 'BALANCED',
+  softWeights: SoftWeightConfig = DEFAULT_SOFT_WEIGHTS_BY_PROFILE[profile]
 ) {
   const endBy = performance.now() + Math.max(50, remainingBudgetMs);
 
@@ -1105,7 +1264,7 @@ function optimizeCandidatesPhaseB(
       if (!validateHardConstraintsFast(swappedSessions, problem)) continue;
 
       // Compute new soft penalty with current profile
-      const newPenalty = calculateSoftPenalties(swappedSessions, problem, profile);
+      const newPenalty = calculateSoftPenalties(swappedSessions, problem, profile, softWeights);
       const newScore = Math.max(10, Math.min(100, Math.round(100 - newPenalty.totalPenalty)));
 
       if (newScore > currentScore) {
