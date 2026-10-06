@@ -127,7 +127,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
     return () => { active = false; };
   }, [setCurrentRole, onSuccessLogin]);
   // Password Requirement Checks
-  const reqLength = newPassword.length >= 8;
+  const reqLength = newPassword.length >= 12 && newPassword.length <= 128;
   const reqUpper = /[A-Z]/.test(newPassword);
   const reqLower = /[a-z]/.test(newPassword);
   const reqNumber = /[0-9]/.test(newPassword);
@@ -283,38 +283,41 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
     setIsLoading(true);
     try { await requestPasswordReset(forgotEmail.trim()); } finally { setResendCooldown(60); setIsLoading(false); }
   };
-  /**
-   * Handle Reset Password Submit (Step 3: Update Password)
-   */
+  /** Handle password reset submit after token validation. */
   const handleResetPasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
     setSuccessMessage(null);
-
+    if (!resetToken) {
+      setScreenMode('recovery_invalid');
+      setErrorMessage('This reset link is missing or invalid.');
+      return;
+    }
     if (!resetPasswordPolicy.isValid) {
       setErrorMessage(`Please ensure your new password meets all security criteria: ${resetPasswordPolicy.errors.join(', ')}.`);
       return;
     }
     if (newPassword !== confirmNewPassword) {
-      setError  const handleResetPasswordSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMessage(null);
-    setSuccessMessage(null);
-    if (!resetToken) { setScreenMode('recovery_invalid'); setErrorMessage('This reset link is missing or invalid.'); return; }
-    if (!resetPasswordPolicy.isValid) { setErrorMessage(`Please ensure your new password meets all security criteria: ${resetPasswordPolicy.errors.join(', ')}.`); return; }
-    if (newPassword !== confirmNewPassword) { setErrorMessage('New passwords do not match.'); return; }
+      setErrorMessage('New passwords do not match.');
+      return;
+    }
     setIsLoading(true);
     try {
-      const res = await resetPassword(resetToken, newPassword);
-      if (!res.success) throw new Error(res.message || 'Failed to update password.');
+      const result = await resetPassword(resetToken, newPassword);
+      if (!result.success) throw new Error(result.message || 'Failed to update password.');
       setScreenMode('reset_success');
       setSuccessMessage('Password reset successfully.');
-      setLoginEmail(''); setLoginPassword(''); setResetToken(null);
+      setLoginEmail('');
+      setLoginPassword('');
+      setResetToken(null);
       window.history.replaceState({}, document.title, window.location.pathname);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to update password. Please try again.';
-      if (/expired|invalid|token/i.test(msg)) setScreenMode('recovery_invalid'); else setErrorMessage(msg);
-    } finally { setIsLoading(false); }
+      const message = err instanceof Error ? err.message : 'Failed to update password. Please try again.';
+      if (/expired|invalid|token/i.test(message)) setScreenMode('recovery_invalid');
+      setErrorMessage(message);
+    } finally {
+      setIsLoading(false);
+    }
   };
   return (
     <div className="min-h-screen w-full bg-[#F7F6F2] dark:bg-[#0c0c0e] text-stone-900 dark:text-zinc-100 flex flex-col justify-center items-center p-4 sm:p-6 lg:p-8 font-sans relative overflow-x-hidden selection:bg-[#8C1B2E]/20 selection:text-[#8C1B2E]">
