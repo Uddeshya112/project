@@ -672,8 +672,8 @@ export function TimetableGridView() {
                 Cancel
               </button>
               <button
-                onClick={() => {
-                  const result = addSession({
+                onClick={async () => {
+                  const result = await addSession({
                     courseId: newCourseId,
                     facultyId: newFacultyId,
                     roomId: newRoomId,
