@@ -392,366 +392,248 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     return calculateHealthScore(sessions, rooms, facultyMembers, sections, courses);
   }, [sessions, rooms, facultyMembers, sections, courses]);
 
+  const persistMutation = async (endpoint: string, method: string, body?: unknown) => {
+    const res = await fetch(apiUrl(endpoint), {
+      method,
+      headers: getAuthHeaders(),
+      credentials: 'include',
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.success === false) {
+      throw new Error(data.message || 'The server rejected the change.');
+    }
+    return data;
+  };
+
   // CRUD: Academic Year
   const updateAcademicYear = async (updates: Partial<AcademicYearConfig>) => {
-    setAcademicYear(prev => ({ ...prev, ...updates }));
-    setAuditLogs(prev => [
-      {
-        id: `log-${Date.now()}`,
-        timestamp: new Date().toLocaleString(),
-        userId: 'coordinator',
-        userName: 'Timetable Coordinator',
-        action: 'ACADEMIC_YEAR_CONFIG_UPDATED',
-        entityType: 'AcademicYearConfig',
-        entityId: academicYear.id,
-        details: 'Updated semester calendar and working period parameters.',
-      },
-      ...prev,
-    ]);
-    return { success: true, message: 'Success' };
+    try {
+      const data = await persistMutation('/api/academic/year', 'PATCH', updates);
+      setAcademicYear(data.academicYear);
+      return { success: true, message: 'Success' };
+    } catch (err: any) {
+      return { success: false, message: err?.message || 'Could not save academic year.' };
+    }
   };
 
   // CRUD: Departments
   const addDepartment = async (dept: Omit<Department, 'id'>) => {
-    const newId = `dept-${dept.code.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
-    const newDept: Department = { ...dept, id: newId };
-    setDepartments(prev => [...prev, newDept]);
-
-    fetch('/api/academic/departments', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(dept),
-    }).catch(err => console.warn('[SUPABASE_API] Department persistence notice:', err));
-    return { success: true, message: 'Success' };
+    try {
+      const data = await persistMutation('/api/academic/departments', 'POST', dept);
+      setDepartments(prev => [...prev, data.department]);
+      return { success: true, message: 'Success' };
+    } catch (err: any) { return { success: false, message: err?.message || 'Could not create department.' }; }
   };
 
   const updateDepartment = async (id: string, updates: Partial<Department>) => {
-    setDepartments(prev => prev.map(d => (d.id === id ? { ...d, ...updates } : d)));
-
-    fetch(`/api/academic/departments/${encodeURIComponent(id)}`, {
-      method: 'PUT',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(updates),
-    }).catch(err => console.warn('[SUPABASE_API] Department update notice:', err));
-    return { success: true, message: 'Success' };
+    try {
+      const data = await persistMutation(`/api/academic/departments/${encodeURIComponent(id)}`, 'PUT', updates);
+      setDepartments(prev => prev.map(d => d.id === id ? data.department : d));
+      return { success: true, message: 'Success' };
+    } catch (err: any) { return { success: false, message: err?.message || 'Could not update department.' }; }
   };
 
   const deleteDepartment = async (id: string) => {
-    setDepartments(prev => prev.filter(d => d.id !== id));
-
-    fetch(`/api/academic/departments/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders(),
-    }).catch(err => console.warn('[SUPABASE_API] Department deletion notice:', err));
-    return { success: true, message: 'Success' };
+    try {
+      await persistMutation(`/api/academic/departments/${encodeURIComponent(id)}`, 'DELETE');
+      setDepartments(prev => prev.filter(d => d.id !== id));
+      return { success: true, message: 'Success' };
+    } catch (err: any) { return { success: false, message: err?.message || 'Could not delete department.' }; }
   };
 
   const toggleDepartmentStatus = async (id: string) => {
     const dept = departments.find(d => d.id === id);
-    if (!dept) return { success: false, error: 'Department not found' };
-    const nextStatus = dept.status === 'Active' ? 'Inactive' : 'Active';
-    await updateDepartment(id, { status: nextStatus });
-    return { success: true, message: 'Success' };
+    if (!dept) return { success: false, message: 'Department not found.' };
+    return updateDepartment(id, { status: dept.status === 'Active' ? 'Inactive' : 'Active' });
   };
 
   // CRUD: Programs
   const addProgram = async (prog: Omit<Program, 'id'>) => {
-    const newId = `prog-${prog.code.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
-    const newProg: Program = { ...prog, id: newId };
-    setPrograms(prev => [...prev, newProg]);
-
-    fetch('/api/academic/programs', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(prog),
-    }).catch(err => console.warn('[SUPABASE_API] Program persistence notice:', err));
-    return { success: true, message: 'Success' };
+    try {
+      const data = await persistMutation('/api/academic/programs', 'POST', prog);
+      setPrograms(prev => [...prev, data.program]);
+      return { success: true, message: 'Success' };
+    } catch (err: any) { return { success: false, message: err?.message || 'Could not create program.' }; }
   };
 
   const updateProgram = async (id: string, updates: Partial<Program>) => {
-    setPrograms(prev => prev.map(p => (p.id === id ? { ...p, ...updates } : p)));
-
-    fetch(`/api/academic/programs/${encodeURIComponent(id)}`, {
-      method: 'PUT',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(updates),
-    }).catch(err => console.warn('[SUPABASE_API] Program update notice:', err));
-    return { success: true, message: 'Success' };
+    try {
+      const data = await persistMutation(`/api/academic/programs/${encodeURIComponent(id)}`, 'PUT', updates);
+      setPrograms(prev => prev.map(p => p.id === id ? data.program : p));
+      return { success: true, message: 'Success' };
+    } catch (err: any) { return { success: false, message: err?.message || 'Could not update program.' }; }
   };
 
   const deleteProgram = async (id: string) => {
-    setPrograms(prev => prev.filter(p => p.id !== id));
-
-    fetch(`/api/academic/programs/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders(),
-    }).catch(err => console.warn('[SUPABASE_API] Program deletion notice:', err));
-    return { success: true, message: 'Success' };
+    try {
+      await persistMutation(`/api/academic/programs/${encodeURIComponent(id)}`, 'DELETE');
+      setPrograms(prev => prev.filter(p => p.id !== id));
+      return { success: true, message: 'Success' };
+    } catch (err: any) { return { success: false, message: err?.message || 'Could not delete program.' }; }
   };
 
-  // CRUD: Rooms & Labs
+  // CRUD: Rooms
   const addRoom = async (room: Omit<Room, 'id'>) => {
-    const newId = `room-${room.name.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
-    const newRoom: Room = { ...room, id: newId };
-    setRooms(prev => [...prev, newRoom]);
-
-    fetch('/api/academic/rooms', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(room),
-    }).catch(err => console.warn('[SUPABASE_API] Room persistence notice:', err));
-    return { success: true, message: 'Success' };
+    try {
+      const data = await persistMutation('/api/academic/rooms', 'POST', room);
+      setRooms(prev => [...prev, data.room]);
+      return { success: true, message: 'Success' };
+    } catch (err: any) { return { success: false, message: err?.message || 'Could not create room.' }; }
   };
 
   const updateRoom = async (id: string, updates: Partial<Room>) => {
-    setRooms(prev => prev.map(r => (r.id === id ? { ...r, ...updates } : r)));
-
-    fetch(`/api/academic/rooms/${encodeURIComponent(id)}`, {
-      method: 'PUT',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(updates),
-    }).catch(err => console.warn('[SUPABASE_API] Room update notice:', err));
-    return { success: true, message: 'Success' };
+    try {
+      const data = await persistMutation(`/api/academic/rooms/${encodeURIComponent(id)}`, 'PUT', updates);
+      setRooms(prev => prev.map(r => r.id === id ? data.room : r));
+      return { success: true, message: 'Success' };
+    } catch (err: any) { return { success: false, message: err?.message || 'Could not update room.' }; }
   };
 
   const deleteRoom = async (id: string) => {
-    setRooms(prev => prev.filter(r => r.id !== id));
-
-    fetch(`/api/academic/rooms/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders(),
-    }).catch(err => console.warn('[SUPABASE_API] Room deletion notice:', err));
-    return { success: true, message: 'Success' };
+    try {
+      await persistMutation(`/api/academic/rooms/${encodeURIComponent(id)}`, 'DELETE');
+      setRooms(prev => prev.filter(r => r.id !== id));
+      return { success: true, message: 'Success' };
+    } catch (err: any) { return { success: false, message: err?.message || 'Could not delete room.' }; }
   };
 
   const toggleRoomAvailability = async (id: string) => {
-    const rm = rooms.find(r => r.id === id);
-    if (!rm) return { success: false, error: 'Room not found' };
-    await updateRoom(id, { isAvailable: !rm.isAvailable });
-    return { success: true, message: 'Success' };
+    const room = rooms.find(r => r.id === id);
+    if (!room) return { success: false, message: 'Room not found.' };
+    return updateRoom(id, { isAvailable: !room.isAvailable });
   };
 
   // CRUD: Faculty
   const addFaculty = async (fac: Omit<Faculty, 'id'>) => {
-    const newId = `fac-${fac.email.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '')}`;
-    const newFac: Faculty = { ...fac, id: newId };
-    setFacultyMembers(prev => [...prev, newFac]);
-
-    fetch('/api/academic/faculty', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(fac),
-    }).catch(err => console.warn('[SUPABASE_API] Faculty persistence notice:', err));
-    return { success: true, message: 'Success' };
+    try {
+      const data = await persistMutation('/api/academic/faculty', 'POST', fac);
+      setFacultyMembers(prev => [...prev, data.faculty]);
+      return { success: true, message: 'Success' };
+    } catch (err: any) { return { success: false, message: err?.message || 'Could not create faculty record.' }; }
   };
 
   const updateFaculty = async (id: string, updates: Partial<Faculty>) => {
-    setFacultyMembers(prev => prev.map(f => (f.id === id ? { ...f, ...updates } : f)));
-
-    fetch(`/api/academic/faculty/${encodeURIComponent(id)}`, {
-      method: 'PUT',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(updates),
-    }).catch(err => console.warn('[SUPABASE_API] Faculty update notice:', err));
-    return { success: true, message: 'Success' };
+    try {
+      const data = await persistMutation(`/api/academic/faculty/${encodeURIComponent(id)}`, 'PUT', updates);
+      setFacultyMembers(prev => prev.map(f => f.id === id ? data.faculty : f));
+      return { success: true, message: 'Success' };
+    } catch (err: any) { return { success: false, message: err?.message || 'Could not update faculty record.' }; }
   };
 
   const deleteFaculty = async (id: string) => {
-    setFacultyMembers(prev => prev.filter(f => f.id !== id));
-
-    fetch(`/api/academic/faculty/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders(),
-    }).catch(err => console.warn('[SUPABASE_API] Faculty deletion notice:', err));
-    return { success: true, message: 'Success' };
+    try {
+      await persistMutation(`/api/academic/faculty/${encodeURIComponent(id)}`, 'DELETE');
+      setFacultyMembers(prev => prev.filter(f => f.id !== id));
+      return { success: true, message: 'Success' };
+    } catch (err: any) { return { success: false, message: err?.message || 'Could not delete faculty record.' }; }
   };
 
   const toggleFacultyStatus = async (id: string) => {
-    setFacultyMembers(prev =>
-      prev.map(f => {
-        if (f.id !== id) return f;
-        const nextStatus = f.status === 'Active' ? 'Inactive' : 'Active';
-        updateFaculty(id, { status: nextStatus });
-        return { ...f, status: nextStatus };
-      })
-    );
-    return { success: true, message: 'Success' };
+    const fac = facultyMembers.find(f => f.id === id);
+    if (!fac) return { success: false, message: 'Faculty record not found.' };
+    return updateFaculty(id, { status: fac.status === 'Active' ? 'Inactive' : 'Active' });
   };
 
   const updateFacultyAvailability = async (id: string, preferences: Faculty['preferences']) => {
-    await updateFaculty(id, { preferences });
-    return { success: true, message: 'Success' };
+    return updateFaculty(id, { preferences });
   };
 
   // CRUD: Sections
   const addSection = async (sec: Omit<StudentSection, 'id'>) => {
-    const newId = `sec-${sec.name.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
-    const newSec: StudentSection = {
-      ...sec,
-      id: newId,
-      subSections: sec.subSections || [
-        { id: `sub-${newId}-1`, sectionId: newId, name: '1', studentCount: Math.ceil(sec.studentCount / 2), type: 'Lab' },
-        { id: `sub-${newId}-2`, sectionId: newId, name: '2', studentCount: Math.floor(sec.studentCount / 2), type: 'Lab' },
-      ],
-    };
-    setSections(prev => [...prev, newSec]);
-
-    fetch('/api/academic/groups', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(sec),
-    }).catch(err => console.warn('[SUPABASE_API] Cohort persistence notice:', err));
-    return { success: true, message: 'Success' };
+    try {
+      const data = await persistMutation('/api/academic/groups', 'POST', sec);
+      setSections(prev => [...prev, data.section]);
+      return { success: true, message: 'Success' };
+    } catch (err: any) { return { success: false, message: err?.message || 'Could not create section.' }; }
   };
 
   const updateSection = async (id: string, updates: Partial<StudentSection>) => {
-    setSections(prev => prev.map(s => (s.id === id ? { ...s, ...updates } : s)));
-
-    fetch(`/api/academic/groups/${encodeURIComponent(id)}`, {
-      method: 'PUT',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(updates),
-    }).catch(err => console.warn('[SUPABASE_API] Cohort update notice:', err));
-    return { success: true, message: 'Success' };
+    try {
+      const data = await persistMutation(`/api/academic/groups/${encodeURIComponent(id)}`, 'PUT', updates);
+      setSections(prev => prev.map(s => s.id === id ? data.section : s));
+      return { success: true, message: 'Success' };
+    } catch (err: any) { return { success: false, message: err?.message || 'Could not update section.' }; }
   };
 
   const deleteSection = async (id: string) => {
-    setSections(prev => prev.filter(s => s.id !== id));
-
-    fetch(`/api/academic/groups/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders(),
-    }).catch(err => console.warn('[SUPABASE_API] Cohort deletion notice:', err));
-    return { success: true, message: 'Success' };
+    try {
+      await persistMutation(`/api/academic/groups/${encodeURIComponent(id)}`, 'DELETE');
+      setSections(prev => prev.filter(s => s.id !== id));
+      return { success: true, message: 'Success' };
+    } catch (err: any) { return { success: false, message: err?.message || 'Could not delete section.' }; }
   };
 
   const addSubSection = async (sectionId: string, subSec: Omit<SubSection, 'id' | 'sectionId'>) => {
-    const subId = `sub-${sectionId}-${subSec.name.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
-    const newSub: SubSection = {
-      ...subSec,
-      id: subId,
-      sectionId,
-    };
-    setSections(prev =>
-      prev.map(s => {
-        if (s.id !== sectionId) return s;
-        return {
-          ...s,
-          subSections: [...(s.subSections || []), newSub],
-        };
-      })
-    );
-
-    fetch('/api/academic/subgroups', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify({ groupId: sectionId, name: subSec.name, studentCount: subSec.studentCount, type: subSec.type }),
-    }).catch(err => console.warn('[SUPABASE_API] Subgroup persistence notice:', err));
-    return { success: true, message: 'Success' };
+    try {
+      const data = await persistMutation('/api/academic/subgroups', 'POST', { groupId: sectionId, ...subSec });
+      setSections(prev => prev.map(s => s.id === sectionId ? { ...s, subSections: [...(s.subSections || []), data.subgroup] } : s));
+      return { success: true, message: 'Success' };
+    } catch (err: any) { return { success: false, message: err?.message || 'Could not create subgroup.' }; }
   };
 
   const deleteSubSection = async (sectionId: string, subSecId: string) => {
-    setSections(prev =>
-      prev.map(s => {
-        if (s.id !== sectionId) return s;
-        return {
-          ...s,
-          subSections: (s.subSections || []).filter(sub => sub.id !== subSecId),
-        };
-      })
-    );
-
-    fetch(`/api/academic/subgroups/${encodeURIComponent(sectionId)}/${encodeURIComponent(subSecId)}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders(),
-    }).catch(err => console.warn('[SUPABASE_API] Subgroup deletion notice:', err));
-    return { success: true, message: 'Success' };
+    try {
+      await persistMutation(`/api/academic/subgroups/${encodeURIComponent(sectionId)}/${encodeURIComponent(subSecId)}`, 'DELETE');
+      setSections(prev => prev.map(s => s.id === sectionId ? { ...s, subSections: (s.subSections || []).filter(sub => sub.id !== subSecId) } : s));
+      return { success: true, message: 'Success' };
+    } catch (err: any) { return { success: false, message: err?.message || 'Could not delete subgroup.' }; }
   };
 
   // CRUD: Courses
   const addCourse = async (course: Omit<Course, 'id'>) => {
-    const newId = `course-${course.code.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
-    const newCourse: Course = {
-      ...course,
-      id: newId,
-    };
-    setCourses(prev => [...prev, newCourse]);
-
-    fetch('/api/academic/courses', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(course),
-    }).catch(err => console.warn('[SUPABASE_API] Course persistence notice:', err));
-    return { success: true, message: 'Success' };
+    try {
+      const data = await persistMutation('/api/academic/courses', 'POST', course);
+      setCourses(prev => [...prev, data.course]);
+      return { success: true, message: 'Success' };
+    } catch (err: any) { return { success: false, message: err?.message || 'Could not create course.' }; }
   };
 
   const updateCourse = async (id: string, updates: Partial<Course>) => {
-    setCourses(prev => prev.map(c => (c.id === id ? { ...c, ...updates } : c)));
-
-    fetch(`/api/academic/courses/${encodeURIComponent(id)}`, {
-      method: 'PUT',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(updates),
-    }).catch(err => console.warn('[SUPABASE_API] Course update notice:', err));
-    return { success: true, message: 'Success' };
+    try {
+      const data = await persistMutation(`/api/academic/courses/${encodeURIComponent(id)}`, 'PUT', updates);
+      setCourses(prev => prev.map(c => c.id === id ? data.course : c));
+      return { success: true, message: 'Success' };
+    } catch (err: any) { return { success: false, message: err?.message || 'Could not update course.' }; }
   };
 
   const deleteCourse = async (id: string) => {
-    setCourses(prev => prev.filter(c => c.id !== id));
-
-    fetch(`/api/academic/courses/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders(),
-    }).catch(err => console.warn('[SUPABASE_API] Course deletion notice:', err));
-    return { success: true, message: 'Success' };
+    try {
+      await persistMutation(`/api/academic/courses/${encodeURIComponent(id)}`, 'DELETE');
+      setCourses(prev => prev.filter(c => c.id !== id));
+      return { success: true, message: 'Success' };
+    } catch (err: any) { return { success: false, message: err?.message || 'Could not delete course.' }; }
   };
 
   const toggleCourseStatus = async (id: string) => {
-    const crs = courses.find(c => c.id === id);
-    if (!crs) return { success: false, error: 'Course not found' };
-    const nextStatus = crs.status === 'Active' ? 'Archived' : 'Active';
-    await updateCourse(id, { status: nextStatus });
-    return { success: true, message: 'Success' };
+    const course = courses.find(c => c.id === id);
+    if (!course) return { success: false, message: 'Course not found.' };
+    return updateCourse(id, { status: course.status === 'Active' ? 'Archived' : 'Active' });
   };
 
   // CRUD: Course Allocations
   const addAllocation = async (alloc: Omit<CourseAllocation, 'id' | 'status'>) => {
-    const allocId = `alloc-${alloc.courseId}-${alloc.sectionId}${alloc.subSectionId ? `-${alloc.subSectionId}` : ''}-${alloc.sessionType.toLowerCase()}`;
-    const newAlloc: CourseAllocation = {
-      ...alloc,
-      id: allocId,
-      status: 'Allocated',
-    };
-    setAllocations(prev => [...prev, newAlloc]);
-
-    fetch('/api/academic/allocations', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(alloc),
-    }).catch(err => console.warn('[SUPABASE_API] Allocation persistence notice:', err));
-    return { success: true, message: 'Success' };
+    try {
+      const data = await persistMutation('/api/academic/allocations', 'POST', alloc);
+      setAllocations(prev => [...prev, data.allocation]);
+      return { success: true, message: 'Success' };
+    } catch (err: any) { return { success: false, message: err?.message || 'Could not create allocation.' }; }
   };
 
   const updateAllocation = async (id: string, updates: Partial<CourseAllocation>) => {
-    setAllocations(prev => prev.map(a => (a.id === id ? { ...a, ...updates } : a)));
-
-    fetch(`/api/academic/allocations/${encodeURIComponent(id)}`, {
-      method: 'PUT',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(updates),
-    }).catch(err => console.warn('[SUPABASE_API] Allocation update notice:', err));
-    return { success: true, message: 'Success' };
+    try {
+      const data = await persistMutation(`/api/academic/allocations/${encodeURIComponent(id)}`, 'PUT', updates);
+      setAllocations(prev => prev.map(a => a.id === id ? data.allocation : a));
+      return { success: true, message: 'Success' };
+    } catch (err: any) { return { success: false, message: err?.message || 'Could not update allocation.' }; }
   };
 
   const deleteAllocation = async (id: string) => {
-    setAllocations(prev => prev.filter(a => a.id !== id));
-
-    fetch(`/api/academic/allocations/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders(),
-    }).catch(err => console.warn('[SUPABASE_API] Allocation deletion notice:', err));
-    return { success: true, message: 'Success' };
-  };
+    try {
+      await persistMutation(`/api/academic/allocations/${encodeURIComponent(id)}`, 'DELETE');
+      setAllocations(prev => prev.filter(a => a.id !== id));
+      return { success: true, message: 'Success' };
+    } catch (err: any) { return { success: false, message: err?.message || 'Could not delete allocation.' }; }
 
   // CRUD: Constraints
   const addConstraint = async (constraint: Omit<AcademicConstraint, 'id'>) => {
