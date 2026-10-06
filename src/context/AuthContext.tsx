@@ -120,7 +120,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const currentInstitution = CURRENT_INSTITUTION;
   const authorizedWorkspaces = currentUser?.authorizedWorkspaces?.length
     ? currentUser.authorizedWorkspaces
-    : currentRoleCode ? ROLE_WORKSPACES[currentRoleCode] : ['Student'];
+    : currentRoleCode ? ROLE_WORKSPACES[currentRoleCode] : (['Student'] as WorkspaceType[]);
 
   const currentRole = useMemo(
     () => (currentRoleCode ? ROLES.find((r) => r.code === currentRoleCode) ?? null : null),
@@ -140,10 +140,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const applyAuthUser = useCallback((raw: any) => {
     const user = fromServerUser(raw);
-    const roleCode = user.roleCode;
+    const roleCode = user.roleCode as RoleCode | undefined;
     setCurrentUser(user);
     setCurrentRoleCode(roleCode);
-    const workspaces = user.authorizedWorkspaces?.length ? user.authorizedWorkspaces : (roleCode ? ROLE_WORKSPACES[roleCode] : ['Student']);
+    const workspaces: WorkspaceType[] = user.authorizedWorkspaces?.length ? (user.authorizedWorkspaces as WorkspaceType[]) : (roleCode ? ROLE_WORKSPACES[roleCode] : ['Student' as WorkspaceType]);
     setCurrentWorkspace((prev) => workspaces.includes(prev) ? prev : workspaces[0]);
     setAuthStatus('AUTHENTICATED');
     setAllUsers((prev) => [user, ...prev.filter((u) => u.id !== user.id)]);
