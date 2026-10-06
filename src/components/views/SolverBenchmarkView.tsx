@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useTimetable } from '../../context/TimetableContext';
 import {
   runDSATURSolver,
-  runCPSATSolver,
+  runHeuristicRepairSolver,
   runFastGreedySolver,
   buildConflictGraph,
   SolverBenchmarkResult,
@@ -26,30 +26,31 @@ export function SolverBenchmarkView() {
   const { courses, sections, facultyMembers, rooms, sessions } = useTimetable();
 
   const [benchmarkResult, setBenchmarkResult] = useState<SolverBenchmarkResult | null>(null);
-  const [activeSolverType, setActiveSolverType] = useState<'DSATUR' | 'CPSAT' | 'GREEDY'>('CPSAT');
+  const [activeSolverType, setActiveSolverType] = useState<'DSATUR' | 'REPAIR' | 'GREEDY'>('CPSAT');
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [graphData, setGraphData] = useState<ConflictGraphData>(() =>
     buildConflictGraph(courses, sections, facultyMembers, rooms)
   );
 
-  const handleRunSolver = (type: 'DSATUR' | 'CPSAT' | 'GREEDY') => {
+  const handleRunSolver = (type: 'DSATUR' | 'REPAIR' | 'GREEDY') => {
     setIsRunning(true);
     setActiveSolverType(type);
 
-    setTimeout(() => {
+    try {
       let res: { benchmark: SolverBenchmarkResult };
       if (type === 'DSATUR') {
         res = runDSATURSolver(courses, sections, facultyMembers, rooms, sessions);
-      } else if (type === 'CPSAT') {
-        res = runCPSATSolver(courses, sections, facultyMembers, rooms, sessions);
+      } else if (type === 'REPAIR') {
+        res = runHeuristicRepairSolver(courses, sections, facultyMembers, rooms, sessions);
       } else {
         res = runFastGreedySolver(courses, sections, facultyMembers, rooms);
       }
 
       setBenchmarkResult(res.benchmark);
       setGraphData(buildConflictGraph(courses, sections, facultyMembers, rooms));
+    } finally {
       setIsRunning(false);
-    }, 450);
+    }
   };
 
   return (
@@ -64,7 +65,7 @@ export function SolverBenchmarkView() {
           Conflict Graph & Constraint Optimization Benchmarks
         </h1>
         <p className="text-xs sm:text-sm text-stone-600 dark:text-zinc-400 mt-1 max-w-3xl leading-relaxed">
-          Directly compares Google OR-Tools CP-SAT (Integer Optimization) with DSATUR Graph Coloring (Saturation Degree Heuristic) and Fast Greedy construction. Evaluated against ITC academic timetabling standards.
+          Directly compares a deterministic heuristic repair pass with DSATUR Graph Coloring (Saturation Degree Heuristic) and Fast Greedy construction. The benchmark reports only measured heuristic behavior; it does not claim mathematical optimality.
         </p>
       </div>
 
@@ -72,21 +73,21 @@ export function SolverBenchmarkView() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {/* CP-SAT Card */}
         <div className={`p-5 rounded-xl border transition-all ${
-          activeSolverType === 'CPSAT'
+          activeSolverType === 'REPAIR'
             ? 'bg-red-50/60 border-[#8C1B2E] shadow-xs dark:bg-red-950/20 dark:border-red-600'
             : 'bg-[#FAF9F5] dark:bg-zinc-900 border-[#E5E2D9] dark:border-zinc-800'
         }`}>
           <div className="flex items-center justify-between mb-2">
             <span className="text-[10px] font-mono font-bold text-[#8C1B2E] dark:text-red-400 uppercase">
-              Mathematical Exact Model
+              Deterministic Repair Heuristic
             </span>
             <span className="text-[10px] px-2 py-0.5 rounded bg-red-100 text-[#8C1B2E] dark:bg-red-950/60 dark:text-red-300 font-mono font-semibold">
-              solver_cpsat.py
+              heuristic_repair
             </span>
           </div>
-          <h3 className="font-serif font-bold text-base text-stone-900 dark:text-zinc-100 mb-1">Google OR-Tools CP-SAT</h3>
+          <h3 className="font-serif font-bold text-base text-stone-900 dark:text-zinc-100 mb-1">Heuristic Repair Solver</h3>
           <p className="text-xs text-stone-600 dark:text-zinc-400 mb-4 leading-relaxed">
-            Multi-objective integer programming. Mathematically bounds soft constraints (lunch preservation, travel gap minimization) with 0 hard collisions.
+            Repairs cancelled sessions using the repository's hard-constraint feasibility checks. No external exact solver or optimality proof is claimed.
           </p>
           <button
             onClick={() => handleRunSolver('CPSAT')}
@@ -94,7 +95,7 @@ export function SolverBenchmarkView() {
             className="w-full py-2 bg-[#8C1B2E] hover:bg-[#731625] text-white rounded-lg text-xs font-semibold shadow-xs transition-all flex items-center justify-center gap-2 active:scale-95"
           >
             <Play className="h-3.5 w-3.5" />
-            <span>Execute CP-SAT Solver</span>
+            <span>Execute Repair Solver</span>
           </button>
         </div>
 
