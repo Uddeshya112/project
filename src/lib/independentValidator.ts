@@ -868,6 +868,36 @@ export function validateTimetableIndependently(
 
   const labSessionsCount = activeSessions.filter(s => s.type === 'Lab' || s.type === 'Practical').length;
   const labRoomsCount = rooms.filter(r => r.type === 'ComputerLab' || r.type === 'HardwareLab').length;
+  const teachingSlotsPerDay = Math.max(1, activeTimeSlots.length);
+  const totalRoomCapacitySlots = Math.max(1, rooms.length * Math.max(1, academicYear.workingDays.length) * teachingSlotsPerDay);
+  const totalLabCapacitySlots = Math.max(1, labRoomsCount * Math.max(1, academicYear.workingDays.length) * teachingSlotsPerDay);
+
+  // Parallel subgroup efficiency is derived from actual subgroup sessions.
+  // For each course/section with subgroup sessions, measure how many subgroup
+  // offerings can share the same day/period. 100 means all observed subgroup
+  // sessions for that offering were scheduled in parallel groups.
+  const subgroupGroups = new Map<string, { total: number; slots: Map<string, number> }>();
+  activeSessions
+    .filter((s) => s.subSectionId && (s.type === 'Lab' || s.type === 'Practical'))
+    .forEach((s) => {
+      const key = `${s.courseId}:${s.sectionId}`;
+      const entry = subgroupGroups.get(key) ?? { total: 0, slots: new Map<string, number>() };
+      entry.total += 1;
+      const slotKey = `${s.day}:${s.timeSlotId}`;
+      entry.slots.set(slotKey, (entry.slots.get(slotKey) ?? 0) + 1);
+      subgroupGroups.set(key, entry);
+    });
+  let subgroupParallelEfficiency = 100;
+  if (subgroupGroups.size) {
+    let numerator = 0;
+    let denominator = 0;
+    for (const group of subgroupGroups.values()) {
+      const maxParallel = Math.max(...group.slots.values(), 0);
+      numerator += maxParallel;
+      denominator += group.total;
+    }
+    subgroupParallelEfficiency = denominator > 0 ? Math.round((numerator / denominator) * 100) : 100;
+  }
 
   return {
     isValid,
@@ -881,10 +911,10 @@ export function validateTimetableIndependently(
     completionRate: Math.min(100, Math.round((scheduledHours / Math.max(1, totalRequiredHours)) * 100)),
     metrics: {
       facultyConflictFreeRate,
-      roomUtilizationRate: Math.min(100, Math.round((activeSessions.length / Math.max(1, rooms.length * 35)) * 100)),
-      labUtilizationRate: Math.min(100, Math.round((labSessionsCount / Math.max(1, labRoomsCount * 35)) * 100)),
+      roomUtilizationRate: Math.min(100, Math.round((activeSessions.length / totalRoomCapacitySlots) * 100)),
+      labUtilizationRate: Math.min(100, Math.round((labSessionsCount / totalLabCapacitySlots) * 100)),
       capacityComplianceRate,
-      subgroupParallelEfficiency: 96,
+      subgroupParallelEfficiency,
       sameCourseSameDayCount,
       sameCourseConsecutiveCount,
       totalStudentGaps,
