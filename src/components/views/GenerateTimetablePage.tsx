@@ -135,6 +135,7 @@ export function GenerateTimetablePage() {
         setGenerationOutput({
           candidates: res.routines.map((r: any, i: number) => ({
             candidateId: r.id,
+            versionNumber: r.versionNumber,
             seed: 1337 + i * 8642,
             sessions: r.sessions,
             hardConstraintViolations: r.validation.hardViolations,
@@ -206,7 +207,7 @@ export function GenerateTimetablePage() {
     if (!generationOutput || !generationOutput.candidates[idx]) return;
     setSelectedCandidateIdx(idx);
     applyCandidateAsDraft(generationOutput.candidates[idx]);
-    await selectRoutineAPI(idx + 1);
+    await selectRoutineAPI(generationOutput.candidates[idx].versionNumber ?? idx + 1);
   };
 
   const handlePublishCurrent = async () => {
