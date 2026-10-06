@@ -366,7 +366,10 @@ export function FacultyPortalView() {
                             Free period (Reserved)
                           </span>
                           <button
-                            onClick={() => runBusy(`slot:${slot.id}`, () => setFacultyProtectedSlot(currentFaculty.id, selectedDay, slot.id, 'Research'))}
+                            onClick={() => {
+                              if (!selectedDay) return;
+                              void runBusy(`slot:${slot.id}`, () => setFacultyProtectedSlot(currentFaculty.id, selectedDay, slot.id, 'Research'));
+                            }}
                             disabled={busy !== null}
                             className="text-xs text-stone-500 dark:text-zinc-400 hover:text-stone-900 dark:hover:text-zinc-200 underline disabled:opacity-50"
                           >
@@ -377,7 +380,10 @@ export function FacultyPortalView() {
                         <div className="flex items-center justify-between">
                           <span className="text-stone-400 dark:text-zinc-500 italic">Free period</span>
                           <button
-                            onClick={() => runBusy(`slot:${slot.id}`, () => setFacultyProtectedSlot(currentFaculty.id, selectedDay, slot.id, 'Research'))}
+                            onClick={() => {
+                              if (!selectedDay) return;
+                              void runBusy(`slot:${slot.id}`, () => setFacultyProtectedSlot(currentFaculty.id, selectedDay, slot.id, 'Research'));
+                            }}
                             disabled={busy !== null}
                             className="px-2.5 py-1 bg-white dark:bg-zinc-800 hover:bg-stone-50 dark:hover:bg-zinc-700 text-stone-700 dark:text-zinc-300 rounded-lg text-xs font-medium border border-[#E5E2D9] dark:border-zinc-700 transition-colors shadow-2xs disabled:opacity-50"
                           >
