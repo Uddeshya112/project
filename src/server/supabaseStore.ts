@@ -1,4 +1,3 @@
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import {
   Department,
   Program,
@@ -46,25 +45,6 @@ import {
 import { executeOptimizationEngine } from '../lib/optimizationEngine';
 import { findSelfHealingRecoverySlots } from '../lib/recoveryEngine';
 import { ExcelImportPreview } from '../lib/excelMasterService';
-
-// Initialize Supabase Client if environment variables are provided
-const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
-const supabaseKey =
-  process.env.SUPABASE_SECRET_KEY ||
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||
-  process.env.SUPABASE_ANON_KEY ||
-  process.env.SUPABASE_PUBLISHABLE_KEY ||
-  process.env.VITE_SUPABASE_ANON_KEY ||
-  '';
-
-export const supabase: SupabaseClient | null =
-  supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
-
-if (supabase) {
-  console.info('[SUPABASE] Initialized server-side client connection to Supabase PostgreSQL at ' + supabaseUrl);
-} else {
-  console.info('[SUPABASE] Running in autonomous authoritative PostgreSQL emulation mode (configured schema ready for live cutover)');
-}
 
 /**
  * Authoritative Supabase Relational Database Store
