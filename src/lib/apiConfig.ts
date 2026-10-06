@@ -5,11 +5,7 @@ export const RENDER_BACKEND_URL = 'https://tiet-timetable-km8w.onrender.com';
 export const API_BASE_URL: string = (() => {
   const envUrl = import.meta.env.VITE_API_BASE_URL;
   if (typeof envUrl === 'string' && envUrl.trim()) return envUrl.trim().replace(/\/$/, '');
-  if (typeof window !== 'undefined') {
-    const host = window.location.hostname;
-    if (host === 'localhost' || host === '127.0.0.1' || host.endsWith('.run.app')) return '';
-    if (host.endsWith('.vercel.app')) return '';
-  }
+  if (typeof window !== 'undefined') return '';
   return RENDER_BACKEND_URL;
 })();
 
