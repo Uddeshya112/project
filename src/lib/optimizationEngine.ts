@@ -1553,6 +1553,7 @@ function validateHardConstraintsFast(sessions: ClassSession[], problem: Compiled
   const roomOccupancy = new Map<string, boolean>();
   const secWholeOccupancy = new Map<string, boolean>();
   const subSecOccupancy = new Map<string, boolean>();
+  const subgroupSectionSlots = new Set<string>();
 
   for (const s of sessions) {
     const keySlot = `${s.day}_${s.timeSlotId}`;
@@ -1578,13 +1579,9 @@ function validateHardConstraintsFast(sessions: ClassSession[], problem: Compiled
       const subKey = `${s.subSectionId}_${keySlot}`;
       if (subSecOccupancy.has(subKey)) return false;
       subSecOccupancy.set(subKey, true);
+      subgroupSectionSlots.add(secKey);
     } else {
-      if (secWholeOccupancy.has(secKey)) return false;
-      for (const k of subSecOccupancy.keys()) {
-        if (k.endsWith(`_${keySlot}`) && k.startsWith(`${s.sectionId}`)) {
-          return false;
-        }
-      }
+      if (secWholeOccupancy.has(secKey) || subgroupSectionSlots.has(secKey)) return false;
       secWholeOccupancy.set(secKey, true);
     }
 
