@@ -1061,7 +1061,7 @@ export class TimetableStore {
       { id: 'faculty-focused', label: 'Faculty-focused', description: 'Prioritises faculty timetable quality and minimises faculty gaps.', optimizationProfile: 'FACULTY_FOCUSED' as OptimizationProfile, seed: 9999 },
     ];
     const routines = Array.isArray(b.routines) && b.routines.length
-      ? b.routines.slice(0, 3).map((r: any, i: number) => ({
+      ? b.routines.slice(0, 5).map((r: any, i: number) => ({
           id: String(r?.id ?? `routine-${i + 1}`).slice(0, 50),
           label: String(r?.label ?? `Routine ${i + 1}`).slice(0, 80),
           description: String(r?.description ?? '').slice(0, 300),
