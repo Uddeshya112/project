@@ -62,3 +62,7 @@ Run: `npm run test:solver`.
 The independent timetable validator is authoritative for candidate acceptance. Solver candidates are revalidated before they can be returned, and blocking violations reject the candidate. `scripts/run_solver_tests.ts` covers seeded determinism, property-based allocation sizes from 20–600, and an explicit infeasibility case.
 
 Run: `npm run test:solver`.
+
+## 5. Solver Hardening Gate — Task 4
+
+Pre-generation room compatibility is a hard gate. Each allocation must have an available room whose type, capacity, and declared equipment all match the activity. Missing compatibility is surfaced as a blocking validation item with the Rooms Management fix path.

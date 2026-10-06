@@ -188,46 +188,69 @@ export function validateAcademicSetup(
     }
   }
 
-  // 7. Check Capacity Compatibility
-  let capacityMismatchCount = 0;
+  // 7. Hard room-compatibility preflight.
+  // Every allocation must have at least one available room satisfying activity
+  // type, capacity, and all declared equipment requirements.
+  let incompatibleAllocationCount = 0;
   for (const alloc of allocations) {
     const section = sections.find(s => s.id === alloc.sectionId);
-    if (!section) continue;
-    const requiredCap = alloc.subSectionId ? Math.ceil(section.studentCount / 2) : section.studentCount;
-    const maxCapableRoom = Math.max(...availableRooms.map(r => r.capacity), 0);
-    if (requiredCap > maxCapableRoom) {
-      capacityMismatchCount++;
+    const course = courses.find(c => c.id === alloc.courseId);
+    if (!section || !course) continue;
+
+    const subgroup = alloc.subSectionId
+      ? section.subSections?.find(sub => sub.id === alloc.subSectionId)
+      : undefined;
+    const requiredCapacity = subgroup
+      ? subgroup.studentCount
+      : alloc.subSectionId
+        ? Math.ceil(section.studentCount / 2)
+        : section.studentCount;
+    const isLabActivity = alloc.sessionType === 'Lab' || alloc.sessionType === 'Practical';
+
+    const compatibleRooms = availableRooms.filter(room => {
+      const roomTypeOk = isLabActivity
+        ? (room.type === 'ComputerLab' || room.type === 'HardwareLab')
+        : (room.type === 'LectureHall' || room.type === 'SeminarRoom' || room.type === 'TutorialRoom');
+      return roomTypeOk
+        && room.capacity >= requiredCapacity
+        && course.requiredEquipment.every(eq => room.equipment.includes(eq));
+    });
+
+    if (compatibleRooms.length === 0) {
+      incompatibleAllocationCount++;
+      const equipmentText = course.requiredEquipment.length > 0
+        ? ` Required equipment: ${course.requiredEquipment.join(', ')}.`
+        : '';
+      items.push({
+        id: `val-room-compat-${alloc.id}`,
+        title: 'No Compatible Room for Allocation',
+        category: 'Infrastructure',
+        status: 'Error',
+        message: `Allocation ${alloc.id} for ${course.code} (${alloc.sessionType}) in ${section.name} has no available room that satisfies type and capacity.${equipmentText}`,
+        fixTab: 'rooms_mgmt',
+      });
     }
   }
 
-  if (capacityMismatchCount > 0) {
+  if (incompatibleAllocationCount === 0) {
     items.push({
-      id: 'val-cap-error',
-      title: 'Room Capacity Shortage',
-      category: 'Infrastructure',
-      status: 'Error',
-      message: `${capacityMismatchCount} allocation(s) exceed the largest available room capacity.`,
-      fixTab: 'rooms_mgmt',
-    });
-  } else {
-    items.push({
-      id: 'val-cap-ok',
-      title: 'Room Capacity Compliance',
+      id: 'val-room-compat-ok',
+      title: 'Room Compatibility',
       category: 'Infrastructure',
       status: 'Passed',
-      message: 'All section student counts fit within available physical rooms.',
+      message: 'Every allocation has at least one available room matching activity type, capacity, and required equipment.',
     });
   }
 
-  // 8. Check Lab Requirements vs Lab Availability
-  const labAllocations = allocations.filter(a => a.sessionType === 'Lab');
+  // 8. Lab inventory visibility.
+  const labAllocations = allocations.filter(a => a.sessionType === 'Lab' || a.sessionType === 'Practical');
   if (labAllocations.length > 0 && labs.length === 0) {
     items.push({
       id: 'val-lab-missing',
       title: 'Lab Allocation Without Laboratory Rooms',
       category: 'Infrastructure',
       status: 'Error',
-      message: `${labAllocations.length} lab session(s) required, but 0 Computer/Hardware Labs are configured.`,
+      message: `${labAllocations.length} lab/practical allocation(s) require a Computer Lab or Hardware Lab, but none are configured as available.`,
       fixTab: 'rooms_mgmt',
     });
   }

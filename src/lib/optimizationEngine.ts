@@ -191,7 +191,7 @@ export function compileSchedulingProblem(
   }
 
   const activeRooms = rooms.filter(r => r.isAvailable);
-  const activeFaculty = facultyMembers.filter(f => f.status !== 'Inactive');
+  const activeFaculty = facultyMembers.filter(f => f.status === 'Active');
   const activeSections = sections.filter(s => s.status !== 'Inactive');
 
   // Fast entity ID maps
@@ -231,6 +231,13 @@ export function compileSchedulingProblem(
     const secIdx = sectionMap.get(section.id)!;
     const subSecIdx = alloc.subSectionId ? subSectionIdMap.get(alloc.subSectionId) : undefined;
     const subSectionObj = alloc.subSectionId ? (section.subSections || []).find(sub => sub.id === alloc.subSectionId) : undefined;
+
+    if (!faculty.subjectsQualified.includes(course.code) && !faculty.subjectsQualified.includes(course.id)) {
+      infeasibilityReasons.push(
+        `Allocation ${alloc.id}: Faculty ${faculty.name} is not qualified to teach ${course.code}.`
+      );
+      continue;
+    }
     const durationPeriods = Number.isInteger(alloc.durationPeriods) && (alloc.durationPeriods ?? 0) > 0
       ? Number(alloc.durationPeriods)
       : (alloc.sessionType === 'Lab' || alloc.sessionType === 'Practical' ? 2 : 1);
@@ -256,11 +263,18 @@ export function compileSchedulingProblem(
     // Find candidate rooms capable of holding this allocation
     const candidateRoomsIndices: number[] = [];
     activeRooms.forEach((r, rIdx) => {
-      const isLabType = alloc.sessionType === 'Lab' && (r.type === 'ComputerLab' || r.type === 'HardwareLab');
-      const isLectureType = alloc.sessionType !== 'Lab' && (r.type === 'LectureHall' || r.type === 'SeminarRoom' || r.type === 'TutorialRoom');
-      
-      const requiredCapacity = subSectionObj ? subSectionObj.studentCount : (alloc.subSectionId ? Math.ceil(section.studentCount / 2) : section.studentCount);
-      if ((isLabType || isLectureType) && r.capacity >= requiredCapacity) {
+      const isLabActivity = alloc.sessionType === 'Lab' || alloc.sessionType === 'Practical';
+      const isLabRoom = r.type === 'ComputerLab' || r.type === 'HardwareLab';
+      const isTeachingRoom = r.type === 'LectureHall' || r.type === 'SeminarRoom' || r.type === 'TutorialRoom';
+      const requiredCapacity = subSectionObj
+        ? subSectionObj.studentCount
+        : (alloc.subSectionId ? Math.ceil(section.studentCount / 2) : section.studentCount);
+      const equipmentSatisfied = course.requiredEquipment.every(
+        requiredEquipment => r.equipment.includes(requiredEquipment)
+      );
+
+      const typeSatisfied = isLabActivity ? isLabRoom : isTeachingRoom;
+      if (typeSatisfied && r.capacity >= requiredCapacity && equipmentSatisfied) {
         candidateRoomsIndices.push(rIdx);
       }
     });
