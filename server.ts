@@ -146,6 +146,7 @@ async function initializeRuntime(){
   try {
     if(!databaseUrl){ if(process.env.NODE_ENV==='production') throw new Error('DATABASE_URL is required in production.'); throw new Error('DATABASE_URL is required. Use DATABASE_URL=pglite:memory for local tests/development.'); }
     db=await connectDb(databaseUrl);
+    await supabaseStore.init(db);
     authService=createAuth({db,demoMode:false,googleClientId:process.env.GOOGLE_CLIENT_ID,googleClientSecret:process.env.GOOGLE_CLIENT_SECRET,googleRedirectUri:process.env.GOOGLE_REDIRECT_URI,appUrl:process.env.APP_URL,allowedDomains:(process.env.ALLOWED_EMAIL_DOMAINS||'thapar.edu').split(',').map(v=>v.trim().toLowerCase().replace(/^@/,'')).filter(Boolean),sessionTtlHours:Number(process.env.SESSION_TTL_HOURS)||24,bcryptRounds:Number(process.env.BCRYPT_ROUNDS)||12,rosterLookup:(email:string)=>{ const state=supabaseStore.getBootstrapState(); const faculty=(state.facultyMembers||[]).find((f:any)=>String(f.email||'').toLowerCase()===email); if(faculty)return {roleCode:'FACULTY',name:faculty.name,department:faculty.departmentId||'',profile:{facultyId:faculty.id}}; const student=findStudentByEmail(email); if(student)return {roleCode:'STUDENT',name:student.name,department:student.programCode||'',profile:{rollNumber:student.studentId,sectionId:student.sectionId,subSectionId:student.subSectionId}}; return null; }});
     await authService.seedUsers();
     timetableJobManager.init(db);
