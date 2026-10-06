@@ -33,7 +33,7 @@ async function waitForServer(timeoutMs = 30000): Promise<void> {
 function startServer(testPassword: string): ChildProcess {
   const child = spawn(commandName('tsx'), ['server.ts'], {
     cwd: ROOT,
-    env: { ...process.env, NODE_ENV: 'test', PORT: '3000', SEED_USER_PASSWORD: testPassword, DEMO_ACCOUNT_PASSWORD: testPassword },
+    env: { ...process.env, NODE_ENV: 'test', PORT: '3000', ALLOW_TEST_RESET_TOKEN: 'true', SEED_USER_PASSWORD: testPassword, DEMO_ACCOUNT_PASSWORD: testPassword },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   child.stdout?.on('data', chunk => process.stdout.write('[test-server] ' + chunk));

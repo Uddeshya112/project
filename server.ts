@@ -31,11 +31,13 @@ import {
 } from './src/lib/initialData';
 import { supabaseStore } from './src/server/supabaseStore';
 import { timetableJobManager } from './src/server/jobManager';
+import { sendEmail, checkMailerConfiguration } from './src/server/mailer';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+checkMailerConfiguration();
 const port = process.env.PORT || 3000;
 
 // Initialize Server-side Supabase Clients
@@ -148,6 +150,7 @@ interface StoredUser {
   createdAt: string;
   authorizedWorkspaces?: WorkspaceType[];
   isDemoUser?: boolean;
+  emailVerified?: boolean;
 }
 
 interface StoredSession {
@@ -807,11 +810,18 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
     });
   }
 
+  if (user.emailVerified === false) {
+    return res.status(401).json({
+      success: false,
+      message: 'Invalid credentials or unverified account.',
+    });
+  }
+
   const passwordVerification = await verifyPassword(String(password), user.passwordHash);
   if (!passwordVerification.isValid) {
     return res.status(401).json({
       success: false,
-      message: 'Invalid institutional credentials. Please check your email and password.',
+      message: 'Invalid credentials or unverified account.',
     });
   }
 
@@ -1438,6 +1448,18 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
     }
   }
 
+  const rawToken = crypto.randomBytes(32).toString('hex');
+  const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+
+  resetTokensDatabase.set(tokenHash, {
+    id: 'vtok_' + crypto.randomUUID(),
+    email: normalizedEmail,
+    tokenHash,
+    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    isUsed: false,
+    createdAt: new Date().toISOString(),
+  });
+
   const newUser: StoredUser = {
     id: authUserId,
     name: String(name).trim(),
@@ -1451,15 +1473,22 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
     department,
     status: 'ACTIVE',
     createdAt: new Date().toISOString(),
+    emailVerified: false,
   };
 
   usersDatabase.set(normalizedEmail, newUser);
 
-  // Note: Registration does NOT create an authenticated session or issue session cookies.
-  // The user must explicitly proceed to login and enter their credentials.
-  return res.status(201).json({
+  const appUrl = process.env.APP_URL || 'http://localhost:3000';
+  await sendEmail({
+    to: normalizedEmail,
+    subject: 'Verify your IntelliSchedule account',
+    text: `Please verify your email address by clicking: ${appUrl}/verify-email#token=${rawToken}`,
+    html: `<p>Please verify your email address by clicking <a href="${appUrl}/verify-email#token=${rawToken}">here</a>.</p>`,
+  });
+
+  const responseData: Record<string, any> = {
     success: true,
-    message: 'Account created successfully. Please sign in with your new email and password.',
+    message: 'Account created successfully. Please check your email to verify your account.',
     email: normalizedEmail,
     userId: authUserId,
     user: {
@@ -1469,9 +1498,116 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
       roleCode,
       roleName,
       department,
+      emailVerified: false,
     },
     requiresLogin: true,
+  };
+
+  if (process.env.NODE_ENV === 'test' && process.env.ALLOW_TEST_RESET_TOKEN === 'true') {
+    responseData.verificationToken = rawToken;
+  }
+
+  return res.status(201).json(responseData);
+});
+
+// POST /api/auth/verify-email
+app.post('/api/auth/verify-email', async (req: Request, res: Response) => {
+  const { token } = req.body;
+  if (!token || typeof token !== 'string') {
+    return res.status(400).json({
+      success: false,
+      message: 'Verification token is required.',
+    });
+  }
+
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  const record = resetTokensDatabase.get(tokenHash);
+
+  if (!record || record.isUsed || new Date(record.expiresAt) < new Date() || !record.id.startsWith('vtok_')) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid or expired verification token.',
+    });
+  }
+
+  record.isUsed = true;
+  resetTokensDatabase.set(tokenHash, record);
+
+  const user = usersDatabase.get(record.email);
+  if (user) {
+    user.emailVerified = true;
+    usersDatabase.set(record.email, user);
+    if (supabaseAdmin) {
+      try {
+        await supabaseAdmin.from('profiles').update({ email_verified: true }).eq('email', record.email);
+      } catch {}
+    }
+  }
+
+  return res.json({
+    success: true,
+    message: 'Email verified successfully. You can now sign in.',
   });
+});
+
+// POST /api/auth/resend-verification
+app.post('/api/auth/resend-verification', async (req: Request, res: Response) => {
+  const clientIp = req.ip || req.socket.remoteAddress || '127.0.0.1';
+  const { email } = req.body;
+
+  if (!email) {
+    return res.status(400).json({
+      success: false,
+      message: 'Institutional email is required.',
+    });
+  }
+
+  const normalizedEmail = String(email).trim().toLowerCase();
+  const ipRate = checkRateLimit(`resend_ip_${clientIp}`, 10, 60000);
+  const emailRate = checkRateLimit(`resend_email_${normalizedEmail}`, 3, 60000);
+
+  if (ipRate.limited || emailRate.limited) {
+    return res.status(429).json({
+      success: false,
+      message: 'Too many verification requests. Please try again later.',
+    });
+  }
+
+  const user = usersDatabase.get(normalizedEmail);
+  let rawToken: string | undefined = undefined;
+
+  if (user && user.emailVerified === false) {
+    rawToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+
+    resetTokensDatabase.set(tokenHash, {
+      id: 'vtok_' + crypto.randomUUID(),
+      email: normalizedEmail,
+      tokenHash,
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      isUsed: false,
+      createdAt: new Date().toISOString(),
+    });
+
+    const appUrl = process.env.APP_URL || 'http://localhost:3000';
+    await sendEmail({
+      to: normalizedEmail,
+      subject: 'Verify your IntelliSchedule account',
+      text: `Please verify your email address by clicking: ${appUrl}/verify-email#token=${rawToken}`,
+      html: `<p>Please verify your email address by clicking <a href="${appUrl}/verify-email#token=${rawToken}">here</a>.</p>`,
+    });
+  }
+
+  const responseData: Record<string, any> = {
+    success: true,
+    message: 'If an unverified account exists with this email, a verification link has been sent.',
+  };
+
+  if (process.env.NODE_ENV === 'test' && process.env.ALLOW_TEST_RESET_TOKEN === 'true' && rawToken) {
+    responseData.verificationToken = rawToken;
+  }
+
+  return res.json(responseData);
 });
 
 // -------------------------------------------------------------

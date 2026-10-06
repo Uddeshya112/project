@@ -394,6 +394,34 @@ async function runTestSuite() {
       'Auth API',
       'Unconfirmed newly registered account is rejected with HTTP 401 until email verification'
     );
+
+    // Verify invalid verification token gives 400
+    const invalidVerRes = await fetch(`${BASE_URL}/api/auth/verify-email`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: 'invalid_token_xyz' }),
+    });
+    assert(invalidVerRes.status === 400, 'Auth API', 'Invalid verification token rejected with HTTP 400');
+
+    // Verify email using token from register response (if test token exposed)
+    const vToken = data.verificationToken;
+    if (vToken) {
+      const verRes = await fetch(`${BASE_URL}/api/auth/verify-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: vToken }),
+      });
+      const verData = await verRes.json();
+      assert(verRes.status === 200 && verData.success === true, 'Auth API', 'Email verification token succeeds with HTTP 200');
+
+      // Reused token gives 400
+      const reuseRes = await fetch(`${BASE_URL}/api/auth/verify-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: vToken }),
+      });
+      assert(reuseRes.status === 400, 'Auth API', 'Reused verification token rejected with HTTP 400');
+    }
   } catch (err) {
     assert(false, 'Auth API', 'Registration test flow failed', String(err));
   }
