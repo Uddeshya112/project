@@ -1089,8 +1089,8 @@ export class TimetableStore {
         maxCandidates: 1,
         fixedSessions,
       });
-      const sessions = result.bestCandidate?.sessions ?? [];
-      const report = validateTimetableIndependently(sessions, ctx);
+      let sessions = result.bestCandidate?.sessions ?? [];
+      let report = validateTimetableIndependently(sessions, ctx);
       const health = result.bestCandidate?.healthScore ?? 0;
       let version: TimetableVersion | undefined;
       if (sessions.length) {
@@ -1104,6 +1104,8 @@ export class TimetableStore {
           hardViolations: report.hardViolationsCount,
           makeActive: false,
         });
+        sessions = clone(version.sessions);
+        report = validateTimetableIndependently(sessions, ctx);
       }
       const count = (codes: string[]) => report.violations.filter((v) => codes.includes(v.code)).length;
       out.push({
