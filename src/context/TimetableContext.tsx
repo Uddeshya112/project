@@ -1070,63 +1070,81 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
   };
 
   const generateDualRoutinesAPI = async (): Promise<GenerationResponse> => {
+    const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
     try {
-      const res = await fetch('/api/academic/generate', {
+      const startRes = await fetch('/api/timetable/generate', {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({
+          budgetMode: 'BALANCED',
+          timeBudgetMs: 2000,
           routines: [
-            { id: 'student-focused', label: 'Student-focused', optimizationProfile: 'STUDENT_FOCUSED' },
-            { id: 'faculty-focused', label: 'Faculty-focused', optimizationProfile: 'FACULTY_FOCUSED' },
+            { id: 'student-focused', label: 'Student-focused', optimizationProfile: 'STUDENT_FOCUSED', seed: 1337 },
+            { id: 'faculty-focused', label: 'Faculty-focused', optimizationProfile: 'FACULTY_FOCUSED', seed: 9999 },
           ],
         }),
       });
 
-      const data = await res.json();
-      if (data.success && data.routines && data.routines.length > 0) {
-        setSessions(data.routines[0].sessions);
-        setPublishStatus('Draft');
-        setLatestGeneratedRoutines(data.routines);
+      const startData = await startRes.json();
+      if (!startRes.ok || !startData.success || !startData.jobId) {
+        throw new Error(startData.error || startData.message || 'Timetable generation job could not be started.');
       }
-      return data;
-    } catch (err: any) {
-      console.warn('[TIMETABLE_API] Generate API fallback to local solver:', err);
-      // Fallback to local execution if backend network fails
-      const candRes = generateMultiCandidateTimetables({ timeBudgetMs: 800 });
-      const fallbackRoutines: GenerationRoutine[] = candRes.candidates.map((c, i) => ({
-        id: i === 0 ? 'student-focused' : 'faculty-focused',
-        label: i === 0 ? 'Student-focused' : 'Faculty-focused',
-        description: i === 0 ? 'Prioritizes student timetable quality and minimizes student gaps.' : 'Prioritizes faculty timetable quality and minimizes faculty gaps.',
-        optimizationProfile: (i === 0 ? 'STUDENT_FOCUSED' : 'FACULTY_FOCUSED') as any,
-        versionNumber: i + 1,
-        versionId: `ver-${i + 1}`,
-        sessions: c.sessions,
-        validation: {
-          valid: candRes.validationReports[i]?.hardViolationsCount === 0,
-          hardViolations: candRes.validationReports[i]?.hardViolationsCount || 0,
-          unscheduled: 0,
-          studentConflicts: 0,
-          facultyConflicts: 0,
-          roomConflicts: 0,
-          capacityViolations: 0,
-          availabilityViolations: 0,
-        },
-        metrics: {
-          studentGaps: 96,
-          facultyGaps: 15,
-          roomUtilization: 23.0,
-          labUtilization: 21.33,
-        },
-        healthScore: c.healthScore,
-      }));
-      setLatestGeneratedRoutines(fallbackRoutines);
+
+      const jobId = String(startData.jobId);
+      const deadline = Date.now() + 5 * 60 * 1000;
+
+      while (Date.now() < deadline) {
+        await sleep(1000);
+
+        const jobRes = await fetch('/api/timetable/generate/' + encodeURIComponent(jobId), {
+          method: 'GET',
+          headers: getAuthHeaders(),
+        });
+        const job = await jobRes.json();
+
+        if (!jobRes.ok) {
+          throw new Error(job.error || 'Unable to read timetable generation job status.');
+        }
+
+        if (job.status === 'completed') {
+          const data = job.result as GenerationResponse;
+          if (data?.routines?.length) {
+            setSessions(data.routines[0].sessions);
+            setPublishStatus('Draft');
+            setLatestGeneratedRoutines(data.routines);
+          }
+          return data;
+        }
+
+        if (job.status === 'failed' || job.status === 'cancelled') {
+          return {
+            success: false,
+            isFeasible: false,
+            routines: job.result?.routines || [],
+            error: job.error || job.result?.error || 'Timetable generation did not complete successfully.',
+            infeasibilityDiagnostics: job.result?.infeasibilityDiagnostics || [],
+          };
+        }
+      }
+
       return {
-        success: candRes.isSuccess,
-        isFeasible: candRes.isSuccess,
-        routines: fallbackRoutines,
+        success: false,
+        isFeasible: false,
+        routines: [],
+        error: 'Timetable generation exceeded the client polling timeout. The server job may still be running.',
+      };
+    } catch (err: any) {
+      console.error('[TIMETABLE_API] Generation job failed:', err);
+      return {
+        success: false,
+        isFeasible: false,
+        routines: [],
+        error: err?.message || 'Timetable generation request failed.',
       };
     }
   };
+
 
   const selectRoutineAPI = async (versionNumber: number): Promise<{ success: boolean; message?: string }> => {
     try {
