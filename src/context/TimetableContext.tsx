@@ -217,7 +217,7 @@ interface TimetableContextType {
   declineOpportunity: (opportunityId: string) => Promise<{ success: boolean }>;
   claimMarketplaceSlot: (courseId: string, sectionId: string, day: DayOfWeek, timeSlotId: string, roomId: string, type: string) => Promise<{ success: boolean }>;
   requestSubstituteCover: (substituteFacultyId: string, courseId: string, sectionId: string, day: DayOfWeek, timeSlotId: string) => void;
-  addSession: (sessionData: Omit<ClassSession, 'id' | 'version'>) => { isSuccess: boolean; error?: string };
+  addSession: (sessionData: Omit<ClassSession, 'id' | 'version'>) => Promise<{ isSuccess: boolean; error?: string }>;
 
   // Independent Validation & Controlled Machine Editing
   runIndependentValidation: (targetSessions?: ClassSession[]) => IndependentValidationReport;
@@ -2118,39 +2118,42 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     );
   };
 
-  const setFacultyProtectedSlot = (
+  const setFacultyProtectedSlot = async (
     facultyId: string,
     day: DayOfWeek,
     periodId: string,
     reason: 'Research' | 'Lunch' | 'Personal' | 'Department' | 'Meeting'
   ): Promise<{ success: boolean }> => {
-    setFacultyMembers(prev =>
-      prev.map(f => {
-        if (f.id !== facultyId) return f;
-        const exists = f.preferences.protectedSlots.some(
-          ps => ps.day === day && ps.periodId === periodId
-        );
-        const nextSlots = exists
-          ? f.preferences.protectedSlots.filter(ps => !(ps.day === day && ps.periodId === periodId))
-          : [...f.preferences.protectedSlots, { day, periodId, reason }];
-        return {
-          ...f,
-          preferences: {
-            ...f.preferences,
-            protectedSlots: nextSlots,
-          },
-        };
-      })
-    );
-    return { success: true };
+    try {
+      const res = await fetch(apiUrl('/api/faculty/protected-slot'), {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ facultyId, day, periodId, reason }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) return { success: false };
+      if (data.faculty) {
+        setFacultyMembers(prev => prev.map(f => f.id === facultyId ? data.faculty : f));
+      }
+      return { success: true };
+    } catch {
+      return { success: false };
+    }
   };
 
-  const restoreVersion = (versionNumber: number) => {
-    const ver = versions.find(v => v.versionNumber === versionNumber);
-    if (!ver) return;
-    setSessions(ver.sessions);
-    setAuditLogs(prev => [
-      {
+  const restoreVersion = async (versionNumber: number) => {
+    try {
+      const res = await fetch(apiUrl(`/api/timetable/versions/${versionNumber}/restore`), {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        credentials: 'include',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success || !data.version) return;
+      setSessions(data.version.sessions || []);
+      setActiveVersionNumber(data.version.versionNumber);
+      setAuditLogs(prev => [{
         id: `log-${Date.now()}`,
         timestamp: new Date().toLocaleString(),
         userId: 'coordinator',
@@ -2158,10 +2161,9 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         action: 'VERSION_RESTORED',
         entityType: 'TimetableVersion',
         entityId: `v-${versionNumber}`,
-        details: `Restored timetable matrix to ${ver.versionLabel}.`,
-      },
-      ...prev,
-    ]);
+        details: `Restored timetable matrix to ${data.version.versionLabel}.`,
+      }, ...prev]);
+    } catch {}
   };
 
   const applySimulation = () => {
