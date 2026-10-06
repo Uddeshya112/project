@@ -508,6 +508,14 @@ export interface RoutineMetrics {
   avgFacultyDailyLoad?: number;
   maxFacultyDailyLoad?: number;
   courseDistributionQualityRate?: number;
+  facultyPreferenceBonus?: number;
+  studentConsecutivePenalty?: number;
+  travelPenalty?: number;
+  courseSpreadPenalty?: number;
+  repeatedPeriodPenalty?: number;
+  byFaculty?: Record<string, number>;
+  bySection?: Record<string, number>;
+  subgroupParallelEfficiency?: number;
 }
 
 export interface GenerationRoutine {
