@@ -328,7 +328,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     'Content-Type': 'application/json',
   });
 
-  const studentsCountFromServer = useState<number | undefined>(undefined)[0];
+  const [studentsCountFromServer, setStudentsCountFromServer] = useState<number | undefined>(undefined);
 
   // Synchronize initial state from Supabase / Backend API on mount
   useEffect(() => {
@@ -358,6 +358,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
             if (Array.isArray(data.publishedSessions)) setPublishedSessions(data.publishedSessions);
             if (Array.isArray(data.auditLogs)) setAuditLogs(data.auditLogs);
             if (data.publishStatus) setPublishStatus(data.publishStatus);
+            if (typeof data.studentsCount === 'number') setStudentsCountFromServer(data.studentsCount);
           }
         }
       } catch (err) {
