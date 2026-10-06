@@ -299,7 +299,9 @@ export class TimetableStore {
     const allSessions = staff ? this.activeSessions : this.publishedSessions;
     const visibleSessions = viewer.roleCode === 'STUDENT' || viewer.roleCode === 'CLASS_REPRESENTATIVE'
       ? allSessions.filter((s) => !roster.sectionId || s.sectionId === roster.sectionId)
-      : allSessions;
+      : viewer.roleCode === 'FACULTY' && roster.facultyId
+        ? allSessions.filter((s) => s.facultyId === roster.facultyId)
+        : allSessions;
 
     const visibleCourseIds = new Set(visibleSessions.map((s) => s.courseId));
     const visibleFacultyIds = new Set(visibleSessions.map((s) => s.facultyId));
@@ -337,11 +339,13 @@ export class TimetableStore {
         : this.publishedSessions,
       activeVersionNumber: this.activeVersionNumber,
       publishedVersionNumber: this.publishedVersionNumber,
-      versions: this.versions.map(({ sessions, ...v }) => ({
-        ...v,
-        sessions: [],
-        sessionsCount: v.sessionsCount ?? sessions.length,
-      })),
+      versions: staff
+        ? this.versions
+        : this.versions.map(({ sessions, ...v }) => ({
+            ...v,
+            sessions: [],
+            sessionsCount: v.sessionsCount ?? sessions.length,
+          })),
       notifications: this.notifications
         .filter((n) => !n.recipientRole || staff || n.recipientRole === roleKeyOf(viewer.roleCode))
         .map(({ readBy, ...n }) => ({ ...n, read: (readBy ?? []).includes(viewer.id) })),
