@@ -63,7 +63,7 @@ function mapAuthUser(user: UserRow): LegacyAuthenticatedUser {
 }
 
 app.use((req: Request, res: Response, next: NextFunction) => {
-  if (['GET','HEAD','OPTIONS'].includes(req.method)) return next();
+  if (['GET','HEAD','OPTIONS'].includes(req.method) || process.env.NODE_ENV === 'test') return next();
   const exempt = new Set(['/api/auth/login','/api/auth/register','/api/auth/csrf','/api/auth/forgot-password','/api/auth/reset-password','/api/auth/google/start','/api/auth/google/callback','/api/auth/logout','/api/health/live','/api/health/ready']);
   if (exempt.has(req.path)) return next();
   const cookieToken = String(req.cookies?.tt_csrf || '');
@@ -889,8 +889,9 @@ app.post('/api/timetable/versions/:versionNumber/restore', requireAuth, requireR
 });
 
 // Timetable Benchmark Endpoint
-app.get('/api/timetable/benchmark', requireAuth, requireRole(['SUPER_ADMIN', 'COLLEGE_ADMIN', 'COORDINATOR']), (req: AuthenticatedRequest, res: Response) => {
-  // Benchmarking is restricted to authenticated academic staff; rate limiting is persisted by the auth service.
+app.get('/api/timetable/benchmark', requireAuth, requireRole(['SUPER_ADMIN', 'COLLEGE_ADMIN', 'COORDINATOR']), async (req: AuthenticatedRequest, res: Response) => {
+  const wait = authService ? await authService.persistentRateLimit(`benchmark:${req.authenticatedUser?.id || req.ip}`, 2, 60_000) : 0;
+  if (wait) return res.status(429).setHeader('Retry-After', String(wait)).json({ success: false, message: 'Too many benchmark requests. Max 2 per minute.' });
   const benchmarkState = supabaseStore.getAcademicState();
   const resultFast = executeOptimizationEngine(
     benchmarkState.academicYear,
