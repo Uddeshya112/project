@@ -567,6 +567,19 @@ export async function createApp(db: import('./src/server/db').Db) {
     res.json({ success: true, enabled: demoEnabled, accounts: demoEnabled ? ['Coordinator', 'Faculty', 'Student', 'Admin', 'HOD'] : [] });
   });
 
+  if (process.env.NODE_ENV !== 'production') {
+    try {
+      const { createServer: createVite } = await import('vite');
+      const vite = await createVite({
+        server: { middlewareMode: true },
+        appType: 'spa',
+      });
+      app.use(vite.middlewares);
+    } catch (err) {
+      console.warn('[DEV] Vite middleware unavailable; run the frontend separately.', err);
+    }
+  }
+
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (err instanceof HttpError) {
       return res.status(err.status).json({ success: false, message: err.message });
