@@ -542,6 +542,13 @@ export function createAuth(opts: AuthOptions) {
     }
     const state = crypto.randomBytes(32).toString('base64url');
     await db.query(`insert into ${T}.oauth_states (state) values ($1)`, [state]);
+    res.cookie('tt_oauth_state', state, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 10 * 60_000,
+      path: '/',
+    });
     const params = new URLSearchParams({
       client_id: opts.googleClientId!,
       redirect_uri: redirectUri(req),
@@ -560,6 +567,14 @@ export function createAuth(opts: AuthOptions) {
     if (error) return fail('Google sign-in was cancelled.');
     if (!googleEnabled || typeof code !== 'string' || typeof state !== 'string') return fail('Invalid sign-in response.');
 
+    const cookieState = readCookie(req, 'tt_oauth_state');
+    res.clearCookie('tt_oauth_state', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/',
+    });
+    if (!cookieState || cookieState !== state) return fail('Invalid sign-in state. Please start Google sign-in again.');
     const consumed = await db.query(
       `delete from ${T}.oauth_states where state = $1 and created_at > now() - interval '10 minutes' returning state`,
       [state],
