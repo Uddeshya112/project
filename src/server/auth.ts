@@ -756,5 +756,5 @@ export function createAuth(opts: AuthOptions) {
     return res.json({ success: true, sessions: rows });
   });
 
-  return { router, loadUser, seedUsers };
+  return { router, loadUser, seedUsers, persistentRateLimit, clearPersistentRateLimits };
 }
