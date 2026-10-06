@@ -58,18 +58,8 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
   const [showRegConfirmPassword, setShowRegConfirmPassword] = useState(false);
   const [registeredEmail, setRegisteredEmail] = useState('');
 
-  // Forgot Password & OTP States
+  // Password recovery state
   const [forgotEmail, setForgotEmail] = useState('');
-
-  useEffect(() => {
-    let timer: any;
-    if (resendCooldown > 0) {
-      timer = setInterval(() => {
-        setResendCooldown(prev => (prev > 0 ? prev - 1 : 0));
-      }, 1000);
-    }
-    return () => clearInterval(timer);
-  }, [resendCooldown]);
 
   // Reset Password States
   const [newPassword, setNewPassword] = useState('');
@@ -933,7 +923,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
                 Forgot your password?
               </h2>
               <p className="text-xs text-stone-500 dark:text-zinc-400 leading-relaxed max-w-sm mx-auto">
-                Enter your email address and we'll send you a verification code.
+                Enter your email address and we'll send password-reset instructions.
               </p>
             </div>
 
@@ -1273,9 +1263,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
 
             <div className="space-y-3">
               <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 text-[11px] text-amber-900 dark:text-amber-200/90 leading-relaxed">
-                <span className="font-semibold text-amber-800 dark:text-amber-300">Shared Demo Password:</span>{' '}
-                <code className="bg-white dark:bg-zinc-950 px-1.5 py-0.5 rounded font-mono text-stone-900 dark:text-white border border-amber-300 dark:border-amber-800/40">ThaparDemo@2026Test!</code>{' '}
-                <span className="text-stone-600 dark:text-zinc-400">(Or click any one-click demo button to sign in directly).</span>
+                Demo credentials are managed server-side. Use the one-click demo buttons; passwords are never displayed in the client.
               </div>
 
               <div className="space-y-2">
