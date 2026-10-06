@@ -100,6 +100,7 @@ export async function createApp(db: import('./src/server/db').Db, jobManager?: T
   app.use(helmet({
     contentSecurityPolicy: process.env.NODE_ENV === 'production' ? undefined : false,
     crossOriginEmbedderPolicy: false,
+    frameguard: { action: 'deny' },
   }));
 
   // Exact origin allow-list + credentialed cookies. Unknown origins are never reflected.
