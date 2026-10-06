@@ -33,7 +33,7 @@ async function waitForServer(timeoutMs = 30000): Promise<void> {
 function startServer(seedPassword: string): ChildProcess {
   const child = spawn(commandName('tsx'), ['server.ts'], {
     cwd: ROOT,
-    env: { ...process.env, NODE_ENV: 'test', PORT: '3000', SEED_USER_PASSWORD: seedPassword },
+    env: { ...process.env, NODE_ENV: 'test', PORT: '3000', DEMO_MODE: 'true', SEED_DEMO_DATA: 'true', SEED_USER_PASSWORD: seedPassword, SAMPLE_ACCOUNTS_PASSWORD: seedPassword, DEMO_ACCOUNTS_PASSWORD: 'ThaparDemo@2026Test!' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   child.stdout?.on('data', chunk => process.stdout.write('[test-server] ' + chunk));
@@ -83,7 +83,7 @@ async function main(): Promise<void> {
       await waitForServer();
     }
 
-    const testEnv = { NODE_ENV: 'test', SEED_USER_PASSWORD: seedPassword };
+    const testEnv = { NODE_ENV: 'test', DEMO_MODE: 'true', SEED_DEMO_DATA: 'true', SEED_USER_PASSWORD: seedPassword, SAMPLE_ACCOUNTS_PASSWORD: seedPassword, DEMO_ACCOUNTS_PASSWORD: 'ThaparDemo@2026Test!' };
     const unitExit = await runCommand('tsx', ['--test', ...testFiles], testEnv);
     if (unitExit !== 0) {
       process.exitCode = unitExit;
