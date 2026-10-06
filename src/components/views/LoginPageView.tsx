@@ -293,9 +293,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
   /**
    * Handle Resend OTP
    */
-  const handleResendOtp = async () => {
-    setResendCooldown(0);
-  };
+  const handleResendOtp = async () => { /* legacy OTP UI hook retained for compatibility; email-link recovery is authoritative. */ };
 
 
   /**
