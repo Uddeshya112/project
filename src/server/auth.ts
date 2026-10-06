@@ -221,6 +221,21 @@ export function createAuth(opts: AuthOptions) {
     await db.query(`delete from ${T}.auth_sessions where user_id = $1`, [userId]);
   }
 
+  async function persistentRateLimit(key: string, max: number, windowMs: number): Promise<number> {
+    const rows = await db.query<{ count: number; reset_at: Date }>(
+      `insert into ${T}.rate_limits (key, count, reset_at)
+       values ($1, 1, now() + ($2 || ' milliseconds')::interval)
+       on conflict (key) do update
+       set count = case when ${T}.rate_limits.reset_at <= now() then 1 else ${T}.rate_limits.count + 1 end,
+           reset_at = case when ${T}.rate_limits.reset_at <= now() then excluded.reset_at else ${T}.rate_limits.reset_at end
+       returning count, reset_at`,
+      [key, windowMs],
+    );
+    const row = rows[0];
+    if (!row || row.count <= max) return 0;
+    return Math.max(1, Math.ceil((new Date(row.reset_at).getTime() - Date.now()) / 1000));
+  }
+
   /** Attaches req.user when the session cookie is valid. Never rejects. */
   async function loadUser(req: Request, _res: Response, next: NextFunction) {
     const token = readCookie(req, SESSION_COOKIE);
@@ -313,7 +328,9 @@ export function createAuth(opts: AuthOptions) {
     if (password.length > MAX_PASSWORD_LENGTH) {
       return res.status(400).json({ success: false, message: `Password must be ${MAX_PASSWORD_LENGTH} characters or fewer.` });
     }
-    const wait = rateLimit(`login-ip:${req.ip}`, IP_LIMIT_PER_MIN, 60_000) || rateLimit(`login-acct:${email}`, 10, 15 * 60_000);
+    const ipWait = await persistentRateLimit(`login-ip:${req.ip}`, IP_LIMIT_PER_MIN, 60_000);
+    const accountWait = await persistentRateLimit(`login-acct:${email}`, 10, 15 * 60_000);
+    const wait = Math.max(ipWait, accountWait);
     if (wait) {
       res.setHeader('Retry-After', String(wait));
       return res.status(429).json({ success: false, message: `Too many sign-in attempts. Try again in ${wait} seconds.` });
@@ -333,8 +350,9 @@ export function createAuth(opts: AuthOptions) {
       return res.status(403).json({ success: false, message: 'Demo accounts are disabled on this server.' });
     }
     if (verification.needsRehash) {
-      await db.query(`update ${T}.users set password_hash = $2 where id = $1`, [user.id, await hashPassword(password)]);
-      user.password_hash = await hashPassword(password);
+      const newHash = await hashPassword(password);
+      await db.query(`update ${T}.users set password_hash = $2 where id = $1`, [user.id, newHash]);
+      user.password_hash = newHash;
     }
     await db.query(`update ${T}.users set last_login_at = now() where id = $1`, [user.id]);
     await startSession(req, res, user);
@@ -381,7 +399,9 @@ export function createAuth(opts: AuthOptions) {
     if (!user.password_hash) {
       return res.status(400).json({ success: false, message: 'This account signs in with Google and has no password to change.' });
     }
-    if (rateLimit(`chpwd:${user.id}`, 5, 15 * 60_000)) {
+    const wait = await persistentRateLimit(`chpwd:${user.id}`, 5, 15 * 60_000);
+    if (wait) {
+      res.setHeader('Retry-After', String(wait));
       return res.status(429).json({ success: false, message: 'Too many attempts. Try again later.' });
     }
     if (String(currentPassword ?? '').length > MAX_PASSWORD_LENGTH || String(newPassword ?? '').length > MAX_PASSWORD_LENGTH) {
@@ -401,7 +421,7 @@ export function createAuth(opts: AuthOptions) {
   });
 
   router.post('/api/auth/forgot-password', async (req, res) => {
-    const wait = rateLimit(`forgot:${req.ip}`, 30, 60_000);
+    const wait = await persistentRateLimit(`forgot:${req.ip}`, 30, 60_000);
     if (wait) {
       res.setHeader('Retry-After', String(wait));
       return res.status(429).json({ success: false, message: 'Too many requests. Try again in a minute.' });
@@ -515,7 +535,11 @@ export function createAuth(opts: AuthOptions) {
 
   router.get('/api/auth/google/start', async (req, res) => {
     if (!googleEnabled) return res.redirect(`${appHome(req)}/?auth_error=${encodeURIComponent('Google sign-in is not configured.')}`);
-    if (rateLimit(`oauth:${req.ip}`, IP_LIMIT_PER_MIN, 60_000)) return res.status(429).send('Too many sign-in attempts. Try again shortly.');
+    const wait = await persistentRateLimit(`oauth:${req.ip}`, IP_LIMIT_PER_MIN, 60_000);
+    if (wait) {
+      res.setHeader('Retry-After', String(wait));
+      return res.status(429).send('Too many sign-in attempts. Try again shortly.');
+    }
     const state = crypto.randomBytes(32).toString('base64url');
     await db.query(`insert into ${T}.oauth_states (state) values ($1)`, [state]);
     const params = new URLSearchParams({
