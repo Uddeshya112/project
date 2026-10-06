@@ -24,7 +24,7 @@ import {
   INITIAL_ROLE_ASSIGNMENTS,
   INITIAL_SESSIONS
 } from '../lib/authData';
-import { supabaseClient } from '../lib/supabaseClient';
+import { api, SESSION_EXPIRED_EVENT } from '../lib/api';
 import { apiUrl } from '../lib/apiConfig';
 
 export type AuthLifecycleStatus = 'AUTH_LOADING' | 'AUTHENTICATED' | 'UNAUTHENTICATED';
@@ -150,229 +150,68 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [currentUser]);
 
-  /**
-   * Helper: Resolve profile and user details from Supabase identity
-   */
-  const resolveUserFromSupabase = useCallback(async (authUser: any, accessToken: string, eventName = 'SESSION_RESOLVE') => {
-    let profile: any = null;
-    if (supabaseClient) {
-      try {
-        const { data: p, error: pErr } = await supabaseClient
-          .from('profiles')
-          .select('*')
-          .eq('id', authUser.id)
-          .maybeSingle();
-        if (!pErr && p) {
-          profile = p;
-        }
-      } catch (err) {
-        console.warn('[AUTH TRACE] Direct profile query notice:', err);
-      }
-    }
-
-    // Secondary fallback: Authoritative /api/auth/me lookup with token
-    if (!profile) {
-      try {
-        const meRes = await fetch(apiUrl('/api/auth/me'), {
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-          },
-        });
-        if (meRes.ok) {
-          const meData = await meRes.json();
-          if (meData.authenticated && meData.user) {
-            profile = {
-              id: meData.user.id,
-              name: meData.user.name,
-              email: meData.user.email,
-              department: meData.user.department,
-              role_code: meData.roleCode,
-              role_name: meData.roleName,
-              authorized_workspaces: meData.authorizedWorkspaces,
-            };
-          }
-        }
-      } catch {}
-    }
-
-    const emailLower = (authUser.email || '').toLowerCase().trim();
-    const roleCode = profile?.role_code || 'STUDENT';
-    const roleName = profile?.role_name || (roleCode === 'COORDINATOR' ? 'Timetable Coordinator' : roleCode === 'FACULTY' ? 'Faculty Member' : 'Student');
-    const workspaces: WorkspaceType[] = profile?.authorized_workspaces || (roleCode === 'COORDINATOR' ? ['Coordinator', 'Faculty'] : ['Student']);
-
-    setAllUsers(prev => {
-      const existing = prev.find(u => u.id === authUser.id || u.email.toLowerCase() === emailLower);
-      if (!existing) {
-        const newUser: AuthUser = {
-          id: authUser.id,
-          name: profile?.name || authUser.user_metadata?.name || emailLower.split('@')[0].toUpperCase(),
-          email: emailLower,
-          status: 'ACTIVE',
-          emailVerified: true,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          lastLoginAt: new Date().toISOString(),
-          department: profile?.department || 'Computer Science and Engineering (CSED)',
-          authorizedWorkspaces: workspaces,
-        };
-        return [newUser, ...prev];
-      } else {
-        const updatedUser: AuthUser = {
-          ...existing,
-          id: authUser.id,
-          name: profile?.name || existing.name,
-          department: profile?.department || existing.department,
-          authorizedWorkspaces: workspaces,
-        };
-        return prev.map(u => (u.id === authUser.id || u.email.toLowerCase() === emailLower ? updatedUser : u));
-      }
-    });
-
-    let roleId = 'role-student';
-    if (roleCode === 'COORDINATOR') roleId = 'role-coordinator';
-    else if (roleCode === 'FACULTY') roleId = 'role-faculty';
-    else if (roleCode === 'COLLEGE_ADMIN' || roleCode === 'SUPER_ADMIN') roleId = 'role-admin';
-    else if (roleCode === 'HOD') roleId = 'role-hod';
-    else if (roleCode === 'CLASS_REPRESENTATIVE') roleId = 'role-cr';
-
-    setAllMemberships(prev => {
-      const filtered = prev.filter(m => m.userId !== authUser.id);
-      return [
-        {
-          id: `mem-${authUser.id}`,
-          userId: authUser.id,
-          institutionId: 'inst-thapar',
-          roleId,
-          status: 'ACTIVE',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          assignedBy: 'system-supabase-auth',
-        },
-        ...filtered,
-      ];
-    });
-
-    setCurrentUserId(authUser.id);
+  const applyServerUser = useCallback((data: any) => {
+    if (!data?.user) return false;
+    const roleCode = String(data.user.roleCode || data.roleCode || 'STUDENT') as RoleCode;
+    const roleName = String(data.user.roleName || data.roleName || roleCode);
+    const workspaces: WorkspaceType[] = Array.isArray(data.user.authorizedWorkspaces)
+      ? data.user.authorizedWorkspaces
+      : roleCode === 'COORDINATOR' ? ['Coordinator', 'Faculty'] : roleCode === 'FACULTY' ? ['Faculty'] : ['Student'];
+    const existing = allUsers.find(u => u.id === data.user.id || u.email.toLowerCase() === String(data.user.email).toLowerCase());
+    const nextUser: AuthUser = {
+      ...(existing || { status: 'ACTIVE', emailVerified: true, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastLoginAt: new Date().toISOString(), authorizedWorkspaces: workspaces }),
+      id: data.user.id,
+      name: data.user.name,
+      email: data.user.email,
+      department: data.user.department,
+      authorizedWorkspaces: workspaces,
+    };
+    setAllUsers(prev => existing ? prev.map(u => u.id === existing.id || u.email.toLowerCase() === nextUser.email.toLowerCase() ? nextUser : u) : [nextUser, ...prev]);
+    setCurrentUserId(nextUser.id);
     setAuthorizedWorkspaces(workspaces);
-    setCurrentWorkspace(prev => (workspaces.includes(prev) ? prev : workspaces[0]));
-
-    if (import.meta.env.DEV) {
-      console.info('[AUTH TRACE]', {
-        sessionExists: true,
-        userExists: true,
-        userIdExists: Boolean(authUser.id),
-        accessTokenExists: Boolean(accessToken),
-        authEvent: eventName,
-        userEmail: authUser.email || null,
-      });
-      console.info('[AUTHENTICATED USER]', {
-        userId: authUser.id ? 'present' : 'missing',
-        profile: profile ? 'found' : 'not found',
-        role: roleCode,
-      });
-    }
-
+    setCurrentWorkspace(prev => workspaces.includes(prev) ? prev : workspaces[0]);
+    setAllMemberships(prev => [
+      {
+        id: `mem-${nextUser.id}`,
+        userId: nextUser.id,
+        institutionId: currentInstitution.id,
+        roleId: roleCode === 'COORDINATOR' ? 'role-coordinator' : roleCode === 'FACULTY' ? 'role-faculty' : roleCode === 'HOD' ? 'role-hod' : roleCode === 'COLLEGE_ADMIN' || roleCode === 'SUPER_ADMIN' ? 'role-admin' : roleCode === 'CLASS_REPRESENTATIVE' ? 'role-cr' : 'role-student',
+        status: 'ACTIVE',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        assignedBy: 'server-auth',
+      },
+      ...prev.filter(m => m.userId !== nextUser.id),
+    ]);
     setIsAuthenticated(true);
     setAuthStatus('AUTHENTICATED');
-  }, []);
+    return true;
+  }, [allUsers, currentInstitution]);
 
-  // Real Supabase Auth Session Initialization & Event Listener
   useEffect(() => {
-    let isSubscribed = true;
-
-    const initAuthLifecycle = async () => {
+    let active = true;
+    const init = async () => {
       setAuthStatus('AUTH_LOADING');
-
-      if (!supabaseClient) {
-        // Fallback: verify via /api/auth/me if Supabase client not configured
-        try {
-          const resp = await fetch(apiUrl('/api/auth/me'));
-          if (resp.ok) {
-            const data = await resp.json();
-            if (data.authenticated && data.user && isSubscribed) {
-              setCurrentUserId(data.user.id);
-              setIsAuthenticated(true);
-              setAuthStatus('AUTHENTICATED');
-              return;
-            }
-          }
-        } catch {}
-
-        if (isSubscribed) {
-          setIsAuthenticated(false);
-          setAuthStatus('UNAUTHENTICATED');
-        }
-        return;
-      }
-
       try {
-        const { data: { session }, error: sessionError } = await supabaseClient.auth.getSession();
-
-        if (import.meta.env.DEV) {
-          console.info('[AUTH TRACE]', {
-            sessionExists: Boolean(session),
-            userExists: Boolean(session?.user),
-            userIdExists: Boolean(session?.user?.id),
-            accessTokenExists: Boolean(session?.access_token),
-            authEvent: 'INITIAL_SESSION',
-            userEmail: session?.user?.email || null,
-          });
+        const data = await api('/api/auth/me');
+        if (active && data.authenticated && data.user) {
+          applyServerUser(data);
+        } else if (active) {
+          setIsAuthenticated(false); setAuthStatus('UNAUTHENTICATED'); setCurrentUserId(null);
         }
-
-        if (!sessionError && session?.user && session.access_token && isSubscribed) {
-          await resolveUserFromSupabase(session.user, session.access_token, 'INITIAL_SESSION');
-        } else if (isSubscribed) {
-          setIsAuthenticated(false);
-          setAuthStatus('UNAUTHENTICATED');
-          setCurrentUserId(null);
-        }
-      } catch (err) {
-        console.warn('[AUTH TRACE init error]', err);
-        if (isSubscribed) {
-          setIsAuthenticated(false);
-          setAuthStatus('UNAUTHENTICATED');
-          setCurrentUserId(null);
-        }
+      } catch {
+        if (active) { setIsAuthenticated(false); setAuthStatus('UNAUTHENTICATED'); setCurrentUserId(null); }
       }
     };
-
-    initAuthLifecycle();
-
-    // Listen to real Supabase auth state changes
-    if (supabaseClient) {
-      const { data: { subscription } } = supabaseClient.auth.onAuthStateChange(async (event, session) => {
-        if (!isSubscribed) return;
-
-        if (import.meta.env.DEV) {
-          console.info('[AUTH TRACE]', {
-            sessionExists: Boolean(session),
-            userExists: Boolean(session?.user),
-            userIdExists: Boolean(session?.user?.id),
-            accessTokenExists: Boolean(session?.access_token),
-            authEvent: event,
-            userEmail: session?.user?.email || null,
-          });
-        }
-
-        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
-          if (session?.user && session.access_token) {
-            await resolveUserFromSupabase(session.user, session.access_token, event);
-          }
-        } else if (event === 'SIGNED_OUT') {
-          setCurrentUserId(null);
-          setIsAuthenticated(false);
-          setAuthStatus('UNAUTHENTICATED');
-        }
-      });
-
-      return () => {
-        isSubscribed = false;
-        subscription.unsubscribe();
-      };
-    }
-  }, [resolveUserFromSupabase]);
-
+    void init();
+    const onExpired = () => {
+      setCurrentUserId(null);
+      setIsAuthenticated(false);
+      setAuthStatus('UNAUTHENTICATED');
+    };
+    window.addEventListener(SESSION_EXPIRED_EVENT, onExpired);
+    return () => { active = false; window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired); };
+  }, [applyServerUser]);
   const currentMembership = useMemo(() => {
     if (!currentUser) return null;
     return allMemberships.find(
