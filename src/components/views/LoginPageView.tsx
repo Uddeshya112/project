@@ -59,7 +59,6 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
 
   // Forgot Password & OTP States
   const [forgotEmail, setForgotEmail] = useState('');
-  const [otpDigits, setOtpDigits] = useState<string[]>(['', '', '', '', '', '']);
   const [resetToken, setResetToken] = useState<string | null>(null);
   const [resendCooldown, setResendCooldown] = useState<number>(0);
   const otpInputRefs = useRef<(HTMLInputElement | null)[]>([]);
@@ -275,35 +274,10 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
    */
   const handleVerifyOtpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setErrorMessage(null);
-    setSuccessMessage(null);
-
-    const otpStr = otpDigits.join('');
-    if (otpStr.length !== 6) {
-      setErrorMessage('Please enter the complete 6-digit verification code.');
-      return;
-    }
-
-    setIsLoading(true);
-
-    try {
-      if (supabaseClient) {
-        const { error } = await supabaseClient.auth.verifyOtp({
-          email: forgotEmail.trim(),
-          token: otpStr,
-          type: 'recovery',
-        });
-        if (error) throw error;
-      } else {
-        const res = await apiFetch('/api/auth/validate-token', {
-          method: 'POST',
-          body: JSON.stringify({ email: forgotEmail.trim(), token: otpStr }),
-        });
-        if (!res.success) throw new Error(res.message || 'Invalid verification code.');
-      }
-
-      setSuccessMessage('Verification code confirmed successfully.');
-      /** Sends another reset email. */
+    setErrorMessage('Use the password reset link sent to your institutional email.');
+    setScreenMode('forgot_success');
+  };
+  /** Sends another reset email. */
   const handleResendOtp = async () => {
     if (resendCooldown > 0) return;
     setIsLoading(true);
