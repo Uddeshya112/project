@@ -400,19 +400,110 @@ export function createAuth(opts: AuthOptions) {
     return res.json({ success: true, message: 'Password changed. Other devices have been signed out.' });
   });
 
-  // No mail server is configured, so resets go through an administrator. Same reply for every
-  // address so the endpoint cannot be used to discover accounts.
-  router.post('/api/auth/forgot-password', (req, res) => {
-    if (rateLimit(`forgot:${req.ip}`, 30, 60_000)) {
+  router.post('/api/auth/forgot-password', async (req, res) => {
+    const wait = rateLimit(`forgot:${req.ip}`, 30, 60_000);
+    if (wait) {
+      res.setHeader('Retry-After', String(wait));
       return res.status(429).json({ success: false, message: 'Too many requests. Try again in a minute.' });
     }
-    return res.json({
+
+    // Production fails closed when no outbound mail transport is configured. The response
+    // is identical for all callers so account existence is never disclosed.
+    const mailer = process.env.RESET_MAIL_WEBHOOK_URL;
+    if (process.env.NODE_ENV === 'production' && !mailer) {
+      return res.status(503).json({ success: false, message: 'Password recovery is temporarily unavailable.' });
+    }
+
+    const email = normEmail(req.body?.email);
+    if (!isEmail(email)) {
+      return res.json({ success: true, message: 'If an account exists for this email, password reset instructions have been sent.' });
+    }
+
+    const user = await userByEmail(email);
+    let rawToken: string | undefined;
+    if (user) {
+      rawToken = crypto.randomBytes(32).toString('base64url');
+      const tokenHash = sha256(rawToken);
+      await db.query(`delete from ${T}.password_reset_tokens where user_id = $1 or expires_at < now()`, [user.id]);
+      await db.query(
+        `insert into ${T}.password_reset_tokens (token_hash, user_id, expires_at) values ($1, $2, now() + interval '15 minutes')`,
+        [tokenHash, user.id],
+      );
+
+      if (mailer) {
+        const base = (opts.appUrl || `${req.protocol}://${req.get('host')}`).replace(/\\/+$/, '');
+        const mailResp = await fetch(mailer, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(process.env.RESET_MAIL_WEBHOOK_TOKEN ? { Authorization: `Bearer ${process.env.RESET_MAIL_WEBHOOK_TOKEN}` } : {}),
+          },
+          body: JSON.stringify({ to: email, resetUrl: `${base}/?token=${encodeURIComponent(rawToken)}` }),
+        });
+        if (!mailResp.ok) {
+          await db.query(`delete from ${T}.password_reset_tokens where token_hash = $1`, [tokenHash]);
+          return res.status(503).json({ success: false, message: 'Password recovery is temporarily unavailable.' });
+        }
+      }
+    }
+
+    const response: Record<string, unknown> = {
       success: true,
-      message: googleEnabled
-        ? 'Sign in with your Thapar Google account, or ask the timetable administrator to reset your password.'
-        : 'Ask the timetable administrator to reset your password from Admin -> Users.',
-    });
+      message: 'If an account exists for this email, password reset instructions have been sent.',
+    };
+    if (process.env.NODE_ENV === 'test' && process.env.ALLOW_TEST_RESET_TOKEN === 'true' && rawToken) {
+      response.resetToken = rawToken;
+    }
+    return res.json(response);
   });
+
+  router.get('/api/auth/validate-token', async (req, res) => {
+    const token = typeof req.query.token === 'string' ? req.query.token : '';
+    if (!token || token.length > 256) return res.status(400).json({ valid: false, message: 'Reset token required.' });
+    const rows = await db.query<UserRow & { token_hash?: string; expires_at?: Date; used_at?: Date | null }>(
+      `select u.email, r.expires_at, r.used_at from ${T}.password_reset_tokens r
+       join ${T}.users u on u.id = r.user_id
+       where r.token_hash = $1`,
+      [sha256(token)],
+    );
+    const row = rows[0];
+    if (!row) return res.status(400).json({ valid: false, message: 'Invalid or unrecognized reset token.' });
+    if (row.used_at) return res.status(400).json({ valid: false, message: 'This password reset link has already been used.' });
+    if (new Date(row.expires_at!).getTime() <= Date.now()) return res.status(400).json({ valid: false, message: 'This password reset link has expired.' });
+    return res.json({ valid: true, email: row.email });
+  });
+
+  router.post('/api/auth/reset-password', async (req, res) => {
+    const token = typeof req.body?.token === 'string' ? req.body.token : '';
+    const newPassword = typeof req.body?.newPassword === 'string' ? req.body.newPassword : '';
+    if (!token || !newPassword) return res.status(400).json({ success: false, message: 'Token and new password are required.' });
+    if (newPassword.length > MAX_PASSWORD_LENGTH) return res.status(400).json({ success: false, message: `Password must be ${MAX_PASSWORD_LENGTH} characters or fewer.` });
+    const policy = evaluatePasswordPolicy(newPassword);
+    if (!policy.isValid) return res.status(400).json({ success: false, message: `Password needs: ${policy.errors.join(', ')}.` });
+
+    const rows = await db.query<{ user_id: string; token_hash: string; expires_at: Date; used_at: Date | null }>(
+      `select user_id, token_hash, expires_at, used_at from ${T}.password_reset_tokens where token_hash = $1`,
+      [sha256(token)],
+    );
+    const row = rows[0];
+    if (!row || row.used_at || new Date(row.expires_at).getTime() <= Date.now()) {
+      return res.status(400).json({ success: false, message: 'Invalid or expired password reset token. Please request a new one.' });
+    }
+
+    const newHash = await hashPassword(newPassword);
+    await db.tx(async (q) => {
+      const consumed = await q<{ user_id: string }>(
+        `update ${T}.password_reset_tokens set used_at = now() where token_hash = $1 and used_at is null and expires_at > now() returning user_id`,
+        [row.token_hash],
+      );
+      if (!consumed.length) throw new HttpError(400, 'Invalid or expired password reset token. Please request a new one.');
+      await q(`update ${T}.users set password_hash = $2 where id = $1`, [row.user_id, newHash]);
+      await q(`delete from ${T}.auth_sessions where user_id = $1`, [row.user_id]);
+    });
+
+    return res.json({ success: true, message: 'Your password has been reset successfully. You can now sign in with your new password.' });
+  });
+
 
   // ---------------------------------------------------------------------------
   // Google sign-in (authorization-code flow, full-page redirect)
