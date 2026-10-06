@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import type { Db } from './db';
+import { HttpError } from './validate';
 import { evaluatePasswordPolicy, MAX_PASSWORD_LENGTH, verifyPassword } from '../lib/passwordUtils';
 import { USERS as SAMPLE_USERS, INITIAL_MEMBERSHIPS } from '../lib/authData';
 
