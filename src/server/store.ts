@@ -1079,7 +1079,6 @@ export class TimetableStore {
     const totalHours = ctx.allocations.reduce((s, a) => s + a.hoursPerWeek, 0);
     const fixedSessions = this.activeSessions.filter((s) => s.isLocked && s.status !== 'Cancelled' && s.type !== 'Makeup');
     const out: any[] = [];
-    let firstGeneratedVersion: TimetableVersion | undefined;
 
     for (const [idx, cfg] of routines.entries()) {
       const result = executeOptimizationEngine(ctx.academicYear, ctx.allocations, ctx.facultyMembers, ctx.rooms, ctx.sections, ctx.courses, ctx.constraints, {
@@ -1105,7 +1104,6 @@ export class TimetableStore {
           hardViolations: report.hardViolationsCount,
           makeActive: false,
         });
-        if (idx === 0) firstGeneratedVersion = version;
         sessions = clone(version.sessions);
         report = validateTimetableIndependently(sessions, ctx);
       }
@@ -1148,9 +1146,10 @@ export class TimetableStore {
       });
     }
 
-    if (firstGeneratedVersion) {
-      this.activeSessions = clone(firstGeneratedVersion.sessions);
-      this.activeVersionNumber = firstGeneratedVersion.versionNumber;
+    const firstGenerated = out.find((r) => r.versionNumber != null && r.sessions.length > 0);
+    if (firstGenerated) {
+      this.activeSessions = clone(firstGenerated.sessions);
+      this.activeVersionNumber = firstGenerated.versionNumber;
       this.academicYear.publishStatus = 'Draft';
     }
 
