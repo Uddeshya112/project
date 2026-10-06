@@ -3,7 +3,7 @@
 **Institution:** Thapar Institute of Engineering and Technology (TIET)  
 **Current branch:** `codex/full-hardening`  
 **Base:** `main`  
-**Status:** Hardening implementation in progress; fresh CI verification is required before merge.
+**Status:** Hardening implementation is on the current branch; code verification is automated in CI, while external deployment status is blocked by the Vercel build-rate limit.
 
 ## Completed on this branch
 
@@ -32,7 +32,8 @@
 - CI must finish successfully on pull request #1.
 - The deployment environments must be configured with `DATABASE_URL`, verified `DATABASE_SSL_CA`, `ALLOWED_ORIGINS`, and production password-recovery mail settings.
 - Historical Git history may still contain compromised credentials; those secrets must be rotated externally even after source cleanup.
-- The remaining frontend CRUD helpers still need a final transactional UX pass so failed server writes cannot leave stale optimistic state in memory.
+- Master academic CRUD mutations are server-confirmed before local state is updated.
+- Background generation jobs are persisted and executed in isolated worker threads.
 
 ## Pull request
 
