@@ -18,6 +18,7 @@ import {
   RecoveryOpportunity,
   StudentPoll,
   DayOfWeek,
+  GenerationRoutine,
 } from '../types';
 import {
   INITIAL_ACADEMIC_YEAR,
@@ -43,7 +44,7 @@ import {
   validateProposedSessionMove,
   validateProposedSessionSwap,
 } from '../lib/independentValidator';
-import { executeOptimizationEngine } from '../lib/optimizationEngine';
+import { executeOptimizationEngine, type GeneratedCandidate } from '../lib/optimizationEngine';
 import { findSelfHealingRecoverySlots } from '../lib/recoveryEngine';
 import { ExcelImportPreview } from '../lib/excelMasterService';
 
@@ -810,6 +811,97 @@ class SupabaseRelationalStore {
   // --------------------------------------------------------------------------
   // TIMETABLE GENERATOR, SOLVER & VALIDATOR
   // --------------------------------------------------------------------------
+  public persistGeneratedRoutine(
+    routine: GenerationRoutine & { candidate?: GeneratedCandidate },
+    userId = 'coordinator'
+  ): GenerationRoutine {
+    const allocations = Array.from(this.allocations.values());
+    const facultyMembers = Array.from(this.facultyMembers.values());
+    const rooms = Array.from(this.rooms.values());
+    const sections = Array.from(this.groups.values());
+    const courses = Array.from(this.courses.values());
+    const constraints = Array.from(this.constraints.values());
+
+    const validation = validateTimetableIndependently(routine.sessions, {
+      academicYear: this.academicYear,
+      allocations,
+      facultyMembers,
+      rooms,
+      sections,
+      courses,
+      constraints,
+    });
+
+    if (!validation.isValid || !validation.canPublish) {
+      const reasons = validation.violations
+        .filter(v => v.severity === 'CRITICAL')
+        .map(v => v.message);
+      throw new Error(
+        \`Cannot persist routine \${routine.label}: independent validation failed with \${validation.hardViolationsCount} hard violation(s). \${reasons.slice(0, 5).join(' ')}\`
+      );
+    }
+
+    const totalRequired = allocations.reduce((sum, a) => sum + a.hoursPerWeek, 0);
+    if (validation.scheduledSessionsCount !== validation.requiredSessionsCount || routine.sessions.length !== totalRequired) {
+      throw new Error(
+        \`Cannot persist routine \${routine.label}: scheduled session count \${routine.sessions.length} does not match required atomic session count \${totalRequired}.\`
+      );
+    }
+
+    const verNum = this.versions.length + 1;
+    const versionId = \`ver-\${verNum}\`;
+    const persisted: GenerationRoutine = {
+      ...routine,
+      versionId,
+      versionNumber: verNum,
+      validation: {
+        ...routine.validation,
+        valid: true,
+        hardViolations: 0,
+        unscheduled: 0,
+        blockingReasons: [],
+      },
+      metrics: routine.metrics,
+      healthScore: routine.healthScore,
+      sessions: routine.sessions.map(s => ({ ...s })),
+    };
+
+    const version: TimetableVersion = {
+      id: versionId,
+      versionNumber: verNum,
+      versionLabel: \`\${routine.label} Draft V\${verNum}.0\`,
+      label: \`\${routine.label} Draft V\${verNum}.0\`,
+      createdAt: new Date().toISOString(),
+      createdBy: userId,
+      changeSummary: \`Generated \${routine.label} timetable (\${routine.sessions.length} sessions).\`,
+      reason: 'Asynchronous timetable generation',
+      isPublished: false,
+      healthScore: routine.healthScore,
+      sessionsCount: routine.sessions.length,
+      hardViolationsCount: 0,
+      sessions: persisted.sessions,
+    };
+
+    this.versions.unshift(version);
+    if (this.versions.length === 1 || this.activeSessions.length === 0 || this.academicYear.publishStatus !== 'Published') {
+      // The first valid routine returned by a job becomes the active draft; no publication occurs.
+      if (this.versions[0]?.id === versionId) {
+        this.activeSessions = persisted.sessions;
+        this.academicYear.publishStatus = 'Draft';
+      }
+    }
+
+    this.logAudit(
+      userId,
+      'TIMETABLE_ROUTINE_PERSISTED',
+      'TimetableVersion',
+      versionId,
+      \`Persisted independently validated \${routine.label} routine (health \${routine.healthScore}).\`
+    );
+
+    return persisted;
+  }
+
 
   public generateMasterTimetable(options: {
     budgetMode?: 'FAST' | 'BALANCED' | 'MAXIMUM_OPTIMIZATION';
