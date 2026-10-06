@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useState, useMemo, useEffect, useCallback } from 'react';
-import {
+import React, { createContext, useContext, useEffect, useMemo, useState, useCallback } from 'react';
+import type {
   AuthUser,
   Institution,
   Membership,
@@ -9,24 +9,19 @@ import {
   AuthSession,
   PasswordResetToken,
   WorkspaceType,
-  RoleCode
+  RoleCode,
 } from '../types';
-
-export type { RoleCode };
-export type { WorkspaceType };
 import {
-  INSTITUTIONS,
+  CURRENT_INSTITUTION,
   ROLES,
   PERMISSIONS,
   ROLE_PERMISSIONS_MAP,
-  USERS,
-  INITIAL_MEMBERSHIPS,
-  INITIAL_ROLE_ASSIGNMENTS,
-  INITIAL_SESSIONS
-} from '../lib/authData';
-import { supabaseClient } from '../lib/supabaseClient';
+  ROLE_NAMES,
+  ROLE_WORKSPACES,
+} from '../lib/authCatalog';
 import { apiUrl } from '../lib/apiConfig';
 
+export type { RoleCode, WorkspaceType };
 export type AuthLifecycleStatus = 'AUTH_LOADING' | 'AUTHENTICATED' | 'UNAUTHENTICATED';
 
 interface AuthContextType {
@@ -39,63 +34,23 @@ interface AuthContextType {
   authStatus: AuthLifecycleStatus;
   isAuthLoading: boolean;
   hasPermission: (permissionCode: string) => boolean;
-
-  // Workspace Multi-Role State
   currentWorkspace: WorkspaceType;
   authorizedWorkspaces: WorkspaceType[];
   switchWorkspace: (workspace: WorkspaceType) => void;
-
-  // Real REST Backend Operations
-  login: (email: string, password?: string) => Promise<{
-    success: boolean;
-    message: string;
-    roleKey?: 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin';
-    authorizedWorkspaces?: WorkspaceType[];
-    user?: AuthUser;
-  }>;
-  loginWithGoogle: (email: string, name?: string) => Promise<{
-    success: boolean;
-    message: string;
-    roleKey?: 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin';
-    authorizedWorkspaces?: WorkspaceType[];
-    user?: AuthUser;
-  }>;
-  register: (name: string, email: string, password: string) => Promise<{
-    success: boolean;
-    message: string;
-    email?: string;
-  }>;
-  loginAsDemoRole: (roleKey: 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin') => Promise<{
-    success: boolean;
-    message: string;
-    roleKey?: 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin';
-    authorizedWorkspaces?: WorkspaceType[];
-    user?: AuthUser;
-  }>;
+  login: (email: string, password?: string) => Promise<{ success: boolean; message: string; roleKey?: 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin'; authorizedWorkspaces?: WorkspaceType[]; user?: AuthUser }>;
+  loginWithGoogle: (email: string, name?: string) => Promise<{ success: boolean; message: string; roleKey?: 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin'; authorizedWorkspaces?: WorkspaceType[]; user?: AuthUser }>;
+  register: (name: string, email: string, password: string) => Promise<{ success: boolean; message: string; email?: string }>;
+  loginAsDemoRole: (roleKey: 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin') => Promise<{ success: boolean; message: string; roleKey?: 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin'; authorizedWorkspaces?: WorkspaceType[]; user?: AuthUser }>;
   resetDemoData: () => Promise<{ success: boolean; message: string }>;
-  requestPasswordReset: (email: string) => Promise<{
-    success: boolean;
-    message: string;
-    resetToken?: string;
-  }>;
-  validateResetToken: (token: string) => Promise<{
-    valid: boolean;
-    email?: string;
-    message?: string;
-  }>;
-  resetPassword: (token: string, newPassword: string) => Promise<{
-    success: boolean;
-    message: string;
-  }>;
-
-  logout: () => void;
+  requestPasswordReset: (email: string) => Promise<{ success: boolean; message: string; resetToken?: string }>;
+  validateResetToken: (token: string) => Promise<{ valid: boolean; email?: string; message?: string }>;
+  resetPassword: (token: string, newPassword: string) => Promise<{ success: boolean; message: string }>;
+  logout: () => Promise<void>;
   switchUser: (userId: string) => void;
   updateUserRole: (userId: string, newRoleId: string, reason: string) => void;
   updateUserProfile: (userIdOrUpdates: string | Partial<AuthUser>, maybeUpdates?: Partial<AuthUser>) => Promise<{ success: boolean; message?: string }>;
   addRoleAssignment: (email: string, roleId: string, notes?: string) => void;
   revokeSession: (sessionId: string) => void;
-
-  // Database Tables
   allUsers: AuthUser[];
   allInstitutions: Institution[];
   allMemberships: Membership[];
@@ -110,880 +65,374 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [allInstitutions] = useState<Institution[]>(INSTITUTIONS);
-  const [currentInstitution] = useState<Institution>(INSTITUTIONS[0]);
+function dashboardRole(roleCode?: RoleCode | string): 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin' {
+  switch (roleCode) {
+    case 'COORDINATOR': return 'Coordinator';
+    case 'FACULTY': return 'Faculty';
+    case 'HOD': return 'HOD';
+    case 'COLLEGE_ADMIN':
+    case 'SUPER_ADMIN': return 'Admin';
+    default: return 'Student';
+  }
+}
 
-  const [allUsers, setAllUsers] = useState<AuthUser[]>(USERS);
-  const [allMemberships, setAllMemberships] = useState<Membership[]>(INITIAL_MEMBERSHIPS);
-  const [allRoleAssignments, setAllRoleAssignments] = useState<RoleAssignment[]>(INITIAL_ROLE_ASSIGNMENTS);
-  const [allRoles] = useState<Role[]>(ROLES);
-  const [allPermissions] = useState<Permission[]>(PERMISSIONS);
-  const [allSessions, setAllSessions] = useState<AuthSession[]>(INITIAL_SESSIONS);
-  const [passwordResetTokens] = useState<PasswordResetToken[]>([]);
-
-  // Active authenticated user & session lifecycle
-  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
-  const [authStatus, setAuthStatus] = useState<AuthLifecycleStatus>('AUTH_LOADING');
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
-  const [currentWorkspace, setCurrentWorkspace] = useState<WorkspaceType>('Student');
-  const [authorizedWorkspaces, setAuthorizedWorkspaces] = useState<WorkspaceType[]>(['Student']);
-
-  const switchWorkspace = (ws: WorkspaceType) => {
-    if (authorizedWorkspaces.includes(ws)) {
-      setCurrentWorkspace(ws);
-    }
+function fromServerUser(user: any): AuthUser {
+  const roleCode = user.roleCode as RoleCode | undefined;
+  const profile = user.profile && typeof user.profile === 'object' ? user.profile : {};
+  return {
+    id: String(user.id),
+    name: String(user.name || user.email || 'User'),
+    email: String(user.email || '').toLowerCase(),
+    status: user.status === 'LOCKED' ? 'LOCKED' : 'ACTIVE',
+    emailVerified: true,
+    createdAt: user.createdAt ? new Date(user.createdAt).toISOString() : new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    lastLoginAt: user.lastLoginAt ? new Date(user.lastLoginAt).toISOString() : new Date().toISOString(),
+    department: user.department,
+    avatarUrl: (profile as any).avatarUrl,
+    phone: (profile as any).phone,
+    officeLocation: (profile as any).officeLocation,
+    officeHours: (profile as any).officeHours,
+    rollNumber: (profile as any).rollNumber,
+    sectionId: (profile as any).sectionId,
+    subSectionId: (profile as any).subSectionId,
+    crSectionId: (profile as any).crSectionId,
+    facultyId: (profile as any).facultyId,
+    batch: (profile as any).batch,
+    specialization: (profile as any).specialization,
+    notificationPreferences: (profile as any).notificationPreferences,
+    authorizedWorkspaces: Array.isArray(user.authorizedWorkspaces) ? user.authorizedWorkspaces : (roleCode ? ROLE_WORKSPACES[roleCode] : ['Student']),
+    isDemoUser: Boolean(user.isDemoUser),
+    hasPassword: Boolean(user.hasPassword),
+    roleCode,
+    roleName: user.roleName || (roleCode ? ROLE_NAMES[roleCode] : 'Student'),
   };
+}
 
-  const currentUser = useMemo(() => {
-    if (!currentUserId) return null;
-    return allUsers.find(u => u.id === currentUserId) || null;
-  }, [allUsers, currentUserId]);
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
+  const [currentRoleCode, setCurrentRoleCode] = useState<RoleCode | undefined>();
+  const [authStatus, setAuthStatus] = useState<AuthLifecycleStatus>('AUTH_LOADING');
+  const [currentWorkspace, setCurrentWorkspace] = useState<WorkspaceType>('Student');
+  const [allUsers, setAllUsers] = useState<AuthUser[]>([]);
+  const [allSessions, setAllSessions] = useState<AuthSession[]>([]);
 
-  // Sync user's authorized workspaces when user changes
-  useEffect(() => {
-    if (currentUser?.authorizedWorkspaces && currentUser.authorizedWorkspaces.length > 0) {
-      setAuthorizedWorkspaces(currentUser.authorizedWorkspaces);
-      if (!currentUser.authorizedWorkspaces.includes(currentWorkspace)) {
-        setCurrentWorkspace(currentUser.authorizedWorkspaces[0]);
-      }
-    }
-  }, [currentUser]);
+  const currentInstitution = CURRENT_INSTITUTION;
+  const authorizedWorkspaces = currentUser?.authorizedWorkspaces?.length
+    ? currentUser.authorizedWorkspaces
+    : currentRoleCode ? ROLE_WORKSPACES[currentRoleCode] : ['Student'];
 
-  /**
-   * Helper: Resolve profile and user details from Supabase identity
-   */
-  const resolveUserFromSupabase = useCallback(async (authUser: any, accessToken: string, eventName = 'SESSION_RESOLVE') => {
-    let profile: any = null;
-    if (supabaseClient) {
-      try {
-        const { data: p, error: pErr } = await supabaseClient
-          .from('profiles')
-          .select('*')
-          .eq('id', authUser.id)
-          .maybeSingle();
-        if (!pErr && p) {
-          profile = p;
-        }
-      } catch (err) {
-        console.warn('[AUTH TRACE] Direct profile query notice:', err);
-      }
-    }
+  const currentRole = useMemo(
+    () => (currentRoleCode ? ROLES.find((r) => r.code === currentRoleCode) ?? null : null),
+    [currentRoleCode],
+  );
+  const userPermissions = currentRoleCode ? (ROLE_PERMISSIONS_MAP[currentRoleCode] ?? []) : [];
+  const currentMembership = currentUser && currentRoleCode ? {
+    id: `mem-${currentUser.id}`,
+    userId: currentUser.id,
+    institutionId: currentInstitution.id,
+    roleId: currentRole?.id ?? 'role-student',
+    status: 'ACTIVE',
+    createdAt: currentUser.createdAt,
+    updatedAt: new Date().toISOString(),
+    assignedBy: 'server',
+  } as Membership : null;
 
-    // Secondary fallback: Authoritative /api/auth/me lookup with token
-    if (!profile) {
-      try {
-        const meRes = await fetch(apiUrl('/api/auth/me'), {
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-          },
-        });
-        if (meRes.ok) {
-          const meData = await meRes.json();
-          if (meData.authenticated && meData.user) {
-            profile = {
-              id: meData.user.id,
-              name: meData.user.name,
-              email: meData.user.email,
-              department: meData.user.department,
-              role_code: meData.roleCode,
-              role_name: meData.roleName,
-              authorized_workspaces: meData.authorizedWorkspaces,
-            };
-          }
-        }
-      } catch {}
-    }
-
-    const emailLower = (authUser.email || '').toLowerCase().trim();
-    const roleCode = profile?.role_code || 'STUDENT';
-    const roleName = profile?.role_name || (roleCode === 'COORDINATOR' ? 'Timetable Coordinator' : roleCode === 'FACULTY' ? 'Faculty Member' : 'Student');
-    const workspaces: WorkspaceType[] = profile?.authorized_workspaces || (roleCode === 'COORDINATOR' ? ['Coordinator', 'Faculty'] : ['Student']);
-
-    setAllUsers(prev => {
-      const existing = prev.find(u => u.id === authUser.id || u.email.toLowerCase() === emailLower);
-      if (!existing) {
-        const newUser: AuthUser = {
-          id: authUser.id,
-          name: profile?.name || authUser.user_metadata?.name || emailLower.split('@')[0].toUpperCase(),
-          email: emailLower,
-          status: 'ACTIVE',
-          emailVerified: true,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          lastLoginAt: new Date().toISOString(),
-          department: profile?.department || 'Computer Science and Engineering (CSED)',
-          authorizedWorkspaces: workspaces,
-        };
-        return [newUser, ...prev];
-      } else {
-        const updatedUser: AuthUser = {
-          ...existing,
-          id: authUser.id,
-          name: profile?.name || existing.name,
-          department: profile?.department || existing.department,
-          authorizedWorkspaces: workspaces,
-        };
-        return prev.map(u => (u.id === authUser.id || u.email.toLowerCase() === emailLower ? updatedUser : u));
-      }
-    });
-
-    let roleId = 'role-student';
-    if (roleCode === 'COORDINATOR') roleId = 'role-coordinator';
-    else if (roleCode === 'FACULTY') roleId = 'role-faculty';
-    else if (roleCode === 'COLLEGE_ADMIN' || roleCode === 'SUPER_ADMIN') roleId = 'role-admin';
-    else if (roleCode === 'HOD') roleId = 'role-hod';
-    else if (roleCode === 'CLASS_REPRESENTATIVE') roleId = 'role-cr';
-
-    setAllMemberships(prev => {
-      const filtered = prev.filter(m => m.userId !== authUser.id);
-      return [
-        {
-          id: `mem-${authUser.id}`,
-          userId: authUser.id,
-          institutionId: 'inst-thapar',
-          roleId,
-          status: 'ACTIVE',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          assignedBy: 'system-supabase-auth',
-        },
-        ...filtered,
-      ];
-    });
-
-    setCurrentUserId(authUser.id);
-    setAuthorizedWorkspaces(workspaces);
-    setCurrentWorkspace(prev => (workspaces.includes(prev) ? prev : workspaces[0]));
-
-    if (import.meta.env.DEV) {
-      console.info('[AUTH TRACE]', {
-        sessionExists: true,
-        userExists: true,
-        userIdExists: Boolean(authUser.id),
-        accessTokenExists: Boolean(accessToken),
-        authEvent: eventName,
-        userEmail: authUser.email || null,
-      });
-      console.info('[AUTHENTICATED USER]', {
-        userId: authUser.id ? 'present' : 'missing',
-        profile: profile ? 'found' : 'not found',
-        role: roleCode,
-      });
-    }
-
-    setIsAuthenticated(true);
+  const applyAuthUser = useCallback((raw: any) => {
+    const user = fromServerUser(raw);
+    const roleCode = user.roleCode;
+    setCurrentUser(user);
+    setCurrentRoleCode(roleCode);
+    const workspaces = user.authorizedWorkspaces?.length ? user.authorizedWorkspaces : (roleCode ? ROLE_WORKSPACES[roleCode] : ['Student']);
+    setCurrentWorkspace((prev) => workspaces.includes(prev) ? prev : workspaces[0]);
     setAuthStatus('AUTHENTICATED');
+    setAllUsers((prev) => [user, ...prev.filter((u) => u.id !== user.id)]);
+    return user;
   }, []);
 
-  // Real Supabase Auth Session Initialization & Event Listener
-  useEffect(() => {
-    let isSubscribed = true;
-
-    const initAuthLifecycle = async () => {
-      setAuthStatus('AUTH_LOADING');
-
-      if (!supabaseClient) {
-        // Fallback: verify via /api/auth/me if Supabase client not configured
-        try {
-          const resp = await fetch(apiUrl('/api/auth/me'));
-          if (resp.ok) {
-            const data = await resp.json();
-            if (data.authenticated && data.user && isSubscribed) {
-              setCurrentUserId(data.user.id);
-              setIsAuthenticated(true);
-              setAuthStatus('AUTHENTICATED');
-              return;
-            }
-          }
-        } catch {}
-
-        if (isSubscribed) {
-          setIsAuthenticated(false);
-          setAuthStatus('UNAUTHENTICATED');
-        }
+  const loadCurrentSession = useCallback(async () => {
+    try {
+      const resp = await fetch(apiUrl('/api/auth/me'), { credentials: 'include', headers: { Accept: 'application/json' } });
+      if (!resp.ok) {
+        setCurrentUser(null);
+        setCurrentRoleCode(undefined);
+        setAuthStatus('UNAUTHENTICATED');
         return;
       }
-
-      try {
-        const { data: { session }, error: sessionError } = await supabaseClient.auth.getSession();
-
-        if (import.meta.env.DEV) {
-          console.info('[AUTH TRACE]', {
-            sessionExists: Boolean(session),
-            userExists: Boolean(session?.user),
-            userIdExists: Boolean(session?.user?.id),
-            accessTokenExists: Boolean(session?.access_token),
-            authEvent: 'INITIAL_SESSION',
-            userEmail: session?.user?.email || null,
-          });
-        }
-
-        if (!sessionError && session?.user && session.access_token && isSubscribed) {
-          await resolveUserFromSupabase(session.user, session.access_token, 'INITIAL_SESSION');
-        } else if (isSubscribed) {
-          setIsAuthenticated(false);
-          setAuthStatus('UNAUTHENTICATED');
-          setCurrentUserId(null);
-        }
-      } catch (err) {
-        console.warn('[AUTH TRACE init error]', err);
-        if (isSubscribed) {
-          setIsAuthenticated(false);
-          setAuthStatus('UNAUTHENTICATED');
-          setCurrentUserId(null);
-        }
+      const data = await resp.json();
+      if (data.authenticated && data.user) applyAuthUser(data.user);
+      else {
+        setCurrentUser(null);
+        setCurrentRoleCode(undefined);
+        setAuthStatus('UNAUTHENTICATED');
       }
-    };
-
-    initAuthLifecycle();
-
-    // Listen to real Supabase auth state changes
-    if (supabaseClient) {
-      const { data: { subscription } } = supabaseClient.auth.onAuthStateChange(async (event, session) => {
-        if (!isSubscribed) return;
-
-        if (import.meta.env.DEV) {
-          console.info('[AUTH TRACE]', {
-            sessionExists: Boolean(session),
-            userExists: Boolean(session?.user),
-            userIdExists: Boolean(session?.user?.id),
-            accessTokenExists: Boolean(session?.access_token),
-            authEvent: event,
-            userEmail: session?.user?.email || null,
-          });
-        }
-
-        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
-          if (session?.user && session.access_token) {
-            await resolveUserFromSupabase(session.user, session.access_token, event);
-          }
-        } else if (event === 'SIGNED_OUT') {
-          setCurrentUserId(null);
-          setIsAuthenticated(false);
-          setAuthStatus('UNAUTHENTICATED');
-        }
-      });
-
-      return () => {
-        isSubscribed = false;
-        subscription.unsubscribe();
-      };
+    } catch {
+      setCurrentUser(null);
+      setCurrentRoleCode(undefined);
+      setAuthStatus('UNAUTHENTICATED');
     }
-  }, [resolveUserFromSupabase]);
+  }, [applyAuthUser]);
 
-  const currentMembership = useMemo(() => {
-    if (!currentUser) return null;
-    return allMemberships.find(
-      m => m.userId === currentUser.id && m.institutionId === currentInstitution.id && m.status === 'ACTIVE'
-    ) || null;
-  }, [allMemberships, currentUser, currentInstitution]);
+  useEffect(() => {
+    loadCurrentSession();
+  }, [loadCurrentSession]);
 
-  const currentRole = useMemo(() => {
-    if (!currentMembership) return null;
-    return allRoles.find(r => r.id === currentMembership.roleId) || null;
-  }, [allRoles, currentMembership]);
+  useEffect(() => {
+    if (!currentUser || !['COLLEGE_ADMIN', 'SUPER_ADMIN'].includes(String(currentUser.roleCode))) return;
+    fetch(apiUrl('/api/admin/users?limit=200'), { credentials: 'include' })
+      .then(async (r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (data?.users) setAllUsers(data.users.map(fromServerUser));
+      })
+      .catch(() => {});
+    fetch(apiUrl('/api/admin/sessions'), { credentials: 'include' })
+      .then(async (r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (Array.isArray(data?.sessions)) {
+          setAllSessions(data.sessions.map((s: any, i: number) => ({
+            id: `server-session-${i}`,
+            userId: s.userId,
+            institutionId: currentInstitution.id,
+            roleId: ROLES.find((r) => r.code === s.roleCode)?.id ?? 'role-student',
+            token: '',
+            createdAt: s.lastSignIn ? new Date(s.lastSignIn).toISOString() : new Date().toISOString(),
+            expiresAt: s.expiresAt ? new Date(s.expiresAt).toISOString() : new Date().toISOString(),
+            lastActiveAt: s.lastSignIn ? new Date(s.lastSignIn).toISOString() : new Date().toISOString(),
+            isRevoked: false,
+          })));
+        }
+      })
+      .catch(() => {});
+  }, [currentUser, currentInstitution.id]);
 
-  const userPermissions = useMemo(() => {
-    if (!currentMembership) return [];
-    return ROLE_PERMISSIONS_MAP[currentMembership.roleId] || [];
-  }, [currentMembership]);
-
-  const hasPermission = (permissionCode: string) => {
-    return userPermissions.includes(permissionCode);
+  const switchWorkspace = (workspace: WorkspaceType) => {
+    if (authorizedWorkspaces.includes(workspace)) setCurrentWorkspace(workspace);
   };
 
-  /**
-   * Helper to map Role Code to Timetable Dashboard Key
-   */
-  const resolveRoleKey = (roleCode: string): 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin' => {
-    switch (roleCode) {
-      case 'COORDINATOR':
-        return 'Coordinator';
-      case 'FACULTY':
-        return 'Faculty';
-      case 'HOD':
-        return 'HOD';
-      case 'COLLEGE_ADMIN':
-      case 'SUPER_ADMIN':
-        return 'Admin';
-      case 'CLASS_REPRESENTATIVE':
-      case 'STUDENT':
-      default:
-        return 'Student';
-    }
-  };
-
-  /**
-   * REST Backend & Supabase Auth Login (POST /api/auth/login) - Strictly Authoritative
-   */
-  const login = async (
-    email: string,
-    password?: string
-  ): Promise<{
-    success: boolean;
-    message: string;
-    roleKey?: 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin';
-    authorizedWorkspaces?: WorkspaceType[];
-    user?: AuthUser;
-  }> => {
+  const login = async (email: string, password?: string) => {
     try {
-      const normalizedEmail = email.trim().toLowerCase();
-
-      // Sign in directly with Supabase Auth to establish the authoritative client session
-      if (supabaseClient && password) {
-        try {
-          const { data: supaData, error: supaErr } = await supabaseClient.auth.signInWithPassword({
-            email: normalizedEmail,
-            password,
-          });
-          if (import.meta.env.DEV) {
-            console.info('[AUTH TRACE client login]', {
-              success: !supaErr && Boolean(supaData?.session),
-              error: supaErr?.message || null,
-              sessionExists: Boolean(supaData?.session),
-            });
-          }
-        } catch (err) {
-          console.warn('[AUTH TRACE] Direct Supabase sign-in notice:', err);
-        }
-      }
-
       const resp = await fetch(apiUrl('/api/auth/login'), {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ email: normalizedEmail, password }),
+        body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
       });
-
       const data = await resp.json().catch(() => ({}));
-
-      if (resp.ok && data.success && data.user) {
-        let user = allUsers.find(u => u.id === data.user.id || u.email.toLowerCase() === normalizedEmail);
-        if (!user) {
-          user = {
-            id: data.user.id,
-            name: data.user.name,
-            email: data.user.email,
-            status: 'ACTIVE',
-            emailVerified: true,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            lastLoginAt: new Date().toISOString(),
-            department: data.user.department,
-            authorizedWorkspaces: data.authorizedWorkspaces,
-          };
-          setAllUsers(prev => [user!, ...prev]);
-        }
-
-        setCurrentUserId(user.id);
-
-        if (data.authorizedWorkspaces && Array.isArray(data.authorizedWorkspaces)) {
-          setAuthorizedWorkspaces(data.authorizedWorkspaces);
-          setCurrentWorkspace(data.authorizedWorkspaces[0]);
-        }
-
-        setIsAuthenticated(true);
-        setAuthStatus('AUTHENTICATED');
-        if (data.token) {
-          localStorage.setItem('auth_token', data.token);
-        }
-
-        return {
-          success: true,
-          message: data.message,
-          roleKey: data.role as 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin',
-          authorizedWorkspaces: data.authorizedWorkspaces,
-          user,
-        };
-      } else {
-        setIsAuthenticated(false);
-        setAuthStatus('UNAUTHENTICATED');
-        setCurrentUserId(null);
-        return {
-          success: false,
-          message: data.message || 'Invalid institutional credentials. Please check your email and password.',
-        };
-      }
+      if (!resp.ok || !data.success || !data.user) return { success: false, message: data.message || 'Invalid email or password.' };
+      const user = applyAuthUser(data.user);
+      return { success: true, message: data.message || 'Signed in successfully.', roleKey: dashboardRole(user.roleCode), authorizedWorkspaces: user.authorizedWorkspaces, user };
     } catch {
-      setIsAuthenticated(false);
-      setAuthStatus('UNAUTHENTICATED');
-      setCurrentUserId(null);
-      return {
-        success: false,
-        message: 'Network error connecting to authentication service.',
-      };
+      return { success: false, message: 'Network error connecting to authentication service.' };
     }
   };
 
-  /**
-   * Google Workspace Sign-In (POST /api/auth/google/signin)
-   */
-  const loginWithGoogle = async (
-    email: string,
-    name?: string
-  ): Promise<{
-    success: boolean;
-    message: string;
-    roleKey?: 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin';
-    authorizedWorkspaces?: WorkspaceType[];
-    user?: AuthUser;
-  }> => {
-    try {
-      const resp = await fetch('/api/auth/google/signin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ email: email.trim().toLowerCase(), name }),
-      });
-
-      const data = await resp.json().catch(() => ({}));
-
-      if (resp.ok && data.success && data.user) {
-        let user = allUsers.find(u => u.id === data.user.id || u.email.toLowerCase() === email.trim().toLowerCase());
-        if (!user) {
-          user = {
-            id: data.user.id,
-            name: data.user.name,
-            email: data.user.email,
-            status: 'ACTIVE',
-            emailVerified: true,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            lastLoginAt: new Date().toISOString(),
-            department: data.user.department,
-            authorizedWorkspaces: data.authorizedWorkspaces,
-          };
-          setAllUsers(prev => [user!, ...prev]);
-        }
-
-        setCurrentUserId(user.id);
-
-        if (data.authorizedWorkspaces && Array.isArray(data.authorizedWorkspaces)) {
-          setAuthorizedWorkspaces(data.authorizedWorkspaces);
-          setCurrentWorkspace(data.authorizedWorkspaces[0]);
-        }
-
-        setIsAuthenticated(true);
-        if (data.token) {
-          localStorage.setItem('auth_token', data.token);
-        }
-
-        return {
-          success: true,
-          message: data.message,
-          roleKey: data.role as 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin',
-          authorizedWorkspaces: data.authorizedWorkspaces,
-          user,
-        };
-      } else {
-        setIsAuthenticated(false);
-        setCurrentUserId(null);
-        return {
-          success: false,
-          message: data.message || 'Google authentication failed.',
-        };
-      }
-    } catch {
-      setIsAuthenticated(false);
-      setCurrentUserId(null);
-      return {
-        success: false,
-        message: 'Could not connect to Google authentication provider.',
-      };
-    }
+  const loginWithGoogle = async (_email?: string, _name?: string) => {
+    window.location.assign(apiUrl('/api/auth/google/start'));
+    return { success: false, message: 'Redirecting to Google sign-in…' };
   };
 
-  /**
-   * REST Backend Register (POST /api/auth/register) - Strictly Authoritative
-   * Registration policy: Registration creates the user account in Supabase Auth,
-   * but does NOT automatically authenticate or issue an application session.
-   * The user must explicitly sign in on the login screen.
-   */
-  const register = async (
-    name: string,
-    email: string,
-    password: string
-  ): Promise<{
-    success: boolean;
-    message: string;
-    email?: string;
-  }> => {
+  const register = async (name: string, email: string, password: string) => {
     try {
-      const resp = await fetch('/api/auth/register', {
+      const resp = await fetch(apiUrl('/api/auth/register'), {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({ name: name.trim(), email: email.trim().toLowerCase(), password }),
       });
-
       const data = await resp.json().catch(() => ({}));
-
-      if (resp.ok && data.success) {
-        setIsAuthenticated(false);
-        setCurrentUserId(null);
-
-        return {
-          success: true,
-          message: data.message || 'Account created successfully. Please sign in with your email and password.',
-          email: data.email || email.trim().toLowerCase(),
-        };
-      } else {
-        setIsAuthenticated(false);
-        setCurrentUserId(null);
-        return {
-          success: false,
-          message:
-            data.message ||
-            (resp.status === 403
-              ? "This staff account has not been pre-authorized. Please contact the Dean's Office."
-              : resp.status === 409
-              ? 'An account with this email already exists. Please sign in instead.'
-              : resp.status === 400
-              ? 'Invalid registration request or weak password.'
-              : 'Registration could not be completed. Please try again later.'),
-        };
-      }
+      return { success: resp.ok && Boolean(data.success), message: data.message || (resp.ok ? 'Account created.' : 'Registration failed.'), email: data.email };
     } catch {
-      setIsAuthenticated(false);
-      setCurrentUserId(null);
-      return {
-        success: false,
-        message: 'Unable to connect to registration service.',
-      };
+      return { success: false, message: 'Network error connecting to registration service.' };
     }
   };
 
-  /**
-   * One-Click Secure Demo Authentication
-   */
-  const loginAsDemoRole = async (
-    roleKey: 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin'
-  ): Promise<{
-    success: boolean;
-    message: string;
-    roleKey?: 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin';
-    authorizedWorkspaces?: WorkspaceType[];
-    user?: AuthUser;
-  }> => {
+  const loginAsDemoRole = async (roleKey: 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin') => {
     try {
-      const roleEmailMap: Record<string, string> = {
-        Coordinator: 'coordinator.demo@demo.thapar.local',
-        Faculty: 'faculty.demo@demo.thapar.local',
-        Student: 'student.demo@demo.thapar.local',
-        Admin: 'admin.demo@demo.thapar.local',
-        HOD: 'hod.demo@demo.thapar.local',
-      };
-      const demoEmail = roleEmailMap[roleKey];
-
-      // Sign into Supabase client to establish real client session
-      if (supabaseClient && demoEmail) {
-        try {
-          const { data: supaData, error: supaErr } = await supabaseClient.auth.signInWithPassword({
-            email: demoEmail,
-            password: 'ThaparDemo@2026Test!',
-          });
-          if (import.meta.env.DEV) {
-            console.info('[AUTH TRACE demo login]', {
-              roleKey,
-              success: !supaErr && Boolean(supaData?.session),
-              error: supaErr?.message || null,
-              sessionExists: Boolean(supaData?.session),
-            });
-          }
-        } catch (err) {
-          console.warn('[AUTH TRACE] Direct Supabase demo sign-in notice:', err);
-        }
-      }
-
       const resp = await fetch(apiUrl('/api/auth/demo-login'), {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({ roleKey }),
       });
-
       const data = await resp.json().catch(() => ({}));
-      if (resp.ok && data.success && data.user) {
-        let user = allUsers.find(u => u.id === data.user.id || u.email.toLowerCase() === data.user.email.toLowerCase());
-        if (!user) {
-          user = {
-            id: data.user.id,
-            name: data.user.name,
-            email: data.user.email,
-            status: 'ACTIVE',
-            emailVerified: true,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            lastLoginAt: new Date().toISOString(),
-            department: data.user.department,
-            authorizedWorkspaces: data.authorizedWorkspaces,
-            isDemoUser: true,
-          };
-          setAllUsers(prev => [user!, ...prev]);
-        }
-
-        setCurrentUserId(user.id);
-
-        if (data.authorizedWorkspaces && Array.isArray(data.authorizedWorkspaces)) {
-          setAuthorizedWorkspaces(data.authorizedWorkspaces);
-          setCurrentWorkspace(data.authorizedWorkspaces[0]);
-        }
-
-        setIsAuthenticated(true);
-        setAuthStatus('AUTHENTICATED');
-        if (data.token) {
-          localStorage.setItem('auth_token', data.token);
-        }
-
-        return {
-          success: true,
-          message: data.message,
-          roleKey: data.role as 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin',
-          authorizedWorkspaces: data.authorizedWorkspaces,
-          user,
-        };
-      } else {
-        setIsAuthenticated(false);
-        setAuthStatus('UNAUTHENTICATED');
-        setCurrentUserId(null);
-        return {
-          success: false,
-          message: data.message || 'Demo authentication failed.',
-        };
-      }
+      if (!resp.ok || !data.success || !data.user) return { success: false, message: data.message || 'Demo access is unavailable.' };
+      const user = applyAuthUser(data.user);
+      return { success: true, message: data.message || 'Demo signed in.', roleKey: dashboardRole(user.roleCode), authorizedWorkspaces: user.authorizedWorkspaces, user };
     } catch {
-      setIsAuthenticated(false);
-      setAuthStatus('UNAUTHENTICATED');
-      setCurrentUserId(null);
-      return {
-        success: false,
-        message: 'Could not connect to demo authentication service.',
-      };
+      return { success: false, message: 'Network error connecting to demo service.' };
     }
   };
 
-  /**
-   * Reset Demo Data
-   */
-  const resetDemoData = async (): Promise<{ success: boolean; message: string }> => {
-    try {
-      await fetch('/api/demo/reset', { method: 'POST' });
-    } catch {
-      // ignore
-    }
-    return {
-      success: true,
-      message: 'Demo dataset restored to initial state.',
-    };
-  };
+  const resetDemoData = async () => ({ success: false, message: 'Demo reset is disabled; use a fresh local database for deterministic test data.' });
 
-  /**
-   * REST Backend Forgot Password (POST /api/auth/forgot-password)
-   */
-  const requestPasswordReset = async (
-    email: string
-  ): Promise<{
-    success: boolean;
-    message: string;
-    resetToken?: string;
-  }> => {
+  const requestPasswordReset = async (email: string) => {
     try {
-      const resp = await fetch('/api/auth/forgot-password', {
+      const resp = await fetch(apiUrl('/api/auth/forgot-password'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({ email: email.trim().toLowerCase() }),
       });
-
-      const data = await resp.json();
-      return {
-        success: true,
-        message: data.message || 'If an account exists for this email, a password reset link has been sent.',
-        resetToken: data.resetToken,
-      };
+      const data = await resp.json().catch(() => ({}));
+      return { success: resp.ok, message: data.message || 'If an account exists, password reset instructions have been sent.', resetToken: data.resetToken };
     } catch {
-      return {
-        success: true,
-        message: 'If an account exists for this email, a password reset link has been sent.',
-      };
+      return { success: false, message: 'Could not contact the password recovery service.' };
     }
   };
 
-  /**
-   * REST Backend Validate Token (GET /api/auth/validate-token)
-   */
-  const validateResetToken = async (
-    token: string
-  ): Promise<{ valid: boolean; email?: string; message?: string }> => {
+  const validateResetToken = async (token: string) => {
     try {
-      const resp = await fetch(`/api/auth/validate-token?token=${encodeURIComponent(token)}`);
-      const data = await resp.json();
-      return {
-        valid: data.valid,
-        email: data.email,
-        message: data.message,
-      };
+      const resp = await fetch(apiUrl(`/api/auth/validate-token?token=${encodeURIComponent(token)}`), { credentials: 'include' });
+      const data = await resp.json().catch(() => ({}));
+      return { valid: Boolean(data.valid), email: data.email, message: data.message };
     } catch {
       return { valid: false, message: 'Could not reach token verification service.' };
     }
   };
 
-  /**
-   * REST Backend Reset Password (POST /api/auth/reset-password)
-   */
-  const resetPassword = async (
-    token: string,
-    newPassword: string
-  ): Promise<{ success: boolean; message: string }> => {
+  const resetPassword = async (token: string, newPassword: string) => {
     try {
-      const resp = await fetch('/api/auth/reset-password', {
+      const resp = await fetch(apiUrl('/api/auth/reset-password'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({ token, newPassword }),
       });
-
-      const data = await resp.json();
-      return {
-        success: data.success,
-        message: data.message,
-      };
+      const data = await resp.json().catch(() => ({}));
+      return { success: resp.ok && Boolean(data.success), message: data.message || 'Password reset failed.' };
     } catch {
-      return {
-        success: false,
-        message: 'Network error resetting password.',
-      };
+      return { success: false, message: 'Network error resetting password.' };
     }
   };
 
   const logout = async () => {
-    if (supabaseClient) {
-      try {
-        await supabaseClient.auth.signOut();
-      } catch (err) {
-        console.warn('[AUTH TRACE] Supabase signOut notice:', err);
-      }
-    }
     try {
-      await fetch(apiUrl('/api/auth/logout'), { method: 'POST' });
-    } catch {
-      // Ignore network errors on logout
-    }
-    setIsAuthenticated(false);
+      await fetch(apiUrl('/api/auth/logout'), { method: 'POST', credentials: 'include', headers: { Accept: 'application/json' } });
+    } catch {}
+    setCurrentUser(null);
+    setCurrentRoleCode(undefined);
     setAuthStatus('UNAUTHENTICATED');
-    setCurrentUserId(null);
-    setAuthorizedWorkspaces(['Student']);
     setCurrentWorkspace('Student');
-    
-    // Clear user tokens from storage
-    localStorage.removeItem('auth_token');
-    localStorage.removeItem('app_session_token');
-    sessionStorage.clear();
+    setAllUsers([]);
+    setAllSessions([]);
   };
 
-  const switchUser = (userId: string) => {
-    setCurrentUserId(userId);
-    setIsAuthenticated(true);
+  const switchUser = (_userId: string) => {
+    // Deliberate no-op: client-side impersonation is not an authentication feature.
   };
 
-  const updateUserRole = (userId: string, newRoleId: string, reason: string) => {
-    setAllMemberships(prev =>
-      prev.map(m =>
-        m.userId === userId && m.institutionId === currentInstitution.id
-          ? { ...m, roleId: newRoleId, updatedAt: new Date().toISOString() }
-          : m
-      )
-    );
+  const updateUserRole = async (userId: string, newRoleId: string, reason: string) => {
+    const target = ROLES.find((r) => r.id === newRoleId);
+    if (!target) return;
+    try {
+      await fetch(apiUrl(`/api/admin/users/${encodeURIComponent(userId)}`), {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ roleCode: target.code, profile: { roleChangeReason: reason } }),
+      });
+      await loadCurrentSession();
+    } catch {}
   };
 
   const updateUserProfile = async (userIdOrUpdates: string | Partial<AuthUser>, maybeUpdates?: Partial<AuthUser>) => {
-    let targetUserId = currentUserId;
-    let updates = maybeUpdates;
-    if (typeof userIdOrUpdates === 'string') {
-      targetUserId = userIdOrUpdates;
-    } else {
-      updates = userIdOrUpdates;
+    const targetId = typeof userIdOrUpdates === 'string' ? userIdOrUpdates : currentUser?.id;
+    const updates = typeof userIdOrUpdates === 'string' ? maybeUpdates : userIdOrUpdates;
+    if (!targetId) return { success: false, message: 'No active user.' };
+    if (targetId !== currentUser?.id) return { success: false, message: 'Profile changes can only target the current user.' };
+    try {
+      const resp = await fetch(apiUrl('/api/auth/profile'), {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ name: updates?.name, profile: { ...updates } }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.success || !data.user) return { success: false, message: data.message || 'Profile update failed.' };
+      applyAuthUser(data.user);
+      return { success: true, message: 'Profile updated.' };
+    } catch {
+      return { success: false, message: 'Network error updating profile.' };
     }
-    if (!targetUserId) return { success: false, message: 'No active user' };
-    setAllUsers(prev =>
-      prev.map(u => (u.id === targetUserId ? { ...u, ...updates, updatedAt: new Date().toISOString() } : u))
-    );
-    return { success: true, message: 'Profile updated' };
   };
 
-  const addRoleAssignment = (email: string, roleId: string, notes?: string) => {
-    const newAssignment: RoleAssignment = {
-      id: `ra-${Date.now().toString().slice(-4)}`,
-      institutionId: currentInstitution.id,
-      email: email.toLowerCase().trim(),
-      roleId,
-      status: 'PRE_AUTHORIZED',
-      notes,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    setAllRoleAssignments(prev => [newAssignment, ...prev]);
+  const addRoleAssignment = (_email: string, _roleId: string, _notes?: string) => {
+    // Role assignment is server-controlled. There is intentionally no client-only assignment cache.
   };
 
-  const revokeSession = (sessionId: string) => {
-    setAllSessions(prev =>
-      prev.map(s => (s.id === sessionId ? { ...s, isRevoked: true } : s))
-    );
+  const revokeSession = async (sessionId: string) => {
+    if (!sessionId.startsWith('server-session-')) return;
+    const index = Number(sessionId.replace('server-session-', ''));
+    const session = allSessions[index];
+    if (!session?.userId) return;
+    try {
+      await fetch(apiUrl(`/api/admin/users/${encodeURIComponent(session.userId)}/revoke-sessions`), {
+        method: 'POST',
+        credentials: 'include',
+        headers: { Accept: 'application/json' },
+      });
+    } catch {}
+  };
+
+  const roster = currentUser ? {
+    rollNumber: currentUser.rollNumber ?? null,
+    sectionId: currentUser.sectionId ?? null,
+    subSectionId: currentUser.subSectionId ?? null,
+    facultyId: currentUser.facultyId ?? null,
+    crSectionId: currentUser.crSectionId ?? null,
+    roleName: currentUser.roleName,
+    roleKey: dashboardRole(currentUser.roleCode),
+    authorizedWorkspaces,
+  } : {
+    rollNumber: null, sectionId: null, subSectionId: null, facultyId: null, crSectionId: null,
+    roleName: 'Student', roleKey: 'Student', authorizedWorkspaces: ['Student'] as WorkspaceType[],
   };
 
   return (
-    <AuthContext.Provider
-      value={{
-        currentUser,
-        currentInstitution,
-        currentMembership,
-        currentRole,
-        userPermissions,
-        isAuthenticated,
-        authStatus,
-        isAuthLoading: authStatus === 'AUTH_LOADING',
-        hasPermission,
-        currentWorkspace,
-        authorizedWorkspaces,
-        switchWorkspace,
-        login,
-        loginWithGoogle,
-        register,
-        loginAsDemoRole,
-        resetDemoData,
-        requestPasswordReset,
-        validateResetToken,
-        resetPassword,
-        logout,
-        switchUser,
-        updateUserRole,
-        updateUserProfile,
-        addRoleAssignment,
-        revokeSession,
-        allUsers,
-        allInstitutions,
-        allMemberships,
-        allRoleAssignments,
-        allRoles,
-        allPermissions,
-        allSessions,
-        passwordResetTokens,
-        roster: currentUser ? {
-          rollNumber: currentUser.rollNumber ?? '102303999',
-          sectionId: currentUser.sectionId ?? 'sec-csea',
-          subSectionId: currentUser.subSectionId ?? 'sub-sec-csea-1'
-        } : {
-          rollNumber: '102303999',
-          sectionId: 'sec-csea',
-          subSectionId: 'sub-sec-csea-1'
-        },
-      }}
-    >
+    <AuthContext.Provider value={{
+      currentUser,
+      currentInstitution,
+      currentMembership,
+      currentRole,
+      userPermissions,
+      isAuthenticated: authStatus === 'AUTHENTICATED',
+      authStatus,
+      isAuthLoading: authStatus === 'AUTH_LOADING',
+      hasPermission: (permissionCode: string) => userPermissions.includes(permissionCode),
+      currentWorkspace,
+      authorizedWorkspaces,
+      switchWorkspace,
+      login,
+      loginWithGoogle,
+      register,
+      loginAsDemoRole,
+      resetDemoData,
+      requestPasswordReset,
+      validateResetToken,
+      resetPassword,
+      logout,
+      switchUser,
+      updateUserRole,
+      updateUserProfile,
+      addRoleAssignment,
+      revokeSession,
+      allUsers,
+      allInstitutions: [currentInstitution],
+      allMemberships: currentMembership ? [currentMembership] : [],
+      allRoleAssignments: [],
+      allRoles: ROLES,
+      allPermissions: PERMISSIONS,
+      allSessions,
+      passwordResetTokens: [],
+      roster,
+    }}>
       {children}
     </AuthContext.Provider>
   );
 }
 
 export function useAuth() {
-  const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
-  return context;
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
+  return ctx;
 }
