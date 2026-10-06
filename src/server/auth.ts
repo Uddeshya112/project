@@ -202,7 +202,7 @@ export function createAuth(opts: AuthOptions) {
   async function persistentRateLimit(key: string, max: number, windowMs: number): Promise<number> {
     const rows = await db.query<{ count: number; reset_at: Date }>(
       `insert into ${T}.rate_limits (key, count, reset_at)
-       values ($1, 1, now() + ($2 || ' milliseconds')::interval)
+       values ($1, 1, now() + ($2 * interval '1 millisecond'))
        on conflict (key) do update
        set count = case when ${T}.rate_limits.reset_at <= now() then 1 else ${T}.rate_limits.count + 1 end,
            reset_at = case when ${T}.rate_limits.reset_at <= now() then excluded.reset_at else ${T}.rate_limits.reset_at end
@@ -289,6 +289,8 @@ export function createAuth(opts: AuthOptions) {
   setInterval(() => {
     db.query(`delete from ${T}.auth_sessions where expires_at < now()`).catch(() => {});
     db.query(`delete from ${T}.oauth_states where created_at < now() - interval '10 minutes'`).catch(() => {});
+    db.query(`delete from ${T}.password_reset_tokens where expires_at < now() or used_at is not null`).catch(() => {});
+    db.query(`delete from ${T}.rate_limits where reset_at < now() - interval '1 day'`).catch(() => {});
   }, 3600_000).unref();
 
   const router = Router();
