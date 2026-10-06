@@ -41,6 +41,17 @@ interface TestResult {
 
 const results: TestResult[] = [];
 
+function getSessionCookie(response: Response): string {
+  const raw = response.headers.get('set-cookie') || '';
+  const match = /tt_session=([^;]+)/.exec(raw);
+  if (!match) throw new Error('Login did not return a tt_session cookie.');
+  return `tt_session=${match[1]}`;
+}
+
+function authHeaders(cookie: string, extra: Record<string, string> = {}) {
+  return { ...extra, Cookie: cookie };
+}
+
 function assert(condition: boolean, suite: string, name: string, message?: string) {
   if (condition) {
     results.push({ suite, name, passed: true, message });
@@ -181,7 +192,7 @@ async function runTestSuite() {
   }
 
   // Test 2.4: Valid Coordinator Login & Multi-Workspace Resolution
-  let coordinatorToken = '';
+  let coordinatorCookie = '';
   try {
     const res = await fetch(`${BASE_URL}/api/auth/login`, {
       method: 'POST',
@@ -189,7 +200,7 @@ async function runTestSuite() {
       body: JSON.stringify({ email: 'kn.murthy@thapar.edu', password: seedPassword }),
     });
     const data = await res.json();
-    coordinatorToken = data.token;
+    coordinatorCookie = getSessionCookie(res);
     assert(
       res.status === 200 &&
       data.success === true &&
@@ -204,7 +215,7 @@ async function runTestSuite() {
   }
 
   // Test 2.5: Valid Student Login (Aarav Mehta - Student + CR multi-workspace)
-  let studentToken = '';
+  let studentCookie = '';
   try {
     const res = await fetch(`${BASE_URL}/api/auth/login`, {
       method: 'POST',
@@ -212,7 +223,7 @@ async function runTestSuite() {
       body: JSON.stringify({ email: 'aarav.m@thapar.edu', password: seedPassword }),
     });
     const data = await res.json();
-    studentToken = data.token;
+    studentCookie = getSessionCookie(res);
     assert(
       res.status === 200 &&
       data.success === true &&
@@ -226,10 +237,10 @@ async function runTestSuite() {
     assert(false, 'Auth API', 'Student login test failed', String(err));
   }
 
-  // Test 2.6: Session Verification via /api/auth/me with Bearer Token
+  // Test 2.6: Session Verification via /api/auth/me with the server session cookie
   try {
     const res = await fetch(`${BASE_URL}/api/auth/me`, {
-      headers: { Authorization: `Bearer ${coordinatorToken}` },
+      headers: authHeaders(coordinatorCookie),
     });
     const data = await res.json();
     assert(
@@ -465,7 +476,7 @@ async function runTestSuite() {
     const logoutData = await logoutRes.json();
     assert(logoutRes.status === 200 && logoutData.success === true, 'Auth API', 'Logout endpoint revokes session');
 
-    // Verify token is now invalid
+    // Verify the session cookie is now invalid
     const meRes = await fetch(`${BASE_URL}/api/auth/me`, {
       headers: { Authorization: `Bearer ${coordinatorToken}` },
     });
