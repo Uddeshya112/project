@@ -33,13 +33,13 @@ async function connectPg(url: string): Promise<Db> {
   // sslmode in the URL would override the ssl option below, so TLS is configured here only.
   parsed.searchParams.delete('sslmode');
   const ca = process.env.DATABASE_SSL_CA?.replace(/\\n/g, '\n');
-  if (!isLocal && !ca) {
-    console.warn('[db] DATABASE_SSL_CA not set: connecting with TLS but without verifying the server certificate. Set it to the Supabase CA certificate (Database settings -> SSL) to enable verification.');
+  if (!isLocal && !ca && process.env.NODE_ENV === 'production') {
+    throw new Error('DATABASE_SSL_CA must be configured in production so the Postgres server certificate is verified.');
   }
   const pool = new pg.Pool({
     connectionString: parsed.toString(),
     max: Number(process.env.PG_POOL_MAX) || 5,
-    ssl: isLocal ? false : ca ? { ca } : { rejectUnauthorized: false },
+    ssl: isLocal ? false : { ca: ca || undefined, rejectUnauthorized: true },
   });
   pool.on('error', (err: Error) => console.error('[db] idle client error:', err.message));
 
