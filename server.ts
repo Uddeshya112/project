@@ -19,6 +19,7 @@ const WORKSPACES: Record<string, string[]> = {
   CLASS_REPRESENTATIVE: ['Student', 'CR'],
   STUDENT: ['Student'],
 };
+const ROLE_NAMES: Record<string, string> = { SUPER_ADMIN: 'Super Admin', COLLEGE_ADMIN: 'College Admin / Dean', COORDINATOR: 'Timetable Coordinator', HOD: 'Head of Department', FACULTY: 'Faculty Member', CLASS_REPRESENTATIVE: 'Class Representative', STUDENT: 'Student' };
 const ROLE_KEYS: Record<string, string> = {
   SUPER_ADMIN: 'Admin',
   COLLEGE_ADMIN: 'Admin',
@@ -151,7 +152,7 @@ export async function createApp(db: import('./src/server/db').Db) {
         email: req.user!.email,
         department: req.user!.department,
         roleCode,
-        roleName: req.user!.role_code.replaceAll('_', ' '),
+        roleName: ROLE_NAMES[roleCode] ?? 'Student',
         authorizedWorkspaces,
         isDemoUser: req.user!.is_demo,
         profile: req.user!.profile ?? {},
@@ -159,7 +160,7 @@ export async function createApp(db: import('./src/server/db').Db) {
       },
       role,
       roleCode,
-      roleName: req.user!.role_code.replaceAll('_', ' '),
+      roleName: ROLE_NAMES[roleCode] ?? 'Student',
       authorizedWorkspaces,
       roster: state.roster,
     });
