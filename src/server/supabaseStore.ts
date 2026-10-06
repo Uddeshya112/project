@@ -1220,7 +1220,7 @@ class SupabaseRelationalStore {
       changeSummary: `${courseObj?.code || targetSession.courseId} moved from ${oldDay} ${oldSlot} to ${targetDay} ${targetTimeSlotId} in ${roomObj?.name || targetRoomId}`,
       reason,
       isPublished: false,
-      healthScore: 98,
+      healthScore: result.bestCandidate?.healthScore ?? 0,
       sessions: this.activeSessions,
     };
     this.versions.unshift(newVersion);
@@ -1301,7 +1301,7 @@ class SupabaseRelationalStore {
       changeSummary: `Swapped sessions between ${sessA.courseId} and ${sessB.courseId}`,
       reason,
       isPublished: false,
-      healthScore: 98,
+      healthScore: result.bestCandidate?.healthScore ?? 0,
       sessions: this.activeSessions,
     };
     this.versions.unshift(newVersion);
