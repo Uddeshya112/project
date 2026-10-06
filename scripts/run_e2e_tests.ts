@@ -249,7 +249,7 @@ async function runTestSuite() {
       data.user.email === 'kn.murthy@thapar.edu' &&
       data.role === 'Coordinator',
       'Auth API',
-      'Session verification /api/auth/me validates Bearer token and returns user profile'
+      'Session verification /api/auth/me validates the server session cookie and returns user profile'
     );
   } catch (err) {
     assert(false, 'Auth API', 'Session verification test failed', String(err));
@@ -478,7 +478,7 @@ async function runTestSuite() {
 
     // Verify the session cookie is now invalid
     const meRes = await fetch(`${BASE_URL}/api/auth/me`, {
-      headers: { Authorization: coordinatorCookie },
+      headers: authHeaders(coordinatorCookie),
     });
     assert(meRes.status === 401, 'Auth API', 'Revoked session cannot access /api/auth/me');
   } catch (err) {
