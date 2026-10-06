@@ -480,20 +480,22 @@ export function createAuth(opts: AuthOptions) {
     if (!user.password_hash) {
       return res.status(400).json({ success: false, message: 'This account signs in with Google and has no password to change.' });
     }
-    if (rateLimit(`chpwd:${user.id}`, 5, 15 * 60_000)) {
+    const wait = await persistentRateLimit(`chpwd:${user.id}`, 5, 15 * 60_000);
+    if (wait) {
+      res.setHeader('Retry-After', String(wait));
       return res.status(429).json({ success: false, message: 'Too many attempts. Try again later.' });
     }
     if (String(currentPassword ?? '').length > MAX_PASSWORD_LENGTH || String(newPassword ?? '').length > MAX_PASSWORD_LENGTH) {
       return res.status(400).json({ success: false, message: `Password must be ${MAX_PASSWORD_LENGTH} characters or fewer.` });
     }
-    if (!(await bcrypt.compare(String(currentPassword ?? ''), user.password_hash))) {
+    if (!(await verifyPassword(String(currentPassword ?? ''), user.password_hash)).isValid) {
       return res.status(400).json({ success: false, message: 'Current password is incorrect.' });
     }
     const policy = evaluatePasswordPolicy(String(newPassword ?? ''));
     if (!policy.isValid) {
       return res.status(400).json({ success: false, message: `New password needs: ${policy.errors.join(', ')}.` });
     }
-    await db.query(`update ${T}.users set password_hash = $2 where id = $1`, [user.id, await hashPassword(String(newPassword))]);
+    await db.query(`update ${T}.users set password_hash = $2 where id = $1`, [user.id, await hashPasswordBcrypt(String(newPassword))]);
     await revokeSessions(user.id);
     await startSession(req, res, user);
     return res.json({ success: true, message: 'Password changed. Other devices have been signed out.' });
