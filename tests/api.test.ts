@@ -10,7 +10,7 @@ process.env.BCRYPT_ROUNDS = '4';
 process.env.DEMO_MODE = 'true';
 process.env.SEED_DEMO_DATA = 'true';
 
-const SAMPLE_PWD = 'ThaparInstitute@2026!';
+const SAMPLE_PWD = process.env.SEED_USER_PASSWORD || 'ThaparInstitute@2026!';
 let base = '';
 let server: Server;
 let db: import('../src/server/db').Db;
