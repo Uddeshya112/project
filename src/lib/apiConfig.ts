@@ -8,7 +8,7 @@ export const API_BASE_URL: string = (() => {
   if (typeof window !== 'undefined') {
     const host = window.location.hostname;
     if (host === 'localhost' || host === '127.0.0.1' || host.endsWith('.run.app')) return '';
-    if (host.endsWith('.vercel.app')) return RENDER_BACKEND_URL;
+    if (host.endsWith('.vercel.app')) return '';
   }
   return RENDER_BACKEND_URL;
 })();
