@@ -1,4 +1,5 @@
 import { Worker } from 'node:worker_threads';
+import { randomUUID } from 'node:crypto';
 import type { Db } from './db';
 import type { EngineResult, EngineOptions } from '../lib/optimizationEngine';
 import type { AcademicYearConfig, CourseAllocation, Faculty, Room, StudentSection, Course, AcademicConstraint } from '../types';
@@ -48,7 +49,7 @@ export class TimetableJobManager {
   }
 
   async createJob(payload: StoredJobPayload): Promise<string> {
-    const jobId = \`job_\${Date.now()}_\${crypto.randomUUID().slice(0, 8)}\`;
+    const jobId = \`job_\${Date.now()}_\${randomUUID().slice(0, 8)}\`;
     await this.db.query(
       \`insert into intellischedule.timetable_jobs
        (job_id, status, progress, payload, created_at)
