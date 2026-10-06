@@ -634,6 +634,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       setAllocations(prev => prev.filter(a => a.id !== id));
       return { success: true, message: 'Success' };
     } catch (err: any) { return { success: false, message: err?.message || 'Could not delete allocation.' }; }
+  };
 
   // CRUD: Constraints
   const addConstraint = async (constraint: Omit<AcademicConstraint, 'id'>) => {
