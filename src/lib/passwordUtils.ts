@@ -2,6 +2,18 @@ import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 
 export const BCRYPT_SALT_ROUNDS = 12;
+export const MAX_PASSWORD_LENGTH = 128;
+
+function assertPasswordLength(pwd: string): void {
+  if (typeof pwd !== 'string' || pwd.length > MAX_PASSWORD_LENGTH) {
+    throw new Error(`Password must be ${MAX_PASSWORD_LENGTH} characters or fewer.`);
+  }
+}
+
+function timingSafeEqualBuffers(expected: Buffer, actual: Buffer): boolean {
+  if (expected.length !== actual.length) return false;
+  return crypto.timingSafeEqual(expected, actual);
+}
 
 // Password policy shared by the login page and the server. Hashing lives server-side (src/server/auth.ts).
 
@@ -20,14 +32,15 @@ export interface PasswordPolicyCheck {
 /** 12+ characters with upper, lower, digit and symbol. */
 export function evaluatePasswordPolicy(pwd: string): PasswordPolicyCheck {
   const password = typeof pwd === 'string' ? pwd : '';
-  const length = password.length >= 12;
+  const length = password.length >= 12 && password.length <= MAX_PASSWORD_LENGTH;
   const uppercase = /[A-Z]/.test(password);
   const lowercase = /[a-z]/.test(password);
   const number = /[0-9]/.test(password);
   const special = /[^A-Za-z0-9]/.test(password);
 
   const errors: string[] = [];
-  if (!length) errors.push('At least 12 characters');
+  if (password.length < 12) errors.push('At least 12 characters');
+  if (password.length > MAX_PASSWORD_LENGTH) errors.push(`At most ${MAX_PASSWORD_LENGTH} characters`);
   if (!uppercase) errors.push('At least one uppercase letter (A-Z)');
   if (!lowercase) errors.push('At least one lowercase letter (a-z)');
   if (!number) errors.push('At least one number (0-9)');
@@ -48,24 +61,31 @@ export function evaluatePasswordPolicy(pwd: string): PasswordPolicyCheck {
 }
 
 export async function hashPasswordBcrypt(pwd: string): Promise<string> {
+  assertPasswordLength(pwd);
   return bcrypt.hash(pwd, BCRYPT_SALT_ROUNDS);
 }
 
 export function hashPasswordBcryptSync(pwd: string): string {
+  assertPasswordLength(pwd);
   return bcrypt.hashSync(pwd, BCRYPT_SALT_ROUNDS);
 }
 
 export async function hashPasswordScrypt(pwd: string): Promise<string> {
+  assertPasswordLength(pwd);
   return new Promise((resolve, reject) => {
     const salt = crypto.randomBytes(16).toString('hex');
     crypto.scrypt(pwd, salt, 64, (err, derivedKey) => {
-      if (err) reject(err);
+      if (err) {
+        reject(err);
+        return;
+      }
       resolve(`scrypt:${salt}:${derivedKey.toString('hex')}`);
     });
   });
 }
 
 export async function hashPasswordLegacy(pwd: string): Promise<string> {
+  assertPasswordLength(pwd);
   const salt = crypto.randomBytes(16).toString('hex');
   const hash = crypto.createHash('sha256').update(salt + pwd).digest('hex');
   return `sha256:${salt}:${hash}`;
@@ -75,7 +95,7 @@ export async function verifyPassword(
   pwd: string,
   hash: string
 ): Promise<{ isValid: boolean; needsRehash: boolean }> {
-  if (!hash || typeof hash !== 'string') {
+  if (!hash || typeof hash !== 'string' || typeof pwd !== 'string' || pwd.length > MAX_PASSWORD_LENGTH) {
     return { isValid: false, needsRehash: false };
   }
 
@@ -100,8 +120,12 @@ export async function verifyPassword(
             resolve({ isValid: false, needsRehash: false });
             return;
           }
-          const matches = crypto.timingSafeEqual(Buffer.from(expectedHex, 'hex'), derivedKey);
-          resolve({ isValid: matches, needsRehash: true });
+          try {
+            const matches = timingSafeEqualBuffers(Buffer.from(expectedHex, 'hex'), derivedKey);
+            resolve({ isValid: matches, needsRehash: true });
+          } catch {
+            resolve({ isValid: false, needsRehash: false });
+          }
         });
       });
     }
@@ -113,7 +137,7 @@ export async function verifyPassword(
     if (parts.length === 3) {
       const [, salt, expectedHex] = parts;
       const computed = crypto.createHash('sha256').update(salt + pwd).digest('hex');
-      const matches = crypto.timingSafeEqual(Buffer.from(expectedHex, 'hex'), Buffer.from(computed, 'hex'));
+      const matches = timingSafeEqualBuffers(Buffer.from(expectedHex, 'hex'), Buffer.from(computed, 'hex'));
       return { isValid: matches, needsRehash: true };
     }
   }
@@ -127,12 +151,14 @@ export async function verifyPassword(
 }
 
 export function hashPasswordScryptSync(pwd: string): string {
+  assertPasswordLength(pwd);
   const salt = crypto.randomBytes(16).toString('hex');
   const derivedKey = crypto.scryptSync(pwd, salt, 64);
   return `scrypt:${salt}:${derivedKey.toString('hex')}`;
 }
 
 export function hashPasswordLegacySync(pwd: string): string {
+  assertPasswordLength(pwd);
   const salt = crypto.randomBytes(16).toString('hex');
   const hash = crypto.createHash('sha256').update(salt + pwd).digest('hex');
   return `sha256:${salt}:${hash}`;
@@ -142,7 +168,7 @@ export function verifyPasswordSync(
   pwd: string,
   hash: string
 ): { isValid: boolean; needsRehash: boolean; detectedAlgorithm?: string } {
-  if (!hash || typeof hash !== 'string') {
+  if (!hash || typeof hash !== 'string' || typeof pwd !== 'string' || pwd.length > MAX_PASSWORD_LENGTH) {
     return { isValid: false, needsRehash: false, detectedAlgorithm: 'unknown' };
   }
   if (hash.startsWith('$2')) {
@@ -158,7 +184,7 @@ export function verifyPasswordSync(
       const [, salt, expectedHex] = parts;
       try {
         const derivedKey = crypto.scryptSync(pwd, salt, 64);
-        const matches = crypto.timingSafeEqual(Buffer.from(expectedHex, 'hex'), derivedKey);
+        const matches = timingSafeEqualBuffers(Buffer.from(expectedHex, 'hex'), derivedKey);
         return { isValid: matches, needsRehash: true, detectedAlgorithm: 'scrypt' };
       } catch {
         return { isValid: false, needsRehash: false, detectedAlgorithm: 'scrypt' };
@@ -170,7 +196,7 @@ export function verifyPasswordSync(
     if (parts.length === 3) {
       const [, salt, expectedHex] = parts;
       const computed = crypto.createHash('sha256').update(salt + pwd).digest('hex');
-      const matches = crypto.timingSafeEqual(Buffer.from(expectedHex, 'hex'), Buffer.from(computed, 'hex'));
+      const matches = timingSafeEqualBuffers(Buffer.from(expectedHex, 'hex'), Buffer.from(computed, 'hex'));
       return { isValid: matches, needsRehash: true, detectedAlgorithm: 'sha256' };
     }
   }
