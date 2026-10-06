@@ -130,29 +130,7 @@ export function publicUser(u: UserRow) {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Rate limiting
-// ponytail: per-process buckets; move to the database if the API ever runs on several instances.
-// ---------------------------------------------------------------------------
-const buckets = new Map<string, { count: number; resetAt: number }>();
-setInterval(() => {
-  const now = Date.now();
-  for (const [k, b] of buckets) if (b.resetAt < now) buckets.delete(k);
-}, 60_000).unref();
-
-/** Returns seconds to wait, or 0 when the call is allowed. */
-export function rateLimit(key: string, max: number, windowMs: number): number {
-  const now = Date.now();
-  const b = buckets.get(key);
-  if (!b || b.resetAt < now) {
-    buckets.set(key, { count: 1, resetAt: now + windowMs });
-    return 0;
-  }
-  if (b.count >= max) return Math.ceil((b.resetAt - now) / 1000);
-  b.count++;
-  return 0;
-}
-
+// Rate limiting is persisted in intellischedule.rate_limits through persistentRateLimit().
 const sha256 = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 const normEmail = (e: unknown) => String(e ?? '').trim().toLowerCase();
 const isEmail = (e: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) && e.length <= 254;
@@ -407,7 +385,8 @@ export function createAuth(opts: AuthOptions) {
     if (String(currentPassword ?? '').length > MAX_PASSWORD_LENGTH || String(newPassword ?? '').length > MAX_PASSWORD_LENGTH) {
       return res.status(400).json({ success: false, message: `Password must be ${MAX_PASSWORD_LENGTH} characters or fewer.` });
     }
-    if (!(await bcrypt.compare(String(currentPassword ?? ''), user.password_hash))) {
+    const currentVerification = await verifyPassword(String(currentPassword ?? ''), user.password_hash);
+    if (!currentVerification.isValid) {
       return res.status(400).json({ success: false, message: 'Current password is incorrect.' });
     }
     const policy = evaluatePasswordPolicy(String(newPassword ?? ''));
