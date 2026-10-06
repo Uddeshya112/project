@@ -1358,6 +1358,56 @@ export class TimetableStore {
     return c;
   }
 
+  createConstraint(body: unknown, user: string) {
+    const b = (body ?? {}) as Record<string, any>;
+    const name = String(b.name ?? '').trim();
+    const type = b.type === 'Hard' || b.type === 'Soft' ? b.type : 'Soft';
+    const description = String(b.description ?? '').trim();
+    if (!name || name.length > 160) throw new ValidationError('Constraint name is required and must be at most 160 characters.');
+    if (!description || description.length > 500) throw new ValidationError('Constraint description is required and must be at most 500 characters.');
+    const category = ['Faculty', 'Room', 'Section', 'Workload', 'TimeSlot'].includes(b.category) ? b.category : undefined;
+    const id = b.id ? String(b.id).slice(0, 100) : `constraint-${crypto.randomUUID()}`;
+    if (this.constraints.has(id)) throw new HttpError(409, `Constraint '${id}' already exists.`);
+    const value: AcademicConstraint = {
+      id,
+      code: b.code ? String(b.code).slice(0, 80) : undefined,
+      name,
+      type,
+      category,
+      description,
+      isActive: b.isActive !== false,
+      parameterValue: typeof b.parameterValue === 'number' || typeof b.parameterValue === 'string' ? b.parameterValue : undefined,
+    };
+    this.constraints.set(id, value);
+    this.logAudit(user, 'CONSTRAINT_CREATED', 'AcademicConstraint', id, `Created ${name}.`);
+    return value;
+  }
+
+  updateConstraint(id: string, body: unknown, user: string) {
+    const existing = this.constraints.get(id);
+    if (!existing) throw new HttpError(404, 'Constraint not found.');
+    const b = (body ?? {}) as Record<string, any>;
+    if (existing.type === 'Hard' && b.type === 'Soft') throw new HttpError(409, 'Hard constraints cannot be converted to soft constraints.');
+    const next: AcademicConstraint = { ...existing };
+    if (b.name !== undefined) next.name = String(b.name).trim().slice(0, 160);
+    if (b.description !== undefined) next.description = String(b.description).trim().slice(0, 500);
+    if (b.category !== undefined) next.category = ['Faculty', 'Room', 'Section', 'Workload', 'TimeSlot'].includes(b.category) ? b.category : undefined;
+    if (b.parameterValue !== undefined) next.parameterValue = typeof b.parameterValue === 'number' || typeof b.parameterValue === 'string' ? b.parameterValue : undefined;
+    if (b.isActive !== undefined) next.isActive = Boolean(b.isActive);
+    if (next.type === 'Hard' && next.isActive === false) throw new HttpError(409, 'Hard constraints are always enforced and cannot be disabled.');
+    this.constraints.set(id, next);
+    this.logAudit(user, 'CONSTRAINT_UPDATED', 'AcademicConstraint', id, `Updated ${next.name}.`);
+    return next;
+  }
+
+  deleteConstraint(id: string, user: string) {
+    const existing = this.constraints.get(id);
+    if (!existing) throw new HttpError(404, 'Constraint not found.');
+    if (existing.type === 'Hard') throw new HttpError(409, 'Hard constraints cannot be deleted.');
+    this.constraints.delete(id);
+    this.logAudit(user, 'CONSTRAINT_DELETED', 'AcademicConstraint', id, `Deleted ${existing.name}.`);
+  }
+
   /** Faculty toggle their own unavailable periods; staff may toggle anyone's (body.facultyId). */
   toggleProtectedSlot(body: unknown, viewer: Viewer) {
     const b = (body ?? {}) as Record<string, any>;
