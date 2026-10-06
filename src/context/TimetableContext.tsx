@@ -317,6 +317,8 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
   const [selectedSectionId, setSelectedSectionId] = useState<string>('sec-cse-a');
   const [selectedRoomId, setSelectedRoomId] = useState<string>('room-204');
   const [latestGeneratedRoutines, setLatestGeneratedRoutines] = useState<GenerationRoutine[] | null>(null);
+  const [activeVersionNumber, setActiveVersionNumber] = useState<number | undefined>(undefined);
+  const [publishedSessions, setPublishedSessions] = useState<ClassSession[]>([]);
 
   const getAuthHeaders = (): Record<string, string> => ({
     'Content-Type': 'application/json',
@@ -325,6 +327,8 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
   const getAuthHeadersAsync = async (): Promise<Record<string, string>> => ({
     'Content-Type': 'application/json',
   });
+
+  const studentsCountFromServer = useState<number | undefined>(undefined)[0];
 
   // Synchronize initial state from Supabase / Backend API on mount
   useEffect(() => {
@@ -346,10 +350,12 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
             if (Array.isArray(data.constraints)) setConstraints(data.constraints);
             if (Array.isArray(data.sessions)) setSessions(data.sessions);
             if (Array.isArray(data.versions)) setVersions(data.versions);
+            if (Number.isInteger(data.activeVersionNumber)) setActiveVersionNumber(data.activeVersionNumber);
             if (Array.isArray(data.notifications)) setNotifications(data.notifications);
             if (Array.isArray(data.makeupTasks)) setMakeupTasks(data.makeupTasks);
             if (Array.isArray(data.recoveryOpportunities)) setRecoveryOpportunities(data.recoveryOpportunities);
             if (Array.isArray(data.polls)) setPolls(data.polls);
+            if (Array.isArray(data.publishedSessions)) setPublishedSessions(data.publishedSessions);
             if (Array.isArray(data.auditLogs)) setAuditLogs(data.auditLogs);
             if (data.publishStatus) setPublishStatus(data.publishStatus);
           }
@@ -1122,6 +1128,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         setSessions(data.routines[0].sessions);
         setPublishStatus('Draft');
         setLatestGeneratedRoutines(data.routines);
+        if (Number.isInteger(data.routines[0].versionNumber)) setActiveVersionNumber(data.routines[0].versionNumber);
       }
       return data;
     } catch (err: any) {
@@ -1175,6 +1182,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       if (data.success && data.version?.sessions) {
         setSessions(data.version.sessions);
         setPublishStatus('Draft');
+        if (Number.isInteger(data.version.versionNumber)) setActiveVersionNumber(data.version.versionNumber);
       }
       return data;
     } catch (err: any) {
@@ -2467,14 +2475,14 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         publishMasterTimetable,
         unpublishMasterTimetable,
         compareTimetableVersions,
-        activeVersionNumber: 1,
-        publishedSessions: sessions.filter(s => s.status === 'Published'),
-        refresh: async () => {},
+        activeVersionNumber,
+        publishedSessions,
+        refresh: async () => window.location.reload(),
         isLoading: false,
         loadError: null,
         notice: null,
         dismissNotice: () => {},
-        studentsCount: sections.reduce((acc, s) => acc + (s.studentCount || 60), 0),
+        studentsCount: studentsCountFromServer ?? sections.reduce((acc, s) => acc + (s.studentCount || 0), 0),
       }}
     >
       {children}
