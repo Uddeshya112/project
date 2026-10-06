@@ -192,7 +192,7 @@ export function createAuth(opts: AuthOptions) {
       new Date(Date.now() + ttlMs),
     ]);
     await db.query(`update ${T}.users set last_login_at = now() where id = $1`, [user.id]);
-    res.cookie(SESSION_COOKIE, token, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', path: '/', maxAge: ttlMs });
+    res.cookie(SESSION_COOKIE, token, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', path: '/', maxAge: ttlMs });
   }
 
   async function revokeSessions(userId: string) {
@@ -358,7 +358,7 @@ export function createAuth(opts: AuthOptions) {
   router.post('/api/auth/logout', async (req, res) => {
     const token = readCookie(req, SESSION_COOKIE);
     if (token) await db.query(`delete from ${T}.auth_sessions where token_hash = $1`, [sha256(token)]);
-    res.clearCookie(SESSION_COOKIE, { path: '/', httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax' });
+    res.clearCookie(SESSION_COOKIE, { path: '/', httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax' });
     return res.json({ success: true });
   });
 
