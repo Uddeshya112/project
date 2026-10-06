@@ -5,8 +5,8 @@ import helmet from 'helmet';
 import zlib from 'zlib';
 import { performance } from 'node:perf_hooks';
 import { connectDb } from './src/server/db';
-import { createAuth, requireAuth, requireRole, STAFF_ROLES, type Viewer } from './src/server/auth';
-import { store } from './src/server/store';
+import { createAuth, requireAuth, requireRole, STAFF_ROLES } from './src/server/auth';
+import { store, type Viewer } from './src/server/store';
 import { executeOptimizationEngine } from './src/lib/optimizationEngine';
 import { HttpError } from './src/server/validate';
 import { TimetableJobManager } from './src/server/jobManager';
@@ -311,7 +311,7 @@ export async function createApp(db: import('./src/server/db').Db, jobManager?: T
     res.status(201).json({ success: true, sections: value });
   }));
   app.post('/api/academic/subgroups', academicWrite, asyncRoute(async (req, res) => {
-    const value = store.addSubgroup(req.body?.groupId, req.body?.name, req.body?.studentCount, req.body?.type, req.user!.name);
+    const value = store.addSubgroup(req.body?.groupId, { name: req.body?.name, studentCount: req.body?.studentCount, type: req.body?.type }, req.user!.name);
     await store.persist();
     res.status(201).json({ success: true, subgroup: value });
   }));
