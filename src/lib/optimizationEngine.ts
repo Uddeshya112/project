@@ -486,6 +486,38 @@ export function executeOptimizationEngine(
   const sectionWholeOccupancy = new Array<bigint>(numSections).fill(0n);
   const subSectionOccupancy = new Array<bigint>(Math.max(1, problem.totalSubSections)).fill(0n);
   const sectionSubgroupCounts = Array.from({ length: numSections }, () => new Int16Array(totalSlots));
+  const sectionElectiveGroupCounts = Array.from({ length: numSections }, () => new Map<number, Map<string, number>>());
+  const pinnedSessions = (options.pinnedSessions || []).filter(s => s.isLocked && s.status !== 'Cancelled');
+  const pinnedAllocationHours = new Map<string, number>();
+  for (const pin of pinnedSessions) {
+    const key = pin.courseId + '|' + pin.sectionId + '|' + pin.facultyId + '|' + (pin.subSectionId || '');
+    pinnedAllocationHours.set(key, (pinnedAllocationHours.get(key) || 0) + (pin.durationPeriods || 1));
+  }
+  for (const pin of pinnedSessions) {
+    const slotIndex = problem.slots.findIndex(s => s.day === pin.day && s.timeSlotId === pin.timeSlotId);
+    const roomIndex = problem.rooms.findIndex(r => r.id === pin.roomId);
+    const allocIndex = problem.allocations.findIndex(a =>
+      a.course.id === pin.courseId && a.section.id === pin.sectionId && a.faculty.id === pin.facultyId &&
+      (a.allocation.subSectionId || '') === (pin.subSectionId || ''));
+    if (slotIndex < 0) throw new Error('Pinned session ' + pin.id + ' references an invalid time slot.');
+    if (roomIndex < 0) throw new Error('Pinned session ' + pin.id + ' references an unavailable/unknown room.');
+    if (allocIndex < 0) throw new Error('Pinned session ' + pin.id + ' has no matching course allocation.');
+    const allocation = problem.allocations[allocIndex];
+    const block = Array.from({ length: pin.durationPeriods || 1 }, (_, offset) => slotIndex + offset);
+    if (block.some(idx => idx >= totalSlots)) throw new Error('Pinned session ' + pin.id + ' exceeds the configured timetable grid.');
+    const blockBit = block.reduce((mask, idx) => mask | (1n << BigInt(idx)), 0n);
+    if ((facultyOccupancy[allocation.facultyIdx] & blockBit) !== 0n || (roomOccupancy[roomIndex] & blockBit) !== 0n) throw new Error('Pinned session ' + pin.id + ' conflicts with another pinned assignment.');
+    facultyOccupancy[allocation.facultyIdx] |= blockBit;
+    roomOccupancy[roomIndex] |= blockBit;
+    if (allocation.subSectionIdx !== undefined) subSectionOccupancy[allocation.subSectionIdx] |= blockBit;
+    else if (pin.type === 'Elective' && pin.electiveGroupId) {
+      const groups = sectionElectiveGroupCounts[allocation.sectionIdx].get(slotIndex) || new Map<string, number>();
+      groups.set(pin.electiveGroupId, (groups.get(pin.electiveGroupId) || 0) + 1);
+      sectionElectiveGroupCounts[allocation.sectionIdx].set(slotIndex, groups);
+    } else sectionWholeOccupancy[allocation.sectionIdx] |= blockBit;
+    allocHoursAssigned[allocation.allocIdx] += pin.durationPeriods || 1;
+    block.forEach(idx => allocAssignedSlots[allocation.allocIdx].push({ slotIdx: idx, roomIdx: roomIndex }));
+  }
 
   // Schedule Grid: slotIdx -> { allocIdx, roomIdx } | null
   const scheduleAssignments = new Array<{ allocIdx: number; roomIdx: number } | null>(totalSlots).fill(null);
@@ -493,6 +525,7 @@ export function executeOptimizationEngine(
   // Tracking hours assigned per allocation
   const allocHoursAssigned = new Array<number>(problem.allocations.length).fill(0);
   const allocAssignedSlots = Array.from({ length: problem.allocations.length }, () => [] as { slotIdx: number; roomIdx: number }[]);
+  const sectionElectiveGroupCounts = Array.from({ length: numSections }, () => new Map<number, Map<string, number>>());
 
   // Phase A: Feasibility Backtracking Search
   const feasibilityStart = performance.now();
@@ -523,8 +556,8 @@ export function executeOptimizationEngine(
         prng.range(1000, 9999),
         problem,
         allocAssignedSlots,
-        pinnedSessions,
-        options.optimizationProfile || 'BALANCED'
+        options.optimizationProfile || 'BALANCED',
+        pinnedSessions
       );
 
       const validation = validateTimetableIndependently(candidate.sessions, {
@@ -837,7 +870,8 @@ function buildCandidateFromState(
   seed: number,
   problem: CompiledProblem,
   allocAssignedSlots: { slotIdx: number; roomIdx: number }[][],
-  profile: OptimizationProfile = 'BALANCED'
+  profile: OptimizationProfile = 'BALANCED',
+  pinnedSessionsForCandidate: ClassSession[] = []
 ): GeneratedCandidate {
   const sessions: ClassSession[] = [];
   let scheduledHours = 0;
@@ -856,8 +890,15 @@ function buildCandidateFromState(
       const blockId = isBlock
         ? 'cand-' + candidateNum + '-alloc-' + internalAlloc.allocIdx + '-block-' + (blockIndex + 1)
         : undefined;
+      const pinned = pinnedSessionsForCandidate.find(pin =>
+        pin.courseId === internalAlloc.course.id &&
+        pin.sectionId === internalAlloc.section.id &&
+        pin.facultyId === internalAlloc.faculty.id &&
+        (pin.subSectionId || '') === (internalAlloc.allocation.subSectionId || '') &&
+        pin.day === slotRef.day && pin.timeSlotId === slotRef.timeSlotId && pin.roomId === room.id
+      );
 
-      sessions.push({
+      sessions.push(pinned ? { ...pinned } : {
         id: `sess-cand${candidateNum}-${sessionCounter++}`,
         courseId: internalAlloc.course.id,
         facultyId: internalAlloc.faculty.id,
