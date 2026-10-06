@@ -81,6 +81,8 @@ export function CRPortalView() {
     );
   }
 
+  const activeSection = currentSection;
+
   const isLunchSlot = (t: TimeSlot) => Boolean(t.isLunch || t.id === academicYear.lunchPeriodId);
   const isBreakSlot = (t: TimeSlot) => Boolean(t.isBreak || isLunchSlot(t));
   const teachingSlots = timeSlots.filter(t => !isBreakSlot(t));
@@ -101,7 +103,7 @@ export function CRPortalView() {
   const handleRequest = async () => {
     if (!reqCourseId) return;
     setRequesting(true);
-    const r = await requestStudentMakeup(reqCourseId, currentSection.id);
+    const r = await requestStudentMakeup(reqCourseId, activeSection.id);
     setRequesting(false);
     if (r.success) setRequestedCourseId(reqCourseId);
   };
@@ -140,7 +142,7 @@ export function CRPortalView() {
     try {
       await api('/api/voting/polls', {
         body: {
-          sectionId: currentSection.id,
+          sectionId: activeSection.id,
           courseId: pollCourseId || undefined,
           question: pollQuestion.trim(),
           options: pollOptions.map(o => ({ day: o.day, timeSlotLabel: optionLabel(o) })),
