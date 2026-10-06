@@ -10,7 +10,7 @@
     "dev": "tsx server.ts",
     "build": "vite build",
     "lint": "tsc --noEmit",
-    "test": "tsx scripts/run_e2e_tests.ts",
+    "test": "tsx scripts/run_test_suite.ts",
     "test:auth": "tsx scripts/run_auth_architecture_tests.ts",
     "test:demo": "tsx scripts/run_demo_tests.ts",
     "test:security": "tsx scripts/run_adversarial_tests.ts",
@@ -38,7 +38,8 @@
     "tailwind-merge": "^3.0.2",
     "tsx": "^4.23.15",
     "xlsx": "^0.18.5",
-    "zod": "^4.6.5"
+    "zod": "^4.6.5",
+    "helmet": "^8.3.0"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.8",
