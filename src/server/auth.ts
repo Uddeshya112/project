@@ -48,14 +48,6 @@ const ROLE_KEYS: Record<RoleCode, 'Admin' | 'Coordinator' | 'HOD' | 'Faculty' | 
   CLASS_REPRESENTATIVE: 'Student',
   STUDENT: 'Student',
 };
-const DEMO_ROLE_EMAILS: Record<string, string> = {
-  Coordinator: 'coordinator.demo@demo.thapar.local',
-  Faculty: 'faculty.demo@demo.thapar.local',
-  Student: 'student.demo@demo.thapar.local',
-  Admin: 'admin.demo@demo.thapar.local',
-  HOD: 'hod.demo@demo.thapar.local',
-};
-
 // Profile fields a user may edit themselves; admins may also edit the identity fields.
 const SELF_PROFILE_FIELDS = ['phone', 'officeLocation', 'officeHours', 'specialization', 'notificationPreferences'];
 const ADMIN_PROFILE_FIELDS = [...SELF_PROFILE_FIELDS, 'rollNumber', 'sectionId', 'batch', 'avatarUrl', 'facultyId'];
@@ -400,19 +392,6 @@ export function createAuth(opts: AuthOptions) {
     const payload: Record<string, unknown> = { success: true, user: publicUser(user) };
     if (process.env.NODE_ENV === 'test') payload.token = sessionToken;
     return res.json(payload);
-  });
-
-  router.post('/api/auth/demo-login', async (req, res) => {
-    if (!opts.demoMode) {
-      return res.status(403).json({ success: false, message: 'Demo access is disabled on this server.' });
-    }
-    const email = DEMO_ROLE_EMAILS[String(req.body?.roleKey)];
-    const user = email ? await userByEmail(email) : undefined;
-    if (!user || !user.is_demo || user.status !== 'ACTIVE') {
-      return res.status(404).json({ success: false, message: 'That demo account is not available.' });
-    }
-    await startSession(req, res, user);
-    return res.json({ success: true, user: publicUser(user) });
   });
 
   router.get('/api/auth/me', (req, res) => {
