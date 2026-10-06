@@ -2197,6 +2197,20 @@ app.get('/api/academic/bootstrap', (req: Request, res: Response) => {
   });
 });
 
+// Paginated Students Query Endpoint
+app.get('/api/students', (req: Request, res: Response) => {
+  const page = parseInt(req.query.page as string) || 1;
+  const limit = parseInt(req.query.limit as string) || 20;
+  const search = (req.query.search as string) || '';
+  const sectionId = (req.query.sectionId as string) || '';
+
+  const result = supabaseStore.queryStudents(page, limit, search, sectionId);
+  return res.json({
+    success: true,
+    ...result,
+  });
+});
+
 // 1. Departments CRUD
 app.get('/api/academic/departments', (_req: Request, res: Response) => {
   const state = supabaseStore.getBootstrapState();
@@ -2671,14 +2685,13 @@ app.post('/api/academic/import', requireAuth, requireRole(['COORDINATOR', 'COLLE
 // Timetable Generation (Server-Side Solver + Independent Validator + Supabase Persistence)
 const handleGenerateTimetable = (req: AuthenticatedRequest, res: Response) => {
   const body = req.body || {};
-  const { budgetMode = 'BALANCED', timeBudgetMs = 800, seed = 1337, maxCandidates = 3 } = body;
+  const { budgetMode = 'BALANCED', timeBudgetMs = 800, routines } = body;
 
-  const result = supabaseStore.generateMasterTimetable(
+  const result = supabaseStore.generateDualRoutines(
     {
       budgetMode,
       timeBudgetMs: Number(timeBudgetMs),
-      seed: Number(seed),
-      maxCandidates: Number(maxCandidates),
+      routines: Array.isArray(routines) ? routines : undefined,
     },
     req.authenticatedUser?.name
   );
@@ -2689,9 +2702,29 @@ const handleGenerateTimetable = (req: AuthenticatedRequest, res: Response) => {
   });
 };
 
+app.post('/api/academic/generate', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), handleGenerateTimetable);
 app.post('/api/timetable/generate', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), handleGenerateTimetable);
 app.post('/api/timetables/generate', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), handleGenerateTimetable);
 app.post('/api/timetable/generate-engine', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), handleGenerateTimetable);
+
+// Select Routine Version as Active Draft
+app.post('/api/timetable/select-routine', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
+  const { versionNumber } = req.body;
+  if (!versionNumber) {
+    return res.status(400).json({ success: false, message: 'Version number is required.' });
+  }
+
+  const result = supabaseStore.selectRoutineVersion(Number(versionNumber), req.authenticatedUser?.name);
+  if (!result.success) {
+    return res.status(400).json({ success: false, message: result.message });
+  }
+
+  return res.json({
+    success: true,
+    message: result.message,
+    version: result.version,
+  });
+});
 
 // Controlled Manual Move with Independent Validation
 app.post('/api/timetable/move', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {

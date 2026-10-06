@@ -29,6 +29,7 @@ import { MasterExcelHub } from './academic-setup/MasterExcelHub';
 import { GroupsAndSubgroupsTab } from './academic-setup/GroupsAndSubgroupsTab';
 import { CourseAllocationsTab } from './academic-setup/CourseAllocationsTab';
 import { AcademicSetupOverview } from './academic-setup/AcademicSetupOverview';
+import { StudentsTab } from './academic-setup/StudentsTab';
 import { generateMasterExcelTemplate } from '../../lib/excelMasterService';
 
 export type SetupSubTab =
@@ -41,6 +42,7 @@ export type SetupSubTab =
   | 'faculty'
   | 'rooms'
   | 'sections'
+  | 'students'
   | 'allocations'
   | 'constraints'
   | 'validation'
@@ -285,6 +287,7 @@ export function AcademicSetupHubView() {
     { id: 'faculty', label: 'Faculty', icon: <UserSquare2 className="h-3.5 w-3.5" />, badge: facultyMembers.length },
     { id: 'rooms', label: 'Rooms & Labs', icon: <DoorOpen className="h-3.5 w-3.5" />, badge: rooms.length },
     { id: 'sections', label: 'Sections & Groups', icon: <Users className="h-3.5 w-3.5" />, badge: sections.length },
+    { id: 'students', label: 'Students', icon: <GraduationCap className="h-3.5 w-3.5" />, badge: 1280 },
     { id: 'allocations', label: 'Allocations', icon: <Layers className="h-3.5 w-3.5" />, badge: allocations.length },
     { id: 'constraints', label: 'Constraints & Rules', icon: <ShieldCheck className="h-3.5 w-3.5" />, badge: constraints.filter(c => c.isActive).length },
     { id: 'master_excel', label: 'Excel Import', icon: <FileSpreadsheet className="h-3.5 w-3.5" /> },
@@ -1099,6 +1102,9 @@ export function AcademicSetupHubView() {
 
       {/* TAB 8: SECTIONS (GROUPS & SUBGROUPS) */}
       {activeTab === 'sections' && <GroupsAndSubgroupsTab />}
+
+      {/* TAB 8B: STUDENTS ROSTER */}
+      {activeTab === 'students' && <StudentsTab />}
 
       {/* TAB 9: ALLOCATIONS */}
       {activeTab === 'allocations' && <CourseAllocationsTab />}

@@ -56,11 +56,12 @@ export function TimetableGridView() {
 
   const days: DayOfWeek[] = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
 
-  const canPublish = sessions.length > 0 && validationReport.hardViolationsCount === 0;
+  const hardViolationsCount = validationReport.hardViolationsCount ?? validationReport.errorCount;
+  const canPublish = sessions.length > 0 && hardViolationsCount === 0;
 
   const handlePublish = () => {
     if (!canPublish) {
-      setPublishFeedback(`Publishing blocked: ${validationReport.hardViolationsCount} hard violations exist.`);
+      setPublishFeedback(`Publishing blocked: ${hardViolationsCount} hard violations exist.`);
       return;
     }
     const res = publishMasterTimetable('Coordinator');
@@ -196,7 +197,7 @@ export function TimetableGridView() {
                 ? 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer'
                 : 'bg-stone-200 dark:bg-zinc-800 text-stone-400 dark:text-zinc-500 cursor-not-allowed'
             }`}
-            title={canPublish ? 'Publish master timetable' : `Resolve ${validationReport.hardViolationsCount} conflicts before publishing.`}
+            title={canPublish ? 'Publish master timetable' : `Resolve ${hardViolationsCount} conflicts before publishing.`}
           >
             Publish
           </button>

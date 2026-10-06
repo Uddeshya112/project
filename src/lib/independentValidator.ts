@@ -7,7 +7,8 @@ import {
   Course,
   CourseAllocation,
   AcademicYearConfig,
-  DayOfWeek
+  DayOfWeek,
+  AcademicConstraint
 } from '../types';
 
 export type ViolationCode =
@@ -23,7 +24,16 @@ export type ViolationCode =
   | 'BREAK_PERIOD_VIOLATION'
   | 'NON_WORKING_DAY'
   | 'DISCONTINUOUS_BLOCK'
-  | 'MISSING_REQUIRED_SESSIONS';
+  | 'MISSING_REQUIRED_SESSIONS'
+  | 'LAB_DURATION_VIOLATION'
+  | 'SAME_COURSE_SAME_DAY'
+  | 'SAME_COURSE_CONSECUTIVE'
+  | 'EXCESSIVE_STUDENT_GAPS'
+  | 'EXCESSIVE_FACULTY_GAPS'
+  | 'EXCESSIVE_STUDENT_DAILY_LOAD'
+  | 'EXCESSIVE_FACULTY_DAILY_LOAD'
+  | 'POOR_COURSE_DISTRIBUTION'
+  | 'UNNECESSARY_ROOM_CHANGE';
 
 export interface ViolationDetail {
   id: string;
@@ -37,6 +47,23 @@ export interface ViolationDetail {
   recommendation: string;
 }
 
+export interface DetailedQualityMetrics {
+  facultyConflictFreeRate: number;
+  roomUtilizationRate: number;
+  labUtilizationRate: number;
+  capacityComplianceRate: number;
+  subgroupParallelEfficiency: number;
+  sameCourseSameDayCount: number;
+  sameCourseConsecutiveCount: number;
+  totalStudentGaps: number;
+  totalFacultyGaps: number;
+  avgStudentDailyLoad: number;
+  maxStudentDailyLoad: number;
+  avgFacultyDailyLoad: number;
+  maxFacultyDailyLoad: number;
+  courseDistributionQualityRate: number;
+}
+
 export interface IndependentValidationReport {
   isValid: boolean;
   canPublish: boolean;
@@ -47,12 +74,7 @@ export interface IndependentValidationReport {
   requiredSessionsCount: number;
   scheduledSessionsCount: number;
   completionRate: number; // 0 - 100%
-  metrics: {
-    facultyConflictFreeRate: number;
-    roomUtilizationRate: number;
-    capacityComplianceRate: number;
-    subgroupParallelEfficiency: number;
-  };
+  metrics: DetailedQualityMetrics;
   auditTimestamp: string;
 }
 
@@ -63,6 +85,7 @@ export interface ValidationContext {
   rooms: Room[];
   sections: StudentSection[];
   courses: Course[];
+  constraints?: AcademicConstraint[];
 }
 
 /**
@@ -384,6 +407,268 @@ export function validateTimetableIndependently(
     });
   }
 
+  // 5b. Academic Quality Checks & Hard Lab Rules
+  let sameCourseSameDayCount = 0;
+  let sameCourseConsecutiveCount = 0;
+  let totalStudentGaps = 0;
+  let totalFacultyGaps = 0;
+
+  const studentDailyLoadMap = new Map<string, number>();
+  const studentDayPeriodsMap = new Map<string, number[]>();
+  const facultyDailyLoadMap = new Map<string, number>();
+  const facultyDayPeriodsMap = new Map<string, number[]>();
+  const courseDayMap = new Map<string, Set<DayOfWeek>>();
+  const courseLectureDayMap = new Map<string, Map<DayOfWeek, ClassSession[]>>();
+  const labCohortDayMap = new Map<string, ClassSession[]>();
+
+  activeSessions.forEach(session => {
+    const timeSlotNum = parseInt(session.timeSlotId.replace('ts-', ''), 10) || 1;
+    const course = courseMap.get(session.courseId);
+    const section = sectionMap.get(session.sectionId);
+    const subSecKey = session.subSectionId || 'ALL';
+
+    const studentKey = `${session.sectionId}_${subSecKey}_${session.day}`;
+    studentDailyLoadMap.set(studentKey, (studentDailyLoadMap.get(studentKey) || 0) + 1);
+    if (!studentDayPeriodsMap.has(studentKey)) studentDayPeriodsMap.set(studentKey, []);
+    studentDayPeriodsMap.get(studentKey)!.push(timeSlotNum);
+
+    const facultyKey = `${session.facultyId}_${session.day}`;
+    facultyDailyLoadMap.set(facultyKey, (facultyDailyLoadMap.get(facultyKey) || 0) + 1);
+    if (!facultyDayPeriodsMap.has(facultyKey)) facultyDayPeriodsMap.set(facultyKey, []);
+    facultyDayPeriodsMap.get(facultyKey)!.push(timeSlotNum);
+
+    const courseSecKey = `${session.sectionId}_${session.courseId}`;
+    if (!courseDayMap.has(courseSecKey)) courseDayMap.set(courseSecKey, new Set());
+    courseDayMap.get(courseSecKey)!.add(session.day);
+
+    if (session.type === 'Lecture') {
+      const lecKey = `${session.sectionId}_${subSecKey}_${session.courseId}`;
+      if (!courseLectureDayMap.has(lecKey)) courseLectureDayMap.set(lecKey, new Map());
+      const dayMap = courseLectureDayMap.get(lecKey)!;
+      if (!dayMap.has(session.day)) dayMap.set(session.day, []);
+      dayMap.get(session.day)!.push(session);
+    } else if (session.type === 'Lab' || session.type === 'Practical') {
+      const labKey = `${session.sectionId}_${subSecKey}_${session.courseId}_${session.day}`;
+      if (!labCohortDayMap.has(labKey)) labCohortDayMap.set(labKey, []);
+      labCohortDayMap.get(labKey)!.push(session);
+    }
+  });
+
+  // Check Lab Atomicity & Duration Rules
+  labCohortDayMap.forEach((labSessions, labKey) => {
+    const [secId, subSecId, courseId, day] = labKey.split('_') as [string, string, string, DayOfWeek];
+    const course = courseMap.get(courseId);
+    const section = sectionMap.get(secId);
+    const subObj = section?.subSections?.find(sub => sub.id === subSecId);
+    const cohortName = `${section?.name || secId}${subObj ? `/${subObj.name}` : ''}`;
+
+    if (labSessions.length === 1) {
+      violations.push({
+        id: `viol-lab-dur-${labKey}`,
+        code: 'LAB_DURATION_VIOLATION',
+        severity: 'CRITICAL',
+        sessionIds: labSessions.map(s => s.id),
+        entityName: cohortName,
+        day,
+        timeSlotId: labSessions[0].timeSlotId,
+        message: `Laboratory session for ${course?.code || courseId} (${cohortName}) on ${day} is only 1 hour. Labs must occupy exactly 2 consecutive periods.`,
+        recommendation: `Schedule lab as a 2-hour contiguous block.`,
+      });
+    } else if (labSessions.length >= 2) {
+      labSessions.sort((a, b) => {
+        const pA = parseInt(a.timeSlotId.replace('ts-', ''), 10) || 1;
+        const pB = parseInt(b.timeSlotId.replace('ts-', ''), 10) || 1;
+        return pA - pB;
+      });
+
+      for (let i = 0; i < labSessions.length - 1; i += 2) {
+        const s1 = labSessions[i];
+        const s2 = labSessions[i + 1];
+        if (!s2) {
+          violations.push({
+            id: `viol-lab-dur-odd-${labKey}`,
+            code: 'LAB_DURATION_VIOLATION',
+            severity: 'CRITICAL',
+            sessionIds: [s1.id],
+            entityName: cohortName,
+            day,
+            timeSlotId: s1.timeSlotId,
+            message: `Laboratory session for ${course?.code || courseId} (${cohortName}) on ${day} has an odd duration (${labSessions.length} hrs).`,
+            recommendation: `Labs must be scheduled in 2-hour contiguous blocks.`,
+          });
+          break;
+        }
+
+        const p1 = parseInt(s1.timeSlotId.replace('ts-', ''), 10) || 1;
+        const p2 = parseInt(s2.timeSlotId.replace('ts-', ''), 10) || 1;
+
+        if (p2 !== p1 + 1 || p1 === 5 || p2 === 5) {
+          violations.push({
+            id: `viol-lab-cont-${labKey}-${i}`,
+            code: 'LAB_DURATION_VIOLATION',
+            severity: 'CRITICAL',
+            sessionIds: [s1.id, s2.id],
+            entityName: cohortName,
+            day,
+            timeSlotId: s1.timeSlotId,
+            message: `Laboratory session for ${course?.code || courseId} (${cohortName}) on ${day} is not contiguous or crosses lunch (periods ${p1} & ${p2}).`,
+            recommendation: `Labs must be 2 consecutive periods on the same side of lunch.`,
+          });
+        }
+
+        if (s1.roomId !== s2.roomId) {
+          violations.push({
+            id: `viol-lab-room-${labKey}-${i}`,
+            code: 'LAB_DURATION_VIOLATION',
+            severity: 'CRITICAL',
+            sessionIds: [s1.id, s2.id],
+            entityName: cohortName,
+            day,
+            timeSlotId: s1.timeSlotId,
+            message: `Laboratory session for ${course?.code || courseId} (${cohortName}) changes rooms between period 1 (${s1.roomId}) and period 2 (${s2.roomId}).`,
+            recommendation: `Both periods of a lab must use the same laboratory room.`,
+          });
+        }
+
+        if (s1.facultyId !== s2.facultyId) {
+          violations.push({
+            id: `viol-lab-fac-${labKey}-${i}`,
+            code: 'LAB_DURATION_VIOLATION',
+            severity: 'CRITICAL',
+            sessionIds: [s1.id, s2.id],
+            entityName: cohortName,
+            day,
+            timeSlotId: s1.timeSlotId,
+            message: `Laboratory session for ${course?.code || courseId} (${cohortName}) changes faculty between period 1 and period 2.`,
+            recommendation: `Both periods of a lab must be led by the same faculty instructor.`,
+          });
+        }
+      }
+    }
+  });
+
+  // Check Same Course Per Day & Consecutive Lectures Quality Warnings
+  courseLectureDayMap.forEach((dayMap, key) => {
+    const [secId, subSecId, courseId] = key.split('_');
+    const course = courseMap.get(courseId);
+    const section = sectionMap.get(secId);
+
+    dayMap.forEach((daySessions, day) => {
+      if (daySessions.length > 1) {
+        sameCourseSameDayCount += daySessions.length - 1;
+        violations.push({
+          id: `warn-sameday-${key}-${day}`,
+          code: 'SAME_COURSE_SAME_DAY',
+          severity: 'WARNING',
+          sessionIds: daySessions.map(s => s.id),
+          entityName: section?.name || secId,
+          day,
+          timeSlotId: daySessions[0].timeSlotId,
+          message: `Course ${course?.code || courseId} has ${daySessions.length} lecture sessions on ${day} for ${section?.name}. Recommended: max 1 lecture per day.`,
+          recommendation: `Distribute lectures across distinct days.`,
+        });
+
+        daySessions.sort((a, b) => {
+          const pA = parseInt(a.timeSlotId.replace('ts-', ''), 10) || 1;
+          const pB = parseInt(b.timeSlotId.replace('ts-', ''), 10) || 1;
+          return pA - pB;
+        });
+
+        for (let i = 0; i < daySessions.length - 1; i++) {
+          const p1 = parseInt(daySessions[i].timeSlotId.replace('ts-', ''), 10) || 1;
+          const p2 = parseInt(daySessions[i + 1].timeSlotId.replace('ts-', ''), 10) || 1;
+          if (p2 === p1 + 1) {
+            sameCourseConsecutiveCount++;
+            violations.push({
+              id: `warn-consec-${key}-${day}-${i}`,
+              code: 'SAME_COURSE_CONSECUTIVE',
+              severity: 'WARNING',
+              sessionIds: [daySessions[i].id, daySessions[i + 1].id],
+              entityName: section?.name || secId,
+              day,
+              timeSlotId: daySessions[i].timeSlotId,
+              message: `Course ${course?.code || courseId} has consecutive lecture sessions on ${day} (periods ${p1} & ${p2}) for ${section?.name}.`,
+              recommendation: `Avoid consecutive lectures for the same course.`,
+            });
+          }
+        }
+      }
+    });
+  });
+
+  // Check Student & Faculty Gaps
+  studentDayPeriodsMap.forEach((periods, key) => {
+    periods.sort((a, b) => a - b);
+    if (periods.length > 1) {
+      let gapCount = 0;
+      for (let i = 0; i < periods.length - 1; i++) {
+        let diff = periods[i + 1] - periods[i] - 1;
+        if (periods[i] < 5 && periods[i + 1] > 5) diff -= 1; // exclude lunch
+        if (diff > 0) gapCount += diff;
+      }
+      totalStudentGaps += gapCount;
+      if (gapCount > 1) {
+        const [secId, subSecId, day] = key.split('_') as [string, string, DayOfWeek];
+        const section = sectionMap.get(secId);
+        violations.push({
+          id: `warn-stugap-${key}`,
+          code: 'EXCESSIVE_STUDENT_GAPS',
+          severity: 'WARNING',
+          sessionIds: [],
+          entityName: section?.name || secId,
+          day,
+          timeSlotId: `ts-${periods[0]}`,
+          message: `Section ${section?.name} has ${gapCount} internal free period gap(s) on ${day}.`,
+          recommendation: `Compact student timetable to eliminate internal gaps.`,
+        });
+      }
+    }
+  });
+
+  facultyDayPeriodsMap.forEach((periods, key) => {
+    periods.sort((a, b) => a - b);
+    if (periods.length > 1) {
+      let gapCount = 0;
+      for (let i = 0; i < periods.length - 1; i++) {
+        let diff = periods[i + 1] - periods[i] - 1;
+        if (periods[i] < 5 && periods[i + 1] > 5) diff -= 1; // exclude lunch
+        if (diff > 0) gapCount += diff;
+      }
+      totalFacultyGaps += gapCount;
+      if (gapCount > 1) {
+        const [facId, day] = key.split('_') as [string, DayOfWeek];
+        const faculty = facultyMap.get(facId);
+        violations.push({
+          id: `warn-facgap-${key}`,
+          code: 'EXCESSIVE_FACULTY_GAPS',
+          severity: 'WARNING',
+          sessionIds: [],
+          entityName: faculty?.name || facId,
+          day,
+          timeSlotId: `ts-${periods[0]}`,
+          message: `Faculty ${faculty?.name} has ${gapCount} internal free period gap(s) on ${day}.`,
+          recommendation: `Compact faculty teaching schedule.`,
+        });
+      }
+    }
+  });
+
+  // Calculate daily load metrics
+  const studentLoads = Array.from(studentDailyLoadMap.values());
+  const avgStudentDailyLoad = studentLoads.length > 0 ? Number((studentLoads.reduce((a, b) => a + b, 0) / studentLoads.length).toFixed(1)) : 0;
+  const maxStudentDailyLoad = studentLoads.length > 0 ? Math.max(...studentLoads) : 0;
+
+  const facultyLoads = Array.from(facultyDailyLoadMap.values());
+  const avgFacultyDailyLoad = facultyLoads.length > 0 ? Number((facultyLoads.reduce((a, b) => a + b, 0) / facultyLoads.length).toFixed(1)) : 0;
+  const maxFacultyDailyLoad = facultyLoads.length > 0 ? Math.max(...facultyLoads) : 0;
+
+  const totalCourseSecs = courseDayMap.size;
+  let wellDistributedCourses = 0;
+  courseDayMap.forEach((daysSet) => {
+    if (daysSet.size >= 3) wellDistributedCourses++;
+  });
+  const courseDistributionQualityRate = totalCourseSecs > 0 ? Math.round((wellDistributedCourses / totalCourseSecs) * 100) : 100;
+
   // 6. Metrics Calculation
   const hardViolations = violations.filter(v => v.severity === 'CRITICAL');
   const warnings = violations.filter(v => v.severity === 'WARNING');
@@ -400,6 +685,9 @@ export function validateTimetableIndependently(
     Math.round(((activeSessions.length - violations.filter(v => v.code === 'CAPACITY_SHORTAGE').length) / Math.max(1, activeSessions.length)) * 100)
   );
 
+  const labSessionsCount = activeSessions.filter(s => s.type === 'Lab' || s.type === 'Practical').length;
+  const labRoomsCount = rooms.filter(r => r.type === 'ComputerLab' || r.type === 'HardwareLab').length;
+
   return {
     isValid,
     canPublish,
@@ -413,8 +701,18 @@ export function validateTimetableIndependently(
     metrics: {
       facultyConflictFreeRate,
       roomUtilizationRate: Math.min(100, Math.round((activeSessions.length / Math.max(1, rooms.length * 35)) * 100)),
+      labUtilizationRate: Math.min(100, Math.round((labSessionsCount / Math.max(1, labRoomsCount * 35)) * 100)),
       capacityComplianceRate,
-      subgroupParallelEfficiency: 96
+      subgroupParallelEfficiency: 96,
+      sameCourseSameDayCount,
+      sameCourseConsecutiveCount,
+      totalStudentGaps,
+      totalFacultyGaps,
+      avgStudentDailyLoad,
+      maxStudentDailyLoad,
+      avgFacultyDailyLoad,
+      maxFacultyDailyLoad,
+      courseDistributionQualityRate,
     },
     auditTimestamp: new Date().toISOString()
   };

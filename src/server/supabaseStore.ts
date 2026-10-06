@@ -28,6 +28,8 @@ import {
   COURSES,
   DEPARTMENTS,
   PROGRAMS,
+  STUDENTS,
+  StudentRecord,
   INITIAL_CONSTRAINTS,
   INITIAL_SESSIONS,
   INITIAL_MAKEUP_TASKS,
@@ -77,6 +79,7 @@ class SupabaseRelationalStore {
   private facultyMembers: Map<string, Faculty> = new Map();
   private rooms: Map<string, Room> = new Map();
   private groups: Map<string, StudentSection> = new Map();
+  private students: Map<string, StudentRecord> = new Map();
   private allocations: Map<string, CourseAllocation> = new Map();
   private constraints: Map<string, AcademicConstraint> = new Map();
   private versions: TimetableVersion[] = [];
@@ -129,6 +132,10 @@ class SupabaseRelationalStore {
       this.groups.set(s.id, { ...s, subSections });
     });
 
+    // 6b. Students Roster (1,280 Students)
+    this.students.clear();
+    STUDENTS.forEach(st => this.students.set(st.id, { ...st }));
+
     // 7. Allocations
     this.allocations.clear();
     INITIAL_ALLOCATIONS.forEach(a => this.allocations.set(a.id, { ...a }));
@@ -178,6 +185,8 @@ class SupabaseRelationalStore {
       facultyMembers: Array.from(this.facultyMembers.values()),
       rooms: Array.from(this.rooms.values()),
       sections: Array.from(this.groups.values()),
+      studentsCount: this.students.size,
+      students: Array.from(this.students.values()).slice(0, 100), // First 100 for fast payload
       allocations: Array.from(this.allocations.values()),
       constraints: Array.from(this.constraints.values()),
       sessions: this.activeSessions,
@@ -188,6 +197,35 @@ class SupabaseRelationalStore {
       polls: this.replacementPolls,
       auditLogs: this.auditEvents,
       publishStatus: this.academicYear.publishStatus,
+    };
+  }
+
+  public queryStudents(page = 1, limit = 20, search = '', sectionId?: string) {
+    let all = Array.from(this.students.values());
+    if (search.trim()) {
+      const q = search.toLowerCase().trim();
+      all = all.filter(s =>
+        s.studentId.toLowerCase().includes(q) ||
+        s.name.toLowerCase().includes(q) ||
+        s.email.toLowerCase().includes(q) ||
+        s.sectionName.toLowerCase().includes(q)
+      );
+    }
+    if (sectionId && sectionId !== 'ALL') {
+      all = all.filter(s => s.sectionId === sectionId || s.sectionName === sectionId);
+    }
+
+    const total = all.length;
+    const totalPages = Math.ceil(total / limit) || 1;
+    const startIndex = (page - 1) * limit;
+    const data = all.slice(startIndex, startIndex + limit);
+
+    return {
+      total,
+      page,
+      limit,
+      totalPages,
+      students: data
     };
   }
 
@@ -779,6 +817,17 @@ class SupabaseRelationalStore {
     seed?: number;
     maxCandidates?: number;
   }, userId = 'coordinator') {
+    return this.generateDualRoutines({
+      timeBudgetMs: options.timeBudgetMs || 800,
+      budgetMode: options.budgetMode || 'BALANCED',
+    }, userId);
+  }
+
+  public generateDualRoutines(options: {
+    budgetMode?: 'FAST' | 'BALANCED' | 'MAXIMUM_OPTIMIZATION';
+    timeBudgetMs?: number;
+    routines?: Array<{ id: string; label: string; optimizationProfile: 'STUDENT_FOCUSED' | 'FACULTY_FOCUSED' | 'BALANCED' }>;
+  } = {}, userId = 'coordinator') {
     const allocations = Array.from(this.allocations.values());
     const facultyMembers = Array.from(this.facultyMembers.values());
     const rooms = Array.from(this.rooms.values());
@@ -786,54 +835,226 @@ class SupabaseRelationalStore {
     const courses = Array.from(this.courses.values());
     const constraints = Array.from(this.constraints.values());
 
-    const result = executeOptimizationEngine(
-      this.academicYear,
-      allocations,
-      facultyMembers,
-      rooms,
-      sections,
-      courses,
-      constraints,
+    const activeRooms = rooms.filter(r => r.isAvailable);
+    const activeLabs = activeRooms.filter(r => r.type === 'ComputerLab' || r.type === 'HardwareLab');
+    const totalAllocatedHours = allocations.reduce((sum, a) => sum + a.hoursPerWeek, 0);
+
+    const routineConfigs = options.routines || [
       {
-        budgetMode: options.budgetMode || 'BALANCED',
-        timeBudgetMs: options.timeBudgetMs || 800,
-        seed: options.seed || 1337,
-        maxCandidates: options.maxCandidates || 3,
+        id: 'student-focused',
+        label: 'Student-focused',
+        description: 'Prioritizes student timetable quality and minimizes student gaps.',
+        optimizationProfile: 'STUDENT_FOCUSED' as const,
+        seed: 1337,
+      },
+      {
+        id: 'faculty-focused',
+        label: 'Faculty-focused',
+        description: 'Prioritizes faculty timetable quality and minimizes faculty gaps.',
+        optimizationProfile: 'FACULTY_FOCUSED' as const,
+        seed: 9999,
+      },
+    ];
+
+    const generatedRoutines: any[] = [];
+    let bestResultSessions: ClassSession[] = [];
+
+    for (let idx = 0; idx < routineConfigs.length; idx++) {
+      const cfg = routineConfigs[idx];
+      const result = executeOptimizationEngine(
+        this.academicYear,
+        allocations,
+        facultyMembers,
+        rooms,
+        sections,
+        courses,
+        constraints,
+        {
+          budgetMode: options.budgetMode || 'BALANCED',
+          optimizationProfile: cfg.optimizationProfile,
+          timeBudgetMs: options.timeBudgetMs || 800,
+          seed: (cfg as any).seed || (1337 + idx * 8642),
+          maxCandidates: 1,
+        }
+      );
+
+      const candidateSessions = result.bestCandidate?.sessions || [];
+      const valReport = validateTimetableIndependently(candidateSessions, {
+        academicYear: this.academicYear,
+        allocations,
+        facultyMembers,
+        rooms,
+        sections,
+        courses,
+        constraints,
+      });
+
+      // Calculate real metrics
+      const facultyDaySlots = new Map<string, number[]>();
+      const sectionDaySlots = new Map<string, number[]>();
+      const roomBookings = new Set<string>();
+      const labBookings = new Set<string>();
+
+      for (const s of candidateSessions) {
+        const slotNum = parseInt(s.timeSlotId.replace('ts-', ''), 10) || 1;
+        const rKey = `${s.roomId}-${s.day}-${s.timeSlotId}`;
+        roomBookings.add(rKey);
+
+        const rm = rooms.find(r => r.id === s.roomId);
+        if (rm && (rm.type === 'ComputerLab' || rm.type === 'HardwareLab')) {
+          labBookings.add(rKey);
+        }
+
+        if (slotNum !== 5) {
+          const facKey = `${s.facultyId}-${s.day}`;
+          if (!facultyDaySlots.has(facKey)) facultyDaySlots.set(facKey, []);
+          facultyDaySlots.get(facKey)!.push(slotNum);
+
+          const secKey = `${s.sectionId}-${s.day}`;
+          if (!sectionDaySlots.has(secKey)) sectionDaySlots.set(secKey, []);
+          sectionDaySlots.get(secKey)!.push(slotNum);
+        }
       }
-    );
 
-    if (result.isFeasible && result.bestCandidate) {
-      this.activeSessions = result.bestCandidate.sessions;
-      this.academicYear.publishStatus = 'Draft';
+      let facultyGaps = 0;
+      for (const slots of facultyDaySlots.values()) {
+        slots.sort((a, b) => a - b);
+        for (let i = 0; i < slots.length - 1; i++) {
+          let gap = slots[i + 1] - slots[i] - 1;
+          if (slots[i] < 5 && slots[i + 1] > 5) gap -= 1;
+          if (gap > 0) facultyGaps += gap;
+        }
+      }
 
-      const newVersionNumber = this.versions.length + 1;
-      const newVersion: TimetableVersion = {
-        versionNumber: newVersionNumber,
-        versionLabel: `Draft V${newVersionNumber}.0`,
+      let studentGaps = 0;
+      for (const slots of sectionDaySlots.values()) {
+        slots.sort((a, b) => a - b);
+        for (let i = 0; i < slots.length - 1; i++) {
+          let gap = slots[i + 1] - slots[i] - 1;
+          if (slots[i] < 5 && slots[i + 1] > 5) gap -= 1;
+          if (gap > 0) studentGaps += gap;
+        }
+      }
+
+      const totalRoomPossible = activeRooms.length * 5 * 7;
+      const totalLabPossible = activeLabs.length * 5 * 7;
+
+      const roomUtilization = Number(((roomBookings.size / totalRoomPossible) * 100).toFixed(2));
+      const labUtilization = Number(((labBookings.size / totalLabPossible) * 100).toFixed(2));
+
+      const verNum = this.versions.length + 1;
+      const ver: TimetableVersion = {
+        id: `ver-${verNum}`,
+        versionNumber: verNum,
+        versionLabel: `${cfg.label} Draft V${verNum}.0`,
+        label: `${cfg.label} Draft V${verNum}.0`,
         createdAt: new Date().toISOString(),
         createdBy: userId,
-        changeSummary: `Generated timetable from ${allocations.length} academic allocations across ${sections.length} sections.`,
-        reason: 'Automated Schedule Generation Run',
+        changeSummary: `Generated ${cfg.label} timetable (${candidateSessions.length} sessions).`,
+        reason: 'Automated Multi-Routine Solver Run',
         isPublished: false,
-        healthScore: result.bestCandidate.healthScore || 98,
-        sessions: result.bestCandidate.sessions,
+        healthScore: result.bestCandidate?.healthScore || 98,
+        sessionsCount: candidateSessions.length,
+        hardViolationsCount: valReport.hardViolationsCount,
+        sessions: candidateSessions,
       };
 
-      this.versions.unshift(newVersion);
+      this.versions.unshift(ver);
 
-      this.logAudit(
-        userId,
-        'TIMETABLE_GENERATED',
-        'TimetableVersion',
-        `draft-v${newVersionNumber}`,
-        `Generated ${result.bestCandidate.sessions.length} class periods (${result.bestCandidate.scheduledHours} weekly hours) with 0 hard violations.`
-      );
+      if (idx === 0) {
+        bestResultSessions = candidateSessions;
+        this.activeSessions = candidateSessions;
+        this.academicYear.publishStatus = 'Draft';
+      }
+
+      generatedRoutines.push({
+        id: cfg.id,
+        label: cfg.label,
+        description: (cfg as any).description || `Independently validated ${cfg.label} schedule.`,
+        optimizationProfile: cfg.optimizationProfile,
+        versionId: ver.id,
+        versionNumber: verNum,
+        sessions: candidateSessions,
+        validation: {
+          valid: valReport.hardViolationsCount === 0 && candidateSessions.length === totalAllocatedHours,
+          hardViolations: valReport.hardViolationsCount,
+          unscheduled: Math.max(0, totalAllocatedHours - candidateSessions.length),
+          studentConflicts: valReport.violations.filter(v => v.code === 'GROUP_COLLISION' || v.code === 'SUBGROUP_COLLISION' || v.code === 'CROSS_COHORT_COLLISION').length,
+          facultyConflicts: valReport.violations.filter(v => v.code === 'FACULTY_COLLISION').length,
+          roomConflicts: valReport.violations.filter(v => v.code === 'ROOM_COLLISION').length,
+          capacityViolations: valReport.violations.filter(v => v.code === 'CAPACITY_SHORTAGE').length,
+          availabilityViolations: valReport.violations.filter(v => v.code === 'FACULTY_UNAVAILABLE' || v.code === 'ROOM_UNAVAILABLE' || v.code === 'BREAK_PERIOD_VIOLATION' || v.code === 'NON_WORKING_DAY').length,
+          blockingReasons: valReport.violations.filter(v => v.severity === 'CRITICAL').map(v => v.message),
+        },
+        metrics: {
+          studentGaps: valReport.metrics.totalStudentGaps,
+          facultyGaps: valReport.metrics.totalFacultyGaps,
+          roomUtilization: valReport.metrics.roomUtilizationRate,
+          labUtilization: valReport.metrics.labUtilizationRate,
+          sameCourseSameDayCount: valReport.metrics.sameCourseSameDayCount,
+          sameCourseConsecutiveCount: valReport.metrics.sameCourseConsecutiveCount,
+          avgStudentDailyLoad: valReport.metrics.avgStudentDailyLoad,
+          maxStudentDailyLoad: valReport.metrics.maxStudentDailyLoad,
+          avgFacultyDailyLoad: valReport.metrics.avgFacultyDailyLoad,
+          maxFacultyDailyLoad: valReport.metrics.maxFacultyDailyLoad,
+          courseDistributionQualityRate: valReport.metrics.courseDistributionQualityRate,
+        },
+        healthScore: result.bestCandidate?.healthScore || 98,
+      });
     }
 
+    this.logAudit(
+      userId,
+      'DUAL_ROUTINES_GENERATED',
+      'TimetableVersion',
+      'multi-routine-run',
+      `Generated and independently validated ${generatedRoutines.length} distinct optimization routines.`
+    );
+
     return {
-      ...result,
-      sessionsGenerated: result.bestCandidate?.sessions?.length || 0,
+      success: true,
+      isFeasible: generatedRoutines.every(r => r.validation.valid),
+      routines: generatedRoutines,
+      sessionsGenerated: bestResultSessions.length,
       timestamp: new Date().toISOString(),
+    };
+  }
+
+  public selectRoutineVersion(versionNumber: number, userId = 'coordinator'): { success: boolean; version?: TimetableVersion; message?: string } {
+    const targetVersion = this.versions.find(v => v.versionNumber === versionNumber);
+    if (!targetVersion) {
+      return { success: false, message: `Routine version ${versionNumber} not found.` };
+    }
+
+    const val = validateTimetableIndependently(targetVersion.sessions, {
+      academicYear: this.academicYear,
+      allocations: Array.from(this.allocations.values()),
+      facultyMembers: Array.from(this.facultyMembers.values()),
+      rooms: Array.from(this.rooms.values()),
+      sections: Array.from(this.groups.values()),
+      courses: Array.from(this.courses.values()),
+      constraints: Array.from(this.constraints.values()),
+    });
+
+    if (val.hardViolationsCount > 0) {
+      return { success: false, message: `Cannot select routine with ${val.hardViolationsCount} hard violations.` };
+    }
+
+    this.activeSessions = [...targetVersion.sessions];
+    this.academicYear.publishStatus = 'Draft';
+
+    this.logAudit(
+      userId,
+      'ROUTINE_SELECTED',
+      'TimetableVersion',
+      `v-${versionNumber}`,
+      `Selected routine ${targetVersion.versionLabel} as active draft.`
+    );
+
+    return {
+      success: true,
+      version: targetVersion,
+      message: `Routine '${targetVersion.versionLabel}' set as active draft.`,
     };
   }
 

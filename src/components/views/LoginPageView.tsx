@@ -217,8 +217,8 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
           setScreenMode('reset_password');
         } else if (isRecoveryUrl && !session) {
           setTimeout(async () => {
-            const { data: { session: delayedSession } } = await supabaseClient.auth.getSession();
-            if (!delayedSession) {
+            const { data } = await supabaseClient?.auth.getSession() || { data: { session: null } };
+            if (!data.session) {
               setScreenMode('recovery_invalid');
             }
           }, 1200);

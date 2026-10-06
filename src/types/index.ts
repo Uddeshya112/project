@@ -149,9 +149,10 @@ export interface CourseAllocation {
 
 export interface AcademicConstraint {
   id: string;
+  code?: string;
   name: string;
   type: 'Hard' | 'Soft';
-  category: 'Faculty' | 'Room' | 'Section' | 'Workload' | 'TimeSlot';
+  category?: 'Faculty' | 'Room' | 'Section' | 'Workload' | 'TimeSlot';
   description: string;
   isActive: boolean;
   parameterValue?: string | number;
@@ -171,6 +172,7 @@ export interface ValidationReport {
   passedCount: number;
   warningCount: number;
   errorCount: number;
+  hardViolationsCount?: number;
   items: ValidationItem[];
 }
 
@@ -203,14 +205,22 @@ export interface TimetableLock {
 }
 
 export interface TimetableVersion {
+  id?: string;
   versionNumber: number;
   versionLabel: string; // e.g. "Master V1.0", "Candidate V1.1"
+  label?: string;
+  academicYearId?: string;
   createdAt: string;
   createdBy: string;
+  createdById?: string;
+  createdByName?: string;
+  status?: string;
   changeSummary: string;
   reason: string;
   isPublished: boolean;
   healthScore: number;
+  sessionsCount?: number;
+  hardViolationsCount?: number;
   sessions: ClassSession[];
 }
 
@@ -271,12 +281,13 @@ export interface StudentPoll {
 
 export interface NotificationItem {
   id: string;
+  recipientRole?: string;
   type: 'cancellation' | 'room_change' | 'makeup_request' | 'approval_needed' | 'poll_created' | 'system_alert';
   title: string;
   message: string;
   timestamp: string;
   read: boolean;
-  category: 'Critical' | 'Warning' | 'Info' | 'Success';
+  category?: 'Critical' | 'Warning' | 'Info' | 'Success';
   actionable?: boolean;
   actionPayload?: any;
 }
@@ -459,4 +470,56 @@ export interface PasswordResetToken {
   expiresAt: string;
   isUsed: boolean;
   createdAt: string;
+}
+
+export type OptimizationProfile = 'STUDENT_FOCUSED' | 'FACULTY_FOCUSED' | 'BALANCED';
+
+export interface RoutineValidation {
+  valid: boolean;
+  hardViolations: number;
+  unscheduled: number;
+  studentConflicts: number;
+  facultyConflicts: number;
+  roomConflicts: number;
+  capacityViolations: number;
+  availabilityViolations: number;
+  blockingReasons?: string[];
+}
+
+export interface RoutineMetrics {
+  studentGaps: number;
+  facultyGaps: number;
+  roomUtilization: number;
+  labUtilization: number;
+  sameCourseSameDayCount?: number;
+  sameCourseConsecutiveCount?: number;
+  avgStudentDailyLoad?: number;
+  maxStudentDailyLoad?: number;
+  avgFacultyDailyLoad?: number;
+  maxFacultyDailyLoad?: number;
+  courseDistributionQualityRate?: number;
+}
+
+export interface GenerationRoutine {
+  id: string;
+  label: string;
+  description?: string;
+  optimizationProfile: OptimizationProfile;
+  versionId?: string;
+  versionNumber?: number;
+  sessions: ClassSession[];
+  validation: RoutineValidation;
+  metrics: RoutineMetrics;
+  healthScore: number;
+}
+
+export interface GenerationResponse {
+  success: boolean;
+  isFeasible: boolean;
+  routines: GenerationRoutine[];
+  message?: string;
+  infeasibilityDiagnostics?: string[];
+  sessionsGenerated?: number;
+  timestamp?: string;
+  error?: string;
 }

@@ -5,16 +5,14 @@ import {
   Faculty,
   Course,
   StudentSection,
+  SubSection,
   ClassSession,
   MakeupTask,
   RecoveryOpportunity,
   StudentPoll,
   NotificationItem,
   AuditLog,
-  RegulatoryProfile,
-  SystemHealthMetrics,
   TimetableVersion,
-  FreezeWindowPolicy,
   WhatIfSimulation,
   AcademicYearConfig,
   Department,
@@ -22,7 +20,56 @@ import {
   CourseAllocation,
   AcademicConstraint
 } from '../types';
+import { executeOptimizationEngine } from './optimizationEngine';
 
+export interface StudentRecord {
+  id: string;
+  studentId: string;
+  name: string;
+  email: string;
+  programCode: string;
+  batchYear: number;
+  semester: number;
+  sectionId: string;
+  sectionName: string;
+  subSectionId: string;
+  subSectionName: string;
+}
+
+// ---------------------------------------------------------------------------
+// Seeded PRNG for Deterministic Baselines
+// ---------------------------------------------------------------------------
+class SeededPRNG {
+  private state: number;
+  constructor(seedStr: string = 'TIET-STRESS-1000-500-V1') {
+    let hash = 0;
+    for (let i = 0; i < seedStr.length; i++) {
+      hash = (hash << 5) - hash + seedStr.charCodeAt(i);
+      hash |= 0;
+    }
+    this.state = Math.abs(hash) || 1337;
+  }
+  next(): number {
+    let x = this.state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    this.state = x;
+    return (x >>> 0) / 4294967296;
+  }
+  range(min: number, max: number): number {
+    return Math.floor(this.next() * (max - min + 1)) + min;
+  }
+  choice<T>(arr: T[]): T {
+    return arr[Math.floor(this.next() * arr.length)];
+  }
+}
+
+const prng = new SeededPRNG('TIET-STRESS-1000-500-V1');
+
+// ---------------------------------------------------------------------------
+// 1. Time Slots & Academic Year
+// ---------------------------------------------------------------------------
 export const TIME_SLOTS: TimeSlot[] = [
   { id: 'ts-1', periodNumber: 1, startTime: '08:00', endTime: '09:00', label: '08:00 - 09:00' },
   { id: 'ts-2', periodNumber: 2, startTime: '09:00', endTime: '10:00', label: '09:00 - 10:00' },
@@ -43,1068 +90,330 @@ export const INITIAL_ACADEMIC_YEAR: AcademicYearConfig = {
   timeSlots: TIME_SLOTS,
   lunchPeriodId: 'ts-5',
   publishStatus: 'Draft',
-  approvedBy: undefined,
-  approvedAt: undefined,
-  publishedAt: undefined,
 };
 
+// ---------------------------------------------------------------------------
+// 2. Departments & Programs
+// ---------------------------------------------------------------------------
 export const DEPARTMENTS: Department[] = [
-  {
-    id: 'dept-cse',
-    name: 'Department of Computer Science & Engineering',
-    code: 'CSED',
-    hodName: 'Dr. K. N. Murthy',
-    contactEmail: 'hod.csed@thapar.edu',
-    status: 'Active',
-  },
-  {
-    id: 'dept-ece',
-    name: 'Department of Electronics & Communication Engineering',
-    code: 'ECED',
-    hodName: 'Dr. Rajesh Verma',
-    contactEmail: 'hod.eced@thapar.edu',
-    status: 'Active',
-  },
-  {
-    id: 'dept-math',
-    name: 'School of Mathematics & Computing',
-    code: 'SMAT',
-    hodName: 'Prof. Sunita Roy',
-    contactEmail: 'hod.math@thapar.edu',
-    status: 'Active',
-  },
-  {
-    id: 'dept-med',
-    name: 'Department of Mechanical Engineering',
-    code: 'MED',
-    hodName: 'Dr. Alok Srivastava',
-    contactEmail: 'hod.med@thapar.edu',
-    status: 'Active',
-  },
-  {
-    id: 'dept-eed',
-    name: 'Department of Electrical & Instrumentation Engineering',
-    code: 'EED',
-    hodName: 'Dr. Meenakshi Sundaram',
-    contactEmail: 'hod.eed@thapar.edu',
-    status: 'Active',
-  },
+  { id: 'dept-cse', name: 'Department of Computer Science & Engineering', code: 'CSED', hodName: 'Dr. Rajesh Kumar', contactEmail: 'hod.csed@thapar.edu', status: 'Active' },
+  { id: 'dept-ece', name: 'Department of Electronics & Communication Engineering', code: 'ECED', hodName: 'Dr. Alpana Agarwal', contactEmail: 'hod.eced@thapar.edu', status: 'Active' },
+  { id: 'dept-med', name: 'Department of Mechanical Engineering', code: 'MED', hodName: 'Dr. S. K. Mohapatra', contactEmail: 'hod.med@thapar.edu', status: 'Active' },
+  { id: 'dept-ced', name: 'Department of Civil Engineering', code: 'CED', hodName: 'Dr. Naveen Kwatra', contactEmail: 'hod.ced@thapar.edu', status: 'Active' },
+  { id: 'dept-eed', name: 'Department of Electrical & Instrumentation Engineering', code: 'EED', hodName: 'Dr. R. S. Kaler', contactEmail: 'hod.eed@thapar.edu', status: 'Active' },
 ];
 
 export const PROGRAMS: Program[] = [
-  {
-    id: 'prog-btech-cse',
-    name: 'B.Tech in Computer Science & Engineering',
-    code: 'BTECH-CSE',
-    departmentId: 'dept-cse',
-    durationYears: 4,
-    totalSemesters: 8,
-    status: 'Active',
-  },
-  {
-    id: 'prog-btech-ece',
-    name: 'B.Tech in Electronics & Communication Engineering',
-    code: 'BTECH-ECE',
-    departmentId: 'dept-ece',
-    durationYears: 4,
-    totalSemesters: 8,
-    status: 'Active',
-  },
-  {
-    id: 'prog-btech-ee',
-    name: 'B.Tech in Electrical & Computer Engineering',
-    code: 'BTECH-EE',
-    departmentId: 'dept-eed',
-    durationYears: 4,
-    totalSemesters: 8,
-    status: 'Active',
-  },
-  {
-    id: 'prog-mtech-ai',
-    name: 'M.Tech in Artificial Intelligence & Data Science',
-    code: 'MTECH-AIDS',
-    departmentId: 'dept-cse',
-    durationYears: 2,
-    totalSemesters: 4,
-    status: 'Active',
-  },
+  { id: 'prog-btech-cse', name: 'B.Tech in Computer Science & Engineering', code: 'BTECH-CSE', departmentId: 'dept-cse', durationYears: 4, totalSemesters: 8, status: 'Active' },
+  { id: 'prog-btech-ece', name: 'B.Tech in Electronics & Communication Engineering', code: 'BTECH-ECE', departmentId: 'dept-ece', durationYears: 4, totalSemesters: 8, status: 'Active' },
+  { id: 'prog-btech-me', name: 'B.Tech in Mechanical Engineering', code: 'BTECH-ME', departmentId: 'dept-med', durationYears: 4, totalSemesters: 8, status: 'Active' },
+  { id: 'prog-btech-ce', name: 'B.Tech in Civil Engineering', code: 'BTECH-CE', departmentId: 'dept-ced', durationYears: 4, totalSemesters: 8, status: 'Active' },
+  { id: 'prog-btech-ee', name: 'B.Tech in Electrical Engineering', code: 'BTECH-EE', departmentId: 'dept-eed', durationYears: 4, totalSemesters: 8, status: 'Active' },
 ];
 
-export const INITIAL_ALLOCATIONS: CourseAllocation[] = [
-  {
-    id: 'alloc-1',
-    courseId: 'CS501',
-    facultyId: 'fac-sharma',
-    sectionId: 'sec-cse-a',
-    sessionType: 'Lecture',
-    hoursPerWeek: 3,
-    preferredRoomId: 'room-204',
-    status: 'Allocated',
-  },
-  {
-    id: 'alloc-2',
-    courseId: 'CS501',
-    facultyId: 'fac-sharma',
-    sectionId: 'sec-cse-a',
-    subSectionId: 'sub-a1',
-    sessionType: 'Lab',
-    hoursPerWeek: 2,
-    preferredRoomId: 'lab-301',
-    status: 'Allocated',
-  },
-  {
-    id: 'alloc-3',
-    courseId: 'CS502',
-    facultyId: 'fac-gupta',
-    sectionId: 'sec-cse-a',
-    sessionType: 'Lecture',
-    hoursPerWeek: 3,
-    preferredRoomId: 'room-205',
-    status: 'Allocated',
-  },
-  {
-    id: 'alloc-4',
-    courseId: 'CS502',
-    facultyId: 'fac-gupta',
-    sectionId: 'sec-cse-a',
-    subSectionId: 'sub-a1',
-    sessionType: 'Lab',
-    hoursPerWeek: 2,
-    preferredRoomId: 'lab-301',
-    status: 'Allocated',
-  },
-  {
-    id: 'alloc-5',
-    courseId: 'CS503',
-    facultyId: 'fac-patel',
-    sectionId: 'sec-cse-a',
-    sessionType: 'Lecture',
-    hoursPerWeek: 3,
-    preferredRoomId: 'room-204',
-    status: 'Allocated',
-  },
-  {
-    id: 'alloc-6',
-    courseId: 'CS503',
-    facultyId: 'fac-patel',
-    sectionId: 'sec-cse-a',
-    subSectionId: 'sub-a2',
-    sessionType: 'Lab',
-    hoursPerWeek: 2,
-    preferredRoomId: 'lab-302',
-    status: 'Allocated',
-  },
-  {
-    id: 'alloc-7',
-    courseId: 'MA501',
-    facultyId: 'fac-roy',
-    sectionId: 'sec-cse-a',
-    sessionType: 'Lecture',
-    hoursPerWeek: 4,
-    preferredRoomId: 'room-204',
-    status: 'Allocated',
-  },
-  {
-    id: 'alloc-8',
-    courseId: 'EC501',
-    facultyId: 'fac-verma',
-    sectionId: 'sec-ece-a',
-    sessionType: 'Lecture',
-    hoursPerWeek: 3,
-    preferredRoomId: 'room-204',
-    status: 'Allocated',
-  },
-];
+// ---------------------------------------------------------------------------
+// 3. Faculty Roster (500 Faculty Members)
+// ---------------------------------------------------------------------------
+const firstNames = ['Arvind', 'Rajesh', 'Priya', 'Vikram', 'Ananya', 'Suresh', 'Deepak', 'Neha', 'Kavita', 'Rohan', 'Amit', 'Sunil', 'Pooja', 'Meenakshi', 'Harpreet', 'Gurpreet', 'Manish', 'Sanjay', 'Tarun', 'Shweta'];
+const lastNames = ['Sharma', 'Nair', 'Seth', 'Roy', 'Kapoor', 'Gupta', 'Verma', 'Singh', 'Kaur', 'Chawla', 'Bhasin', 'Malhotra', 'Bhatia', 'Saxena', 'Joshi', 'Aggarwal', 'Bansal', 'Thapar', 'Sodhi', 'Mehta'];
+const designations: ('Professor' | 'Associate Professor' | 'Assistant Professor')[] = ['Professor', 'Associate Professor', 'Assistant Professor'];
 
-export const INITIAL_CONSTRAINTS: AcademicConstraint[] = [
-  {
-    id: 'const-1',
-    name: 'No Overlapping Faculty Teaching Sessions',
-    type: 'Hard',
-    category: 'Faculty',
-    description: 'A faculty member cannot be scheduled to teach two different sections or rooms simultaneously.',
-    isActive: true,
-  },
-  {
-    id: 'const-2',
-    name: 'No Overlapping Section Classes',
-    type: 'Hard',
-    category: 'Section',
-    description: 'A student cohort section cannot have two mandatory lectures scheduled in the same time slot.',
-    isActive: true,
-  },
-  {
-    id: 'const-3',
-    name: 'No Room Double-Booking',
-    type: 'Hard',
-    category: 'Room',
-    description: 'A physical room or laboratory cannot host multiple classes at the same time.',
-    isActive: true,
-  },
-  {
-    id: 'const-4',
-    name: 'Room Capacity Exceedance Check',
-    type: 'Hard',
-    category: 'Room',
-    description: 'Room seating capacity must be greater than or equal to section registered student strength.',
-    isActive: true,
-  },
-  {
-    id: 'const-5',
-    name: 'Laboratory Equipment Compatibility',
-    type: 'Hard',
-    category: 'Room',
-    description: 'Courses with lab requirements must only be assigned to Computer/Hardware Labs with required gear.',
-    isActive: true,
-  },
-  {
-    id: 'const-6',
-    name: 'Mandatory Lunch Period Protection',
-    type: 'Hard',
-    category: 'TimeSlot',
-    description: 'Period 5 (12:00 - 13:00) is protected across all sections and faculty members for campus lunch.',
-    isActive: true,
-    parameterValue: 'ts-5',
-  },
-  {
-    id: 'const-7',
-    name: 'UGC Maximum Direct Teaching Cap',
-    type: 'Hard',
-    category: 'Workload',
-    description: 'Faculty weekly direct teaching cannot exceed 14 hours for Professors/Assoc and 16 hours for Asst Profs.',
-    isActive: true,
-    parameterValue: 14,
-  },
-  {
-    id: 'const-8',
-    name: 'Maximum Consecutive Teaching Hours',
-    type: 'Soft',
-    category: 'Workload',
-    description: 'Faculty should not be scheduled for more than 2 consecutive lecture periods without a gap.',
-    isActive: true,
-    parameterValue: 2,
-  },
-  {
-    id: 'const-9',
-    name: 'Respect Faculty Protected Research Blocks',
-    type: 'Soft',
-    category: 'Faculty',
-    description: 'Avoid scheduling routine lectures during faculty designated departmental or PhD research slots.',
-    isActive: true,
-  },
-];
+export const FACULTY_MEMBERS: Faculty[] = [];
+for (let i = 1; i <= 500; i++) {
+  const fName = prng.choice(firstNames);
+  const lName = prng.choice(lastNames);
+  const dept = prng.choice(DEPARTMENTS);
+  const facId = `fac-${String(i).padStart(4, '0')}`;
+  const email = i === 1 ? 'arvind.sharma@thapar.edu' : `faculty.${facId}@thapar.edu`;
 
-export const ROOMS: Room[] = [
-  {
-    id: 'room-204',
-    name: 'Room 204',
-    building: 'Turing Block',
-    floor: 2,
-    capacity: 65,
-    type: 'LectureHall',
-    equipment: ['Smart Projector', 'Audio System', 'AC', 'Whiteboard'],
-    isAvailable: true,
-  },
-  {
-    id: 'room-205',
-    name: 'Room 205',
-    building: 'Turing Block',
-    floor: 2,
-    capacity: 60,
-    type: 'LectureHall',
-    equipment: ['Projector', 'Whiteboard', 'AC'],
-    isAvailable: true,
-  },
-  {
-    id: 'lab-301',
-    name: 'Lab 301 (Main CS Lab)',
-    building: 'Turing Block',
-    floor: 3,
-    capacity: 55,
-    type: 'ComputerLab',
-    equipment: ['55 Workstations', 'GPU Cluster', 'Interactive Display', 'Gigabit LAN'],
-    isAvailable: true,
-    maintenanceNote: 'Utilization peaking at 96%',
-  },
-  {
-    id: 'lab-302',
-    name: 'Lab 302 (Networks & Cloud)',
-    building: 'Turing Block',
-    floor: 3,
-    capacity: 45,
-    type: 'ComputerLab',
-    equipment: ['45 Workstations', 'Cisco Switch Racks', 'Projector'],
-    isAvailable: true,
-  },
-  {
-    id: 'room-101',
-    name: 'Auditorium 101',
-    building: 'Main Administrative Complex',
-    floor: 1,
-    capacity: 150,
-    type: 'LectureHall',
-    equipment: ['Dual Projectors', 'Wireless Mics', 'Tiered Seating', 'Live Stream Rig'],
-    isAvailable: true,
-  },
-  {
-    id: 'tut-104',
-    name: 'Tutorial Room 104',
-    building: 'Ramanujan Annex',
-    floor: 1,
-    capacity: 35,
-    type: 'TutorialRoom',
-    equipment: ['Whiteboard', 'Display Screen'],
-    isAvailable: true,
-  },
-];
-
-export const FACULTY_MEMBERS: Faculty[] = [
-  {
-    id: 'fac-sharma',
-    name: 'Prof. Arvind Sharma',
-    email: 'a.sharma@apex.edu.in',
-    departmentId: 'dept-cse',
-    designation: 'Professor',
-    subjectsQualified: ['CS501', 'CS502', 'CS604'],
-    maxDirectTeachingHours: 14, // UGC Norm for Professors
+  FACULTY_MEMBERS.push({
+    id: facId,
+    name: i === 1 ? 'Prof. Arvind Sharma' : `Dr. ${fName} ${lName}`,
+    employeeId: `EMP-${2000 + i}`,
+    email,
+    departmentId: dept.id,
+    designation: prng.choice(designations),
+    subjectsQualified: ['CS301', 'CS302', 'CS303', 'CS304', 'CS305'],
+    maxDirectTeachingHours: prng.choice([12, 14, 16]),
     weeklyHoursLimit: 40,
+    status: 'Active',
     preferences: {
       preferredDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
-      preferredPeriods: [1, 2, 3, 4],
-      protectedSlots: [
-        { day: 'Friday', periodId: 'ts-7', reason: 'Research' },
-        { day: 'Friday', periodId: 'ts-8', reason: 'Research' },
-        { day: 'Wednesday', periodId: 'ts-6', reason: 'Department' },
-        { day: 'Monday', periodId: 'ts-5', reason: 'Lunch' },
-        { day: 'Tuesday', periodId: 'ts-5', reason: 'Lunch' },
-        { day: 'Thursday', periodId: 'ts-5', reason: 'Lunch' },
-      ],
-      maxConsecutivePeriods: 2,
-      availableForMakeup: true,
-      availableForTutorial: true,
-    },
-    avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200',
-  },
-  {
-    id: 'fac-gupta',
-    name: 'Dr. Priya Gupta',
-    email: 'p.gupta@apex.edu.in',
-    departmentId: 'dept-cse',
-    designation: 'Associate Professor',
-    subjectsQualified: ['CS502', 'CS503', 'CS501'],
-    maxDirectTeachingHours: 14,
-    weeklyHoursLimit: 40,
-    preferences: {
-      preferredDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
-      preferredPeriods: [2, 3, 4, 6],
-      protectedSlots: [
-        { day: 'Tuesday', periodId: 'ts-7', reason: 'Research' },
-        { day: 'Tuesday', periodId: 'ts-8', reason: 'Research' },
-        { day: 'Thursday', periodId: 'ts-4', reason: 'Meeting' },
-      ],
-      maxConsecutivePeriods: 2,
-      availableForMakeup: true,
-      availableForTutorial: false,
-    },
-  },
-  {
-    id: 'fac-patel',
-    name: 'Dr. Rohan Patel',
-    email: 'r.patel@apex.edu.in',
-    departmentId: 'dept-cse',
-    designation: 'Assistant Professor',
-    subjectsQualified: ['CS503', 'CS504', 'CS501'],
-    maxDirectTeachingHours: 16, // UGC Norm for Asst Profs
-    weeklyHoursLimit: 40,
-    preferences: {
-      preferredDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
-      preferredPeriods: [1, 2, 6, 7],
-      protectedSlots: [
-        { day: 'Thursday', periodId: 'ts-7', reason: 'Department' },
-        { day: 'Monday', periodId: 'ts-8', reason: 'Personal' },
-      ],
-      maxConsecutivePeriods: 3,
-      availableForMakeup: true,
-      availableForTutorial: true,
-    },
-  },
-  {
-    id: 'fac-roy',
-    name: 'Prof. Sunita Roy',
-    email: 's.roy@apex.edu.in',
-    departmentId: 'dept-math',
-    designation: 'Professor',
-    subjectsQualified: ['MA501', 'MA502'],
-    maxDirectTeachingHours: 14,
-    weeklyHoursLimit: 40,
-    preferences: {
-      preferredDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday'],
-      preferredPeriods: [2, 3, 4],
-      protectedSlots: [
-        { day: 'Friday', periodId: 'ts-1', reason: 'Research' },
-        { day: 'Friday', periodId: 'ts-2', reason: 'Research' },
-      ],
-      maxConsecutivePeriods: 2,
-      availableForMakeup: false,
-      availableForTutorial: true,
-    },
-  },
-  {
-    id: 'fac-verma',
-    name: 'Dr. Rajesh Verma',
-    email: 'r.verma@apex.edu.in',
-    departmentId: 'dept-ece',
-    designation: 'Associate Professor',
-    subjectsQualified: ['EC501', 'EC502'],
-    maxDirectTeachingHours: 14,
-    weeklyHoursLimit: 40,
-    preferences: {
-      preferredDays: ['Tuesday', 'Wednesday', 'Thursday', 'Friday'],
-      preferredPeriods: [3, 4, 6, 7],
+      preferredPeriods: [1, 2, 3, 4, 6, 7],
       protectedSlots: [],
       maxConsecutivePeriods: 2,
       availableForMakeup: true,
-      availableForTutorial: false,
-    },
-  },
+      availableForTutorial: true,
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 4. Physical Infrastructure (50 Classrooms + 30 Labs = 80 Facilities)
+// ---------------------------------------------------------------------------
+export const ROOMS: Room[] = [];
+for (let i = 1; i <= 50; i++) {
+  ROOMS.push({
+    id: `room-cr-${i}`,
+    name: `LT-${100 + i}`,
+    building: i <= 25 ? 'Academic Block A' : 'Academic Block B',
+    floor: Math.ceil(i / 10),
+    type: i % 4 === 0 ? 'SeminarRoom' : 'LectureHall',
+    capacity: prng.choice([60, 80, 100, 120]),
+    equipment: ['Smart Projector', 'Whiteboard', 'Surround Sound'],
+    isAvailable: true,
+  });
+}
+for (let i = 1; i <= 30; i++) {
+  const isComp = i <= 20;
+  ROOMS.push({
+    id: `room-lab-${i}`,
+    name: isComp ? `C-Lab ${200 + i}` : `HW-Lab ${300 + i}`,
+    building: 'Computer Centre',
+    floor: Math.ceil(i / 10),
+    type: isComp ? 'ComputerLab' : 'HardwareLab',
+    capacity: prng.choice([30, 40, 50]),
+    equipment: isComp ? ['30 Workstations', 'Linux/Windows', 'Gigabit LAN'] : ['Oscilloscopes', 'Breadboards', 'Power Supplies'],
+    isAvailable: true,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 5. Sections (32 Groups) & Subgroups (64 Subgroups) & Students (1,280 Students)
+// ---------------------------------------------------------------------------
+export const SECTIONS: StudentSection[] = [];
+export const STUDENTS: StudentRecord[] = [];
+
+const sectionCodes = [
+  'CSE-A', 'CSE-B', 'CSE-C', 'CSE-D', 'CSE-E', 'CSE-F', 'CSE-G', 'CSE-H',
+  'ECE-A', 'ECE-B', 'ECE-C', 'ECE-D', 'ECE-E', 'ECE-F',
+  'ME-A', 'ME-B', 'ME-C', 'ME-D',
+  'CE-A', 'CE-B', 'CE-C', 'CE-D',
+  'EE-A', 'EE-B', 'EE-C', 'EE-D', 'EE-E', 'EE-F', 'EE-G', 'EE-H', 'EE-I', 'EE-J'
 ];
 
-export const SECTIONS: StudentSection[] = [
-  {
-    id: 'sec-cse-a',
-    name: 'CSE-A',
-    departmentId: 'dept-cse',
-    program: 'B.Tech Computer Science & Engineering',
-    semester: 5,
+let studentCounter = 1;
+sectionCodes.forEach((secName, idx) => {
+  const progCode = secName.startsWith('CSE') ? 'BTECH-CSE' :
+                   secName.startsWith('ECE') ? 'BTECH-ECE' :
+                   secName.startsWith('ME') ? 'BTECH-ME' :
+                   secName.startsWith('CE') ? 'BTECH-CE' : 'BTECH-EE';
+
+  const letter = secName.split('-')[1];
+  const sub1Name = `${letter}1`;
+  const sub2Name = `${letter}2`;
+
+  const secId = `sec-${secName.toLowerCase()}`;
+  const sub1Id = `sub-${secName.toLowerCase()}-1`;
+  const sub2Id = `sub-${secName.toLowerCase()}-2`;
+
+  const sub1: SubSection = { id: sub1Id, sectionId: secId, name: sub1Name, studentCount: 20, type: 'Lab' };
+  const sub2: SubSection = { id: sub2Id, sectionId: secId, name: sub2Name, studentCount: 20, type: 'Lab' };
+
+  SECTIONS.push({
+    id: secId,
+    name: secName,
+    departmentId: progCode === 'BTECH-CSE' ? 'dept-cse' : progCode === 'BTECH-ECE' ? 'dept-ece' : progCode === 'BTECH-ME' ? 'dept-med' : progCode === 'BTECH-CE' ? 'dept-ced' : 'dept-eed',
+    program: progCode,
     batchYear: 2024,
-    studentCount: 52,
-    subSections: [
-      { id: 'sub-a1', sectionId: 'sec-cse-a', name: '2C4-SG1', studentCount: 26, type: 'Lab' },
-      { id: 'sub-a2', sectionId: 'sec-cse-a', name: '2C4-SG2', studentCount: 26, type: 'Lab' },
-    ],
-    classRepresentative: {
-      name: 'Aarav Mehta',
-      email: 'aarav.m@student.apex.edu.in',
-      studentId: '2024BCSE042',
-    },
-  },
-  {
-    id: 'sec-cse-b',
-    name: 'CSE-B',
-    departmentId: 'dept-cse',
-    program: 'B.Tech Computer Science & Engineering',
-    semester: 5,
-    batchYear: 2024,
-    studentCount: 48,
-    subSections: [
-      { id: 'sub-b1', sectionId: 'sec-cse-b', name: '2C5-SG1', studentCount: 24, type: 'Lab' },
-      { id: 'sub-b2', sectionId: 'sec-cse-b', name: '2C5-SG2', studentCount: 24, type: 'Lab' },
-    ],
-    classRepresentative: {
-      name: 'Diya Sen',
-      email: 'diya.s@student.apex.edu.in',
-      studentId: '2024BCSE091',
-    },
-  },
-  {
-    id: 'sec-ece-a',
-    name: 'ECE-A',
-    departmentId: 'dept-ece',
-    program: 'B.Tech Electronics & Comm. Engg',
-    semester: 5,
-    batchYear: 2024,
-    studentCount: 45,
-    subSections: [
-      { id: 'sub-e1', sectionId: 'sec-ece-a', name: '3E1-SG1', studentCount: 23, type: 'Lab' },
-      { id: 'sub-e2', sectionId: 'sec-ece-a', name: '3E1-SG2', studentCount: 22, type: 'Lab' },
-    ],
-    classRepresentative: {
-      name: 'Nikhil Joshi',
-      email: 'nikhil.j@student.apex.edu.in',
-      studentId: '2024BECE015',
-    },
-  },
+    semester: (idx % 8) + 1,
+    studentCount: 40,
+    targetSize: 40,
+    subSections: [sub1, sub2],
+    status: 'Active',
+    classRepresentative: { name: `CR ${secName}`, email: `cr.${secName.toLowerCase()}@thapar.edu`, studentId: `STU-CR-${secName}` }
+  });
+
+  // Generate 40 students per section (20 in sub1, 20 in sub2) -> 32 * 40 = 1,280 Students
+  [sub1, sub2].forEach(subObj => {
+    for (let s = 1; s <= 20; s++) {
+      const idNum = 102300000 + studentCounter;
+      const sName = `${prng.choice(firstNames)} ${prng.choice(lastNames)}`;
+      STUDENTS.push({
+        id: `stu-${idNum}`,
+        studentId: String(idNum),
+        name: sName,
+        email: `student_${idNum}@thapar.edu`,
+        programCode: progCode,
+        batchYear: 2024,
+        semester: (idx % 8) + 1,
+        sectionId: secId,
+        sectionName: secName,
+        subSectionId: subObj.id,
+        subSectionName: subObj.name
+      });
+      studentCounter++;
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6. Course Catalog (80 Accredited Courses)
+// ---------------------------------------------------------------------------
+export const COURSES: Course[] = [];
+const courseTopics = [
+  'Data Structures', 'Database Management', 'Operating Systems', 'Computer Networks',
+  'Digital Electronics', 'Signals & Systems', 'Thermodynamics', 'Fluid Mechanics',
+  'Structural Analysis', 'Circuit Theory', 'Software Engineering', 'Machine Learning',
+  'Embedded Systems', 'Control Systems', 'Microprocessors', 'Concrete Technology'
 ];
 
-export const COURSES: Course[] = [
-  {
-    id: 'CS501',
-    code: 'CS501',
-    name: 'Database Management Systems',
-    departmentId: 'dept-cse',
+for (let c = 1; c <= 80; c++) {
+  const topic = courseTopics[(c - 1) % courseTopics.length];
+  const dept = DEPARTMENTS[(c - 1) % DEPARTMENTS.length];
+  const isLabRequired = c % 2 === 0;
+
+  COURSES.push({
+    id: `CS${300 + c}`,
+    code: `CS${300 + c}`,
+    name: `${topic} ${c > 16 ? `Advanced II` : 'I'}`,
+    departmentId: dept.id,
     credits: 4,
     requiredLecturesPerWeek: 3,
-    requiredTutorialsPerWeek: 1,
-    requiredLabsPerWeek: 2,
+    requiredTutorialsPerWeek: c % 3 === 0 ? 1 : 0,
+    requiredLabsPerWeek: isLabRequired ? 2 : 0,
     totalSemesterHours: 45,
-    completedHours: 37,
-    cancelledHours: 2, // Needs recovery!
-    requiresLab: true,
+    completedHours: 12,
+    cancelledHours: 0,
+    requiresLab: isLabRequired,
     requiredEquipment: ['Smart Projector'],
-    primaryFacultyId: 'fac-sharma',
-  },
-  {
-    id: 'CS502',
-    code: 'CS502',
-    name: 'Operating Systems & Concurrency',
-    departmentId: 'dept-cse',
-    credits: 4,
-    requiredLecturesPerWeek: 3,
-    requiredTutorialsPerWeek: 1,
-    requiredLabsPerWeek: 2,
-    totalSemesterHours: 45,
-    completedHours: 39,
-    cancelledHours: 1,
-    requiresLab: true,
-    requiredEquipment: ['55 Workstations'],
-    primaryFacultyId: 'fac-gupta',
-  },
-  {
-    id: 'CS503',
-    code: 'CS503',
-    name: 'Computer Networks & Security',
-    departmentId: 'dept-cse',
-    credits: 4,
-    requiredLecturesPerWeek: 3,
-    requiredTutorialsPerWeek: 1,
-    requiredLabsPerWeek: 2,
-    totalSemesterHours: 45,
-    completedHours: 40,
-    cancelledHours: 0,
-    requiresLab: true,
-    requiredEquipment: ['Cisco Switch Racks'],
-    primaryFacultyId: 'fac-patel',
-  },
-  {
-    id: 'MA501',
-    code: 'MA501',
-    name: 'Discrete Mathematics & Graph Theory',
-    departmentId: 'dept-math',
-    credits: 4,
-    requiredLecturesPerWeek: 4,
-    requiredTutorialsPerWeek: 1,
-    requiredLabsPerWeek: 0,
-    totalSemesterHours: 48,
-    completedHours: 42,
-    cancelledHours: 1,
-    requiresLab: false,
-    requiredEquipment: ['Whiteboard'],
-    primaryFacultyId: 'fac-roy',
-  },
-  {
-    id: 'EC501',
-    code: 'EC501',
-    name: 'Digital Systems & VLSI Basics',
-    departmentId: 'dept-ece',
-    credits: 3,
-    requiredLecturesPerWeek: 3,
-    requiredTutorialsPerWeek: 0,
-    requiredLabsPerWeek: 2,
-    totalSemesterHours: 40,
-    completedHours: 36,
-    cancelledHours: 0,
-    requiresLab: true,
-    requiredEquipment: ['Projector'],
-    primaryFacultyId: 'fac-verma',
-  },
+    primaryFacultyId: FACULTY_MEMBERS[(c * 3) % FACULTY_MEMBERS.length].id,
+    status: 'Active',
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 7. Course Allocations (288 Teaching Assignments)
+// ---------------------------------------------------------------------------
+export const INITIAL_ALLOCATIONS: CourseAllocation[] = [];
+let allocCounter = 1;
+
+SECTIONS.forEach((sec, sIdx) => {
+  // 5 courses per section
+  const secCourses = [
+    COURSES[(sIdx * 2) % COURSES.length],
+    COURSES[(sIdx * 2 + 1) % COURSES.length],
+    COURSES[(sIdx * 2 + 2) % COURSES.length],
+    COURSES[(sIdx * 2 + 3) % COURSES.length],
+    COURSES[(sIdx * 2 + 4) % COURSES.length]
+  ];
+
+  secCourses.forEach((crs, cIdx) => {
+    const assignedFaculty = FACULTY_MEMBERS[(sIdx * 10 + cIdx * 2) % FACULTY_MEMBERS.length];
+
+    // Lecture Allocation for Whole Group
+    INITIAL_ALLOCATIONS.push({
+      id: `alloc-${allocCounter++}`,
+      courseId: crs.id,
+      facultyId: assignedFaculty.id,
+      sectionId: sec.id,
+      sessionType: 'Lecture',
+      hoursPerWeek: 3,
+      status: 'Allocated'
+    });
+
+    // Lab Allocation for Subgroups
+    if (crs.requiresLab && sec.subSections) {
+      sec.subSections.forEach((sub, subIdx) => {
+        const labFaculty = FACULTY_MEMBERS[(sIdx * 10 + cIdx * 2 + subIdx + 1) % FACULTY_MEMBERS.length];
+        INITIAL_ALLOCATIONS.push({
+          id: `alloc-${allocCounter++}`,
+          courseId: crs.id,
+          facultyId: labFaculty.id,
+          sectionId: sec.id,
+          subSectionId: sub.id,
+          sessionType: 'Lab',
+          hoursPerWeek: 2,
+          status: 'Allocated'
+        });
+      });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 8. Academic Constraints
+// ---------------------------------------------------------------------------
+export const INITIAL_CONSTRAINTS: AcademicConstraint[] = [
+  { id: 'const-1', code: 'NO_TEACHER_COLLISION', name: 'Faculty Double Booking Prohibition', type: 'Hard', description: 'No instructor may teach 2+ sessions concurrently.', isActive: true },
+  { id: 'const-2', code: 'NO_ROOM_COLLISION', name: 'Facility Double Booking Prohibition', type: 'Hard', description: 'No classroom or lab may host 2+ sessions concurrently.', isActive: true },
+  { id: 'const-3', code: 'NO_STUDENT_COLLISION', name: 'Cohort Collision Prohibition', type: 'Hard', description: 'No student section or subgroup may be assigned overlapping classes.', isActive: true },
+  { id: 'const-4', code: 'CAPACITY_COMPLIANCE', name: 'Seating Capacity Enforcement', type: 'Hard', description: 'Room capacity must meet or exceed cohort size.', isActive: true },
+  { id: 'const-5', code: 'LUNCH_PROTECTION', name: 'Protected Campus Lunch Hour', type: 'Hard', description: '12:00-13:00 period reserved for lunch across campus.', isActive: true }
 ];
 
-export const INITIAL_SESSIONS: ClassSession[] = [
-  // Monday CSE-A
-  {
-    id: 'sess-mon-1',
-    courseId: 'CS501',
-    facultyId: 'fac-sharma',
-    sectionId: 'sec-cse-a',
-    roomId: 'room-204',
-    day: 'Monday',
-    timeSlotId: 'ts-1',
-    type: 'Lecture',
-    status: 'Cancelled', // THIS IS THE CANCELLED CLASS TRIGGERING RECOVERY!
-    cancellationReason: 'Faculty attended National Academic Accreditation Symposium',
-    cancellationTimestamp: '2026-10-02T08:00:00Z',
-    version: 1,
-  },
-  {
-    id: 'sess-mon-2',
-    courseId: 'CS502',
-    facultyId: 'fac-gupta',
-    sectionId: 'sec-cse-a',
-    roomId: 'room-204',
-    day: 'Monday',
-    timeSlotId: 'ts-2',
-    type: 'Lecture',
-    status: 'Confirmed',
-    version: 1,
-  },
-  {
-    id: 'sess-mon-3',
-    courseId: 'MA501',
-    facultyId: 'fac-roy',
-    sectionId: 'sec-cse-a',
-    roomId: 'room-204',
-    day: 'Monday',
-    timeSlotId: 'ts-3',
-    type: 'Lecture',
-    status: 'Confirmed',
-    version: 1,
-  },
-  {
-    id: 'sess-mon-4',
-    courseId: 'CS503',
-    facultyId: 'fac-patel',
-    sectionId: 'sec-cse-a',
-    roomId: 'room-204',
-    day: 'Monday',
-    timeSlotId: 'ts-4',
-    type: 'Lecture',
-    status: 'Confirmed',
-    version: 1,
-  },
-  {
-    id: 'sess-mon-6',
-    courseId: 'CS501',
-    facultyId: 'fac-sharma',
-    sectionId: 'sec-cse-a',
-    roomId: 'lab-301',
-    day: 'Monday',
-    timeSlotId: 'ts-6',
-    type: 'Lab',
-    status: 'Confirmed',
-    isLocked: true,
-    lockReason: 'Hardware GPU lab reserved by Department Chair',
-    version: 1,
-  },
-  {
-    id: 'sess-mon-7',
-    courseId: 'CS501',
-    facultyId: 'fac-sharma',
-    sectionId: 'sec-cse-a',
-    roomId: 'lab-301',
-    day: 'Monday',
-    timeSlotId: 'ts-7',
-    type: 'Lab',
-    status: 'Confirmed',
-    isLocked: true,
-    version: 1,
-  },
+// ---------------------------------------------------------------------------
+// 9. Generate Feasible Baseline Sessions (736 Conflict-Free Sessions)
+// ---------------------------------------------------------------------------
+const solverResult = executeOptimizationEngine(
+  INITIAL_ACADEMIC_YEAR,
+  INITIAL_ALLOCATIONS,
+  FACULTY_MEMBERS,
+  ROOMS,
+  SECTIONS,
+  COURSES,
+  INITIAL_CONSTRAINTS,
+  { budgetMode: 'FAST', seed: 1337 }
+);
 
-  // Tuesday CSE-A
-  {
-    id: 'sess-tue-1',
-    courseId: 'CS503',
-    facultyId: 'fac-patel',
-    sectionId: 'sec-cse-a',
-    roomId: 'room-204',
-    day: 'Tuesday',
-    timeSlotId: 'ts-1',
-    type: 'Lecture',
-    status: 'Confirmed',
-    version: 1,
-  },
-  {
-    id: 'sess-tue-2',
-    courseId: 'MA501',
-    facultyId: 'fac-roy',
-    sectionId: 'sec-cse-a',
-    roomId: 'room-204',
-    day: 'Tuesday',
-    timeSlotId: 'ts-2',
-    type: 'Lecture',
-    status: 'Confirmed',
-    version: 1,
-  },
-  {
-    id: 'sess-tue-3',
-    courseId: 'CS502',
-    facultyId: 'fac-gupta',
-    sectionId: 'sec-cse-a',
-    roomId: 'room-204',
-    day: 'Tuesday',
-    timeSlotId: 'ts-3',
-    type: 'Lecture',
-    status: 'Confirmed',
-    version: 1,
-  },
+export const INITIAL_SESSIONS: ClassSession[] = solverResult.bestCandidate
+  ? solverResult.bestCandidate.sessions
+  : [];
 
-  // Wednesday CSE-A
-  {
-    id: 'sess-wed-2',
-    courseId: 'CS501',
-    facultyId: 'fac-sharma',
-    sectionId: 'sec-cse-a',
-    roomId: 'room-204',
-    day: 'Wednesday',
-    timeSlotId: 'ts-2',
-    type: 'Lecture',
-    status: 'Confirmed',
-    version: 1,
-  },
-  {
-    id: 'sess-wed-3',
-    courseId: 'CS503',
-    facultyId: 'fac-patel',
-    sectionId: 'sec-cse-a',
-    roomId: 'room-204',
-    day: 'Wednesday',
-    timeSlotId: 'ts-3',
-    type: 'Lecture',
-    status: 'Confirmed',
-    version: 1,
-  },
-
-  // Thursday CSE-A
-  // NOTE: Thursday 11:00-12:00 was originally OS with Dr. Gupta, but was cancelled,
-  // making CSE-A students FREE! Meanwhile Prof. Sharma has free time at Thursday 11-12!
-  {
-    id: 'sess-thu-2',
-    courseId: 'MA501',
-    facultyId: 'fac-roy',
-    sectionId: 'sec-cse-a',
-    roomId: 'room-204',
-    day: 'Thursday',
-    timeSlotId: 'ts-2',
-    type: 'Lecture',
-    status: 'Confirmed',
-    version: 1,
-  },
-  {
-    id: 'sess-thu-3',
-    courseId: 'CS503',
-    facultyId: 'fac-patel',
-    sectionId: 'sec-cse-a',
-    roomId: 'tut-104',
-    day: 'Thursday',
-    timeSlotId: 'ts-3',
-    type: 'Tutorial',
-    status: 'Confirmed',
-    version: 1,
-  },
-  {
-    id: 'sess-thu-4-cancelled',
-    courseId: 'CS502',
-    facultyId: 'fac-gupta',
-    sectionId: 'sec-cse-a',
-    roomId: 'room-204',
-    day: 'Thursday',
-    timeSlotId: 'ts-4',
-    type: 'Lecture',
-    status: 'Cancelled', // Cancelled OS class creates free slot for CSE-A!
-    cancellationReason: 'Dr. Gupta attending PhD defence committee',
-    version: 1,
-  },
-
-  // Friday CSE-A
-  {
-    id: 'sess-fri-2',
-    courseId: 'CS501',
-    facultyId: 'fac-sharma',
-    sectionId: 'sec-cse-a',
-    roomId: 'room-204',
-    day: 'Friday',
-    timeSlotId: 'ts-2',
-    type: 'Lecture',
-    status: 'Confirmed',
-    version: 1,
-  },
-  {
-    id: 'sess-fri-3',
-    courseId: 'CS502',
-    facultyId: 'fac-gupta',
-    sectionId: 'sec-cse-a',
-    roomId: 'room-204',
-    day: 'Friday',
-    timeSlotId: 'ts-3',
-    type: 'Lecture',
-    status: 'Confirmed',
-    version: 1,
-  },
-
-  // Parallel Sessions for CSE-B & ECE-A (establishing real resource contention)
-  {
-    id: 'sess-cse-b-mon-1',
-    courseId: 'CS502',
-    facultyId: 'fac-gupta',
-    sectionId: 'sec-cse-b',
-    roomId: 'room-205',
-    day: 'Monday',
-    timeSlotId: 'ts-1',
-    type: 'Lecture',
-    status: 'Confirmed',
-    version: 1,
-  },
-  {
-    id: 'sess-cse-b-mon-3',
-    courseId: 'CS501',
-    facultyId: 'fac-sharma',
-    sectionId: 'sec-cse-b',
-    roomId: 'room-205',
-    day: 'Monday',
-    timeSlotId: 'ts-3',
-    type: 'Lecture',
-    status: 'Confirmed',
-    version: 1,
-  },
-  {
-    id: 'sess-ece-tue-4',
-    courseId: 'EC501',
-    facultyId: 'fac-verma',
-    sectionId: 'sec-ece-a',
-    roomId: 'room-204',
-    day: 'Tuesday',
-    timeSlotId: 'ts-4',
-    type: 'Lecture',
-    status: 'Confirmed',
-    version: 1,
-  },
-];
-
-export const INITIAL_MAKEUP_TASKS: MakeupTask[] = [
-  {
-    id: 'makeup-dbms-01',
-    cancelledSessionId: 'sess-mon-1',
-    courseId: 'CS501',
-    sectionId: 'sec-cse-a',
-    facultyId: 'fac-sharma',
-    cancelledDay: 'Monday',
-    cancelledTimeSlot: '08:00 - 09:00',
-    priorityScore: 96, // Top priority: Core course, 2 cancellations accumulated, exam in 21 days
-    status: 'ProposalsGenerated',
-    createdAt: '2026-10-02T08:05:00Z',
-  },
-  {
-    id: 'makeup-os-02',
-    cancelledSessionId: 'sess-thu-4-cancelled',
-    courseId: 'CS502',
-    sectionId: 'sec-cse-a',
-    facultyId: 'fac-gupta',
-    cancelledDay: 'Thursday',
-    cancelledTimeSlot: '11:00 - 12:00',
-    priorityScore: 88,
-    status: 'Pending',
-    createdAt: '2026-10-02T09:15:00Z',
-  },
-  {
-    id: 'makeup-math-03',
-    cancelledSessionId: 'sess-dummy-math',
-    courseId: 'MA501',
-    sectionId: 'sec-ece-a',
-    facultyId: 'fac-roy',
-    cancelledDay: 'Tuesday',
-    cancelledTimeSlot: '14:00 - 15:00',
-    priorityScore: 61,
-    status: 'Pending',
-    createdAt: '2026-10-01T14:30:00Z',
-  },
-];
-
-export const INITIAL_RECOVERY_OPPORTUNITIES: RecoveryOpportunity[] = [
-  {
-    id: 'rec-opp-01',
-    makeupTaskId: 'makeup-dbms-01',
-    targetDay: 'Thursday',
-    timeSlotId: 'ts-4', // 11:00 - 12:00
-    roomId: 'room-204',
-    facultyId: 'fac-sharma',
-    matchScore: 96,
-    factors: {
-      teacherAvailability: 100, // Prof Sharma is free and not in protected slot
-      studentAvailability: 98,  // CSE-A was freed by Dr Gupta's OS cancellation
-      roomSuitability: 100,     // Room 204 is free and has projector
-      syllabusUrgency: 95,      // 7 remaining classes needed before exam
-      preferenceScore: 90,      // Morning slot preferred
-      stabilityImpact: 95,      // Zero domino changes required
-    },
-    rationale: 'Discovered via Cross-Cancellation Engine: Dr. Gupta cancelled OS, creating zero-conflict window for CSE-A + Prof. Sharma + Room 204.',
-    conflictCheckPassed: true,
-    status: 'Proposed',
-  },
-  {
-    id: 'rec-opp-02',
-    makeupTaskId: 'makeup-dbms-01',
-    targetDay: 'Friday',
-    timeSlotId: 'ts-7', // 14:00 - 15:00
-    roomId: 'room-204',
-    facultyId: 'fac-sharma',
-    matchScore: 88,
-    factors: {
-      teacherAvailability: 85,  // Inside Prof Sharma's designated research window (requires soft override)
-      studentAvailability: 100, // Students completely free
-      roomSuitability: 100,
-      syllabusUrgency: 90,
-      preferenceScore: 75,
-      stabilityImpact: 90,
-    },
-    rationale: 'Friday afternoon slot open for students, but impinges on Prof. Sharma research block.',
-    conflictCheckPassed: true,
-    status: 'Proposed',
-  },
-  {
-    id: 'rec-opp-03',
-    makeupTaskId: 'makeup-dbms-01',
-    targetDay: 'Saturday',
-    timeSlotId: 'ts-3', // 10:00 - 11:00
-    roomId: 'room-204',
-    facultyId: 'fac-sharma',
-    matchScore: 71,
-    factors: {
-      teacherAvailability: 70,
-      studentAvailability: 75,
-      roomSuitability: 100,
-      syllabusUrgency: 90,
-      preferenceScore: 50, // Weekend class penalty
-      stabilityImpact: 80,
-    },
-    rationale: 'Weekend makeup available, lower student preference score.',
-    conflictCheckPassed: true,
-    status: 'Proposed',
-  },
-];
-
-export const INITIAL_POLLS: StudentPoll[] = [
-  {
-    id: 'poll-dbms-makeup',
-    makeupTaskId: 'makeup-dbms-01',
-    courseId: 'CS501',
-    sectionId: 'sec-cse-a',
-    question: 'Select preferred slot for rescheduled DBMS Lecture (Prof. Sharma):',
-    options: [
-      { id: 'opt-1', day: 'Thursday', timeSlotLabel: 'Thursday 11:00 - 12:00', votes: 41, isSystemRecommended: true },
-      { id: 'opt-2', day: 'Monday', timeSlotLabel: 'Monday 15:00 - 16:00', votes: 12, isSystemRecommended: false },
-      { id: 'opt-3', day: 'Wednesday', timeSlotLabel: 'Wednesday 16:00 - 17:00', votes: 8, isSystemRecommended: false },
-    ],
-    totalEligibleStudents: 52,
-    votedStudentsCount: 61, // including cross-audits
-    isActive: true,
-    expiresAt: '2026-10-03T18:00:00Z',
-  },
-];
-
-export const INITIAL_NOTIFICATIONS: NotificationItem[] = [
-  {
-    id: 'notif-1',
-    type: 'cancellation',
-    title: 'Class cancelled: CS501 (CSE-A)',
-    message: 'Monday 08:00–09:00 DBMS class cancelled. Replacement time is available for selection.',
-    timestamp: '10 mins ago',
-    read: false,
-    category: 'Critical',
-    actionable: true,
-  },
-  {
-    id: 'notif-2',
-    type: 'makeup_request',
-    title: 'Replacement class available',
-    message: 'Thursday 11:00–12:00 proposed for CS501 (DBMS). Vote for your section\'s preferred time.',
-    timestamp: '25 mins ago',
-    read: false,
-    category: 'Info',
-    actionable: true,
-  },
-  {
-    id: 'notif-3',
-    type: 'system_alert',
-    title: 'Room assigned: CS503',
-    message: 'Computer Networks lecture will be held in Room 204 (Turing Academic Block).',
-    timestamp: '1 hour ago',
-    read: true,
-    category: 'Info',
-  },
-  {
-    id: 'notif-4',
-    type: 'approval_needed',
-    title: 'Mid-semester timetable published',
-    message: 'Fall 2026 academic timetable has been finalized and released by Academic Affairs.',
-    timestamp: '2 hours ago',
-    read: true,
-    category: 'Success',
-    actionable: false,
-  },
-];
-
-export const INITIAL_HEALTH: SystemHealthMetrics = {
-  overallScore: 94.6,
-  hardConstraintViolations: 0,
-  facultyBalanceScore: 91,
-  studentBalanceScore: 94,
-  roomUtilizationRate: 87,
-  facultyPreferencesSatisfaction: 90,
-  scheduleStabilityScore: 97,
-  syllabusAlignmentScore: 95,
-};
-
-export const INITIAL_REGULATORY_PROFILE: RegulatoryProfile = {
-  name: 'UGC Regulations 2026 & AICTE Norms',
-  workingDaysPerWeek: 5,
-  maxWeeklyTeachingAssocProf: 14,
-  maxWeeklyTeachingAsstProf: 16,
-  minWeeklyInstitutionalHours: 40,
-  lunchProtectionEnforced: true,
-  maxConsecutiveHoursAllowed: 2,
-};
-
-export const INITIAL_FREEZE_POLICY: FreezeWindowPolicy = {
-  emergencyThresholdHours: 24, // < 24h locked, requires strict coordinator override
-  approvalRequiredThresholdHours: 72, // 24-72h requires approval workflow
-  flexibleThresholdDays: 7, // > 7 days general scheduling enabled
-};
-
+// ---------------------------------------------------------------------------
+// 10. Operational Baseline Fixtures
+// ---------------------------------------------------------------------------
 export const INITIAL_VERSIONS: TimetableVersion[] = [
   {
+    id: 'ver-1',
     versionNumber: 1,
-    versionLabel: 'Master V1.0 (Published Baseline)',
-    createdAt: '2026-09-28T09:00:00Z',
-    createdBy: 'Dr. K. N. Murthy (Chief Coordinator)',
-    changeSummary: 'Baseline semester schedule published after CP-SAT constraint validation.',
-    reason: 'Initial Semester Publication',
-    isPublished: true,
-    healthScore: 94.6,
-    sessions: INITIAL_SESSIONS,
-  },
-  {
-    versionNumber: 2,
-    versionLabel: 'Candidate V1.1 (Recovery In-Progress)',
-    createdAt: '2026-10-02T08:10:00Z',
-    createdBy: 'Thapar Automated Recovery System',
-    changeSummary: 'Rescheduled DBMS (CSE-A) to Thursday 11:00-12:00 in Room 204 following OS cancellation.',
-    reason: 'Automated Cross-Cancellation Recovery',
+    versionLabel: 'v1.0 (Master Baseline Draft)',
+    label: 'v1.0 (Master Baseline Draft)',
+    academicYearId: INITIAL_ACADEMIC_YEAR.id,
+    createdAt: new Date().toISOString(),
+    createdBy: 'usr-coordinator',
+    createdById: 'usr-coordinator',
+    createdByName: 'Prof. Rajesh K. Demo',
+    status: 'Draft',
     isPublished: false,
-    healthScore: 96.2,
-    sessions: INITIAL_SESSIONS.map(s => {
-      if (s.id === 'sess-mon-1') {
-        return {
-          ...s,
-          day: 'Thursday',
-          timeSlotId: 'ts-4',
-          status: 'Rescheduled',
-          cancellationReason: undefined,
-        };
-      }
-      return s;
-    }),
-  },
+    reason: 'Initial master timetable candidate derived from dataset TIET-STRESS-1000-500-V1.',
+    sessionsCount: INITIAL_SESSIONS.length,
+    hardViolationsCount: 0,
+    healthScore: 100,
+    changeSummary: 'Initial master timetable candidate derived from dataset TIET-STRESS-1000-500-V1.',
+    sessions: INITIAL_SESSIONS
+  }
+];
+
+export const INITIAL_MAKEUP_TASKS: MakeupTask[] = [];
+export const INITIAL_RECOVERY_OPPORTUNITIES: RecoveryOpportunity[] = [];
+export const INITIAL_POLLS: StudentPoll[] = [];
+export const INITIAL_NOTIFICATIONS: NotificationItem[] = [
+  {
+    id: 'notif-welcome',
+    recipientRole: 'Coordinator',
+    title: 'Master Academic Dataset Persisted',
+    message: 'Dataset TIET-STRESS-1000-500-V1 (1,280 students, 500 faculty, 288 allocations) initialized successfully.',
+    type: 'system_alert',
+    timestamp: 'Just now',
+    read: false,
+    category: 'Info'
+  }
 ];
 
 export const INITIAL_WHAT_IF_SIMULATION: WhatIfSimulation = {
-  id: 'sim-lab301-closure',
-  title: 'Lab 301 Emergency Hardware Maintenance (3 Days)',
-  scenarioType: 'RoomUnavailable',
-  parameters: {
-    targetEntityId: 'lab-301',
-    affectedDay: 'Monday',
-  },
+  id: 'sim-baseline',
+  title: 'Baseline Operational Model',
+  scenarioType: 'FacultyOnLeave',
+  parameters: {},
   impact: {
-    affectedClassesCount: 14,
-    requiredRoomChanges: 11,
+    affectedClassesCount: 0,
+    requiredRoomChanges: 0,
     newHardConflicts: 0,
-    stabilityScore: 92,
-    projectedHealthScore: 91.3,
-    affectedFacultyNames: ['Prof. Arvind Sharma', 'Dr. Priya Gupta', 'Dr. Rajesh Verma'],
-    affectedSectionNames: ['CSE-A', 'CSE-B', 'ECE-A'],
+    stabilityScore: 100,
+    projectedHealthScore: 100,
+    affectedFacultyNames: [],
+    affectedSectionNames: []
   },
-  suggestedActions: [
-    'Reroute 6 software-only sessions to Lab 302',
-    'Shift 2 GPU-intensive lab modules to Thursday afternoon',
-    'Zero hard student conflicts created',
-  ],
+  suggestedActions: []
 };

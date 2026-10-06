@@ -20,7 +20,10 @@ import {
   Settings,
   Shield,
   Layers,
-  Sparkles
+  Sparkles,
+  Sliders,
+  Activity,
+  ShieldCheck
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -297,6 +300,48 @@ export function Sidebar({
               <Settings className="h-4 w-4 shrink-0" />
               <span>Settings</span>
             </button>
+
+            {/* SECONDARY MORE MENU FOR ADVANCED TOOLS */}
+            <div className="pt-2 border-t border-[#E5E2D9] dark:border-zinc-800/60 mt-2">
+              <div className="px-3 py-1 text-[10px] font-mono uppercase tracking-wider text-stone-400 dark:text-zinc-500 font-semibold">
+                Advanced Tools
+              </div>
+              <button
+                onClick={() => handleSelect('whatif')}
+                className={`w-full text-left px-3 py-1.5 rounded-lg text-xs transition-all flex items-center gap-2 ${
+                  activeView === 'whatif'
+                    ? 'bg-stone-200 dark:bg-zinc-700 text-stone-900 dark:text-white font-semibold'
+                    : 'hover:bg-stone-100 dark:hover:bg-zinc-800 text-stone-600 dark:text-zinc-400'
+                }`}
+              >
+                <Sliders className="h-3.5 w-3.5 shrink-0 text-stone-500" />
+                <span>What-If Simulator</span>
+              </button>
+
+              <button
+                onClick={() => handleSelect('syllabus')}
+                className={`w-full text-left px-3 py-1.5 rounded-lg text-xs transition-all flex items-center gap-2 ${
+                  activeView === 'syllabus'
+                    ? 'bg-stone-200 dark:bg-zinc-700 text-stone-900 dark:text-white font-semibold'
+                    : 'hover:bg-stone-100 dark:hover:bg-zinc-800 text-stone-600 dark:text-zinc-400'
+                }`}
+              >
+                <Activity className="h-3.5 w-3.5 shrink-0 text-stone-500" />
+                <span>Syllabus Progress</span>
+              </button>
+
+              <button
+                onClick={() => handleSelect('governance')}
+                className={`w-full text-left px-3 py-1.5 rounded-lg text-xs transition-all flex items-center gap-2 ${
+                  activeView === 'governance'
+                    ? 'bg-stone-200 dark:bg-zinc-700 text-stone-900 dark:text-white font-semibold'
+                    : 'hover:bg-stone-100 dark:hover:bg-zinc-800 text-stone-600 dark:text-zinc-400'
+                }`}
+              >
+                <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-stone-500" />
+                <span>Audit & Governance</span>
+              </button>
+            </div>
           </div>
         )}
 

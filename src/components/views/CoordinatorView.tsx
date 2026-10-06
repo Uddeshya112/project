@@ -35,7 +35,8 @@ export function CoordinatorView() {
   const isDataReady = validationReport.isReadyForGeneration;
   const hasDraft = sessions.length > 0;
   const isPublished = publishStatus === 'Published';
-  const isValidated = validationReport.hardViolationsCount === 0;
+  const hardViolationsCount = validationReport.hardViolationsCount ?? validationReport.errorCount;
+  const isValidated = hardViolationsCount === 0;
 
   // Real Timestamps
   const timestampStr = new Date().toLocaleDateString('en-US', {
@@ -46,7 +47,7 @@ export function CoordinatorView() {
     minute: '2-digit',
   });
 
-  // Recent Requests Mock/Persisted Data (3 items max)
+  // Recent Requests (3 items max)
   const recentRequests = [
     { id: 'req-1', type: 'Cancellation', section: 'CSE-A', requestedBy: 'Dr. Arvind Sharma', status: 'Pending', time: 'Today, 07:30 AM' },
     { id: 'req-2', type: 'Faculty Swap', section: 'CSE-B', requestedBy: 'Dr. Arvind Sharma', status: 'Pending', time: 'Today, 08:15 AM' },
@@ -55,53 +56,43 @@ export function CoordinatorView() {
 
   // Workflow Stage Calculation
   let currentStage: 'DATA' | 'GENERATE' | 'REVIEW' | 'PUBLISH' = 'DATA';
+  let stateLabel = 'DATA_INCOMPLETE';
+
   if (isPublished) {
     currentStage = 'PUBLISH';
+    stateLabel = 'PUBLISHED';
   } else if (hasDraft && isValidated) {
-    currentStage = 'PUBLISH';
+    currentStage = 'REVIEW';
+    stateLabel = 'VALIDATED';
   } else if (hasDraft) {
     currentStage = 'REVIEW';
+    stateLabel = 'DRAFT_GENERATED';
   } else if (isDataReady) {
     currentStage = 'GENERATE';
+    stateLabel = 'READY_TO_GENERATE';
   }
 
-  // Handle Primary Button Action based on exact state
-  const handlePrimaryAction = () => {
-    if (!isDataReady) {
-      setActiveView('academic_setup'); // State 1: Complete Data
-    } else if (!hasDraft) {
-      setActiveView('generation_validator'); // State 2: Generate Timetable
-    } else {
-      setActiveView('grid'); // State 3, 4, 5: Review / View Timetable
-    }
-  };
-
-  const getPrimaryButtonLabel = () => {
-    if (!isDataReady) return 'Complete data';
-    if (!hasDraft) return 'Generate timetable';
-    if (!isPublished && isValidated) return 'Review & publish';
-    if (!isPublished) return 'Review timetable';
-    return 'View timetable';
-  };
-
   return (
-    <div className="max-w-4xl mx-auto space-y-6 font-sans pb-12 text-stone-900 dark:text-zinc-100">
-      {/* 1. Workflow Progress Indicator */}
-      <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl p-3 flex items-center justify-between text-xs font-semibold shadow-2xs">
-        <div className="flex items-center gap-1.5 text-stone-600 dark:text-zinc-400">
-          <span className="font-mono text-[10px] uppercase text-stone-400">Workflow:</span>
+    <div className="max-w-4xl mx-auto space-y-5 font-sans pb-12 text-stone-900 dark:text-zinc-100">
+      {/* 1. Slim Workflow Indicator */}
+      <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-3 flex flex-wrap items-center justify-between text-xs font-medium">
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-[10px] uppercase text-stone-400 dark:text-zinc-500 font-semibold tracking-wider">Workflow:</span>
+          <span className="px-2 py-0.5 rounded font-mono text-[10px] font-bold bg-[#8C1B2E]/10 text-[#8C1B2E] dark:bg-red-950/40 dark:text-red-300 border border-[#8C1B2E]/20">
+            {stateLabel}
+          </span>
         </div>
 
-        <div className="flex items-center gap-2 sm:gap-4 font-mono text-[11px]">
-          <span className={currentStage === 'DATA' ? 'text-[#8C1B2E] dark:text-red-400 font-bold' : isDataReady ? 'text-emerald-700 dark:text-emerald-400' : 'text-stone-400'}>
+        <div className="flex items-center gap-2 sm:gap-3 font-mono text-[11px]">
+          <span className={currentStage === 'DATA' ? 'text-[#8C1B2E] dark:text-red-400 font-bold' : isDataReady ? 'text-emerald-700 dark:text-emerald-400 font-semibold' : 'text-stone-400'}>
             DATA {isDataReady ? '✓' : '●'}
           </span>
           <span className="text-stone-300 dark:text-zinc-700">→</span>
-          <span className={currentStage === 'GENERATE' ? 'text-[#8C1B2E] dark:text-red-400 font-bold' : hasDraft ? 'text-emerald-700 dark:text-emerald-400' : 'text-stone-400'}>
+          <span className={currentStage === 'GENERATE' ? 'text-[#8C1B2E] dark:text-red-400 font-bold' : hasDraft ? 'text-emerald-700 dark:text-emerald-400 font-semibold' : 'text-stone-400'}>
             GENERATE {hasDraft ? '✓' : currentStage === 'GENERATE' ? '●' : '○'}
           </span>
           <span className="text-stone-300 dark:text-zinc-700">→</span>
-          <span className={currentStage === 'REVIEW' ? 'text-[#8C1B2E] dark:text-red-400 font-bold' : isPublished ? 'text-emerald-700 dark:text-emerald-400' : 'text-stone-400'}>
+          <span className={currentStage === 'REVIEW' ? 'text-[#8C1B2E] dark:text-red-400 font-bold' : isPublished ? 'text-emerald-700 dark:text-emerald-400 font-semibold' : 'text-stone-400'}>
             REVIEW {isPublished ? '✓' : currentStage === 'REVIEW' ? '●' : '○'}
           </span>
           <span className="text-stone-300 dark:text-zinc-700">→</span>
@@ -111,108 +102,138 @@ export function CoordinatorView() {
         </div>
       </div>
 
-      {/* 2. Home Header */}
-      <div className="border-b border-[#E5E2D9] dark:border-zinc-800 pb-3">
-        <h1 className="text-2xl sm:text-3xl font-bold font-serif text-stone-900 dark:text-zinc-100 tracking-tight">
-          Timetable
+      {/* 2. Header */}
+      <div className="border-b border-[#E5E2D9] dark:border-zinc-800 pb-2.5">
+        <h1 className="text-2xl font-bold font-serif text-stone-900 dark:text-zinc-100 tracking-tight">
+          Coordinator Timetable Portal
         </h1>
-        <p className="text-xs sm:text-sm text-stone-500 dark:text-zinc-400 mt-0.5">
-          Manage the current timetable.
+        <p className="text-xs text-stone-500 dark:text-zinc-400 mt-0.5">
+          Thapar Institute of Engineering & Technology — Academic Schedule Command
         </p>
       </div>
 
-      {/* 3. Current Status Area */}
-      <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl p-4 flex items-center justify-between shadow-2xs">
-        <div>
-          <span className="text-[10px] font-mono uppercase tracking-wider text-stone-500 block">
-            Current timetable status
-          </span>
-          <div className="text-base font-bold text-stone-900 dark:text-zinc-100 font-serif mt-0.5 flex items-center gap-2">
-            <span className={`px-2.5 py-0.5 rounded text-xs font-mono font-bold ${
-              isPublished
-                ? 'bg-emerald-50 text-emerald-800 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300'
-                : 'bg-amber-50 text-amber-800 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-300'
-            }`}>
-              {publishStatus.toUpperCase()}
+      {/* 3. Compact Status Dashboard */}
+      <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-4 space-y-3 shadow-2xs">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#E5E2D9] dark:border-zinc-800 pb-3">
+          <div>
+            <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400 block font-semibold">
+              Current Status
             </span>
+            <div className="flex items-center gap-2 mt-1">
+              <span className={`px-2.5 py-0.5 rounded text-xs font-mono font-bold ${
+                isPublished
+                  ? 'bg-emerald-50 text-emerald-800 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300'
+                  : 'bg-amber-50 text-amber-800 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-300'
+              }`}>
+                {publishStatus.toUpperCase()}
+              </span>
+              <span className="text-xs font-semibold text-stone-700 dark:text-zinc-300 font-serif">
+                {hasDraft ? (isValidated ? 'Draft Validated' : 'Draft Generated') : 'No Active Draft'}
+              </span>
+            </div>
+          </div>
+
+          <div className="text-left sm:text-right text-xs text-stone-500">
+            <div>{isPublished ? 'Last published:' : 'Last generated:'}</div>
+            <div className="font-mono text-stone-800 dark:text-zinc-300 font-semibold">{timestampStr}</div>
           </div>
         </div>
 
-        <div className="text-right text-xs text-stone-500">
-          <div>{isPublished ? 'Last published:' : 'Last generated:'}</div>
-          <div className="font-mono text-stone-800 dark:text-zinc-300 font-medium">{timestampStr}</div>
+        {/* Compact Summary Line */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs pt-1">
+          <div>
+            <span className="text-[10px] text-stone-400 block font-medium">Scheduled Sessions</span>
+            <span className="font-mono font-bold text-stone-900 dark:text-zinc-100">{sessions.length} / 736</span>
+          </div>
+
+          <div>
+            <span className="text-[10px] text-stone-400 block font-medium">Hard Conflicts</span>
+            <span className={`font-mono font-bold ${hardViolationsCount === 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-rose-700'}`}>
+              {hardViolationsCount}
+            </span>
+          </div>
+
+          <div className="col-span-2">
+            <span className="text-[10px] text-stone-400 block font-medium">Academic Dataset</span>
+            <span className="font-sans text-stone-800 dark:text-zinc-200 font-semibold">
+              1,280 students · {activeFacultyCount} faculty · {activeSectionsCount} sections · {allocations.length} allocations
+            </span>
+          </div>
         </div>
       </div>
 
-      {/* 4. Academic Data Summary (ONE compact line) */}
-      <div className="text-xs text-stone-600 dark:text-zinc-400 px-1 font-medium flex items-center gap-1.5">
-        <span className="text-stone-400">Academic dataset:</span>
-        <span className="text-stone-900 dark:text-zinc-100 font-semibold">
-          {activeSectionsCount} sections, {activeFacultyCount} faculty, {activeRoomsCount} rooms
-        </span>
-      </div>
-
-      {/* 5. Compact Readiness Section */}
-      <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl p-4 space-y-2.5 text-xs shadow-2xs">
-        <div className="flex items-center justify-between border-b border-[#E5E2D9] dark:border-zinc-800 pb-2">
+      {/* 4. State-Driven Action & Readiness Section (Zero UI Contradictions) */}
+      <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-4 space-y-3.5 shadow-2xs">
+        <div className="flex items-center justify-between border-b border-[#E5E2D9] dark:border-zinc-800 pb-2.5">
           <span className="font-bold font-serif text-stone-900 dark:text-zinc-100 uppercase tracking-wider text-[11px]">
-            {isDataReady ? 'Ready to generate' : 'Not ready for generation'}
+            {hasDraft ? 'TIMETABLE DRAFT AVAILABLE' : isDataReady ? 'READY TO GENERATE' : 'DATA INCOMPLETE'}
           </span>
-          {isDataReady ? (
+
+          {isDataReady && hardViolationsCount === 0 ? (
             <span className="text-emerald-700 dark:text-emerald-400 font-semibold text-[11px] flex items-center gap-1">
               <CheckCircle2 className="h-3.5 w-3.5" /> All Checks Passed
             </span>
           ) : (
             <span className="text-rose-700 dark:text-rose-400 font-semibold text-[11px] flex items-center gap-1">
-              <AlertTriangle className="h-3.5 w-3.5" /> Setup Required
+              <AlertTriangle className="h-3.5 w-3.5" /> Action Required
             </span>
           )}
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-          <div className="flex items-center gap-2 text-stone-700 dark:text-zinc-300">
-            {allocations.length > 0 ? (
-              <span className="text-emerald-600 font-bold">✓</span>
-            ) : (
-              <span className="text-rose-600 font-bold">×</span>
-            )}
-            <span>Data complete ({allocations.length} course allocations)</span>
-          </div>
+        {hasDraft ? (
+          <div className="space-y-3 text-xs">
+            <p className="text-stone-600 dark:text-zinc-300">
+              <strong className="text-stone-900 dark:text-zinc-100 font-semibold">{sessions.length} / 736</strong> sessions scheduled with <strong className="text-emerald-700 dark:text-emerald-400">{hardViolationsCount} hard conflicts</strong>. Ready for review and publication inspection.
+            </p>
 
-          <div className="flex items-center gap-2 text-stone-700 dark:text-zinc-300">
-            {validationReport.hardViolationsCount === 0 ? (
-              <span className="text-emerald-600 font-bold">✓</span>
-            ) : (
-              <span className="text-rose-600 font-bold">×</span>
-            )}
-            <span>No hard conflicts ({validationReport.hardViolationsCount} violations)</span>
-          </div>
+            <div className="flex flex-col sm:flex-row gap-2.5 pt-1">
+              <button
+                onClick={() => setActiveView('grid')}
+                className="flex-1 py-3 bg-[#8C1B2E] hover:bg-[#721525] active:bg-[#5a111e] text-white font-bold text-xs rounded-lg transition-all shadow-xs flex items-center justify-center gap-2"
+              >
+                <span>Review timetable →</span>
+              </button>
 
-          <div className="flex items-center gap-2 text-stone-700 dark:text-zinc-300">
-            <span className="text-emerald-600 font-bold">✓</span>
-            <span>Faculty availability configured</span>
+              <button
+                onClick={() => setActiveView('generation_validator')}
+                className="py-3 px-4 bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 text-stone-800 dark:text-zinc-200 font-semibold text-xs rounded-lg transition-all flex items-center justify-center gap-2"
+              >
+                <Sparkles className="h-3.5 w-3.5 text-[#8C1B2E]" />
+                <span>Generate another routine</span>
+              </button>
+            </div>
           </div>
+        ) : isDataReady ? (
+          <div className="space-y-3 text-xs">
+            <p className="text-stone-600 dark:text-zinc-300">
+              Academic data complete ({allocations.length} course allocations across {activeSectionsCount} sections). Ready to run the automated constraint solver.
+            </p>
 
-          <div className="flex items-center gap-2 text-stone-700 dark:text-zinc-300">
-            <span className="text-emerald-600 font-bold">✓</span>
-            <span>Rooms & labs configured ({activeRoomsCount} facilities)</span>
+            <button
+              onClick={() => setActiveView('generation_validator')}
+              className="w-full py-3 bg-[#8C1B2E] hover:bg-[#721525] active:bg-[#5a111e] text-white font-bold text-xs rounded-lg transition-all shadow-xs flex items-center justify-center gap-2"
+            >
+              <span>Generate timetable →</span>
+            </button>
           </div>
-        </div>
+        ) : (
+          <div className="space-y-3 text-xs">
+            <p className="text-rose-700 dark:text-rose-400">
+              Academic dataset is missing required allocations or faculty setup before timetable generation can run.
+            </p>
+
+            <button
+              onClick={() => setActiveView('academic_setup')}
+              className="w-full py-3 bg-[#8C1B2E] hover:bg-[#721525] text-white font-bold text-xs rounded-lg transition-all shadow-xs flex items-center justify-center gap-2"
+            >
+              <span>Complete data setup →</span>
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* 6. SINGLE DOMINANT PRIMARY ACTION */}
-      <div className="pt-2">
-        <button
-          onClick={handlePrimaryAction}
-          className="w-full py-3.5 bg-[#8C1B2E] hover:bg-[#721525] active:bg-[#5a111e] text-white font-bold text-sm rounded-xl transition-all shadow-md flex items-center justify-center gap-2"
-        >
-          <span>{getPrimaryButtonLabel()}</span>
-          <ArrowRight className="h-4 w-4" />
-        </button>
-      </div>
-
-      {/* 7. Recent Requests (3 items max) */}
-      <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl p-4 space-y-3 shadow-2xs">
+      {/* 5. Recent Requests (3 items max) */}
+      <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-4 space-y-2.5 shadow-2xs">
         <div className="flex items-center justify-between border-b border-[#E5E2D9] dark:border-zinc-800 pb-2">
           <span className="font-serif font-bold text-xs text-stone-900 dark:text-zinc-100 uppercase tracking-wider">
             Recent requests
@@ -227,7 +248,7 @@ export function CoordinatorView() {
 
         <div className="divide-y divide-[#E5E2D9] dark:divide-zinc-800 text-xs">
           {recentRequests.map(req => (
-            <div key={req.id} className="py-2.5 first:pt-0 flex items-center justify-between gap-3">
+            <div key={req.id} className="py-2 first:pt-0 flex items-center justify-between gap-3">
               <div>
                 <div className="font-semibold text-stone-900 dark:text-zinc-100">
                   {req.type} — {req.section}
