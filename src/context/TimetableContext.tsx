@@ -313,9 +313,9 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
 
   const [currentRole, setCurrentRole] = useState<UserRole>('Coordinator');
   const [activeView, setActiveView] = useState<ViewTab>('overview');
-  const [selectedFacultyId, setSelectedFacultyId] = useState<string>('fac-sharma');
-  const [selectedSectionId, setSelectedSectionId] = useState<string>('sec-cse-a');
-  const [selectedRoomId, setSelectedRoomId] = useState<string>('room-204');
+  const [selectedFacultyId, setSelectedFacultyId] = useState<string>('');
+  const [selectedSectionId, setSelectedSectionId] = useState<string>('');
+  const [selectedRoomId, setSelectedRoomId] = useState<string>('');
   const [latestGeneratedRoutines, setLatestGeneratedRoutines] = useState<GenerationRoutine[] | null>(null);
   const [activeVersionNumber, setActiveVersionNumber] = useState<number | undefined>(undefined);
   const [publishedSessions, setPublishedSessions] = useState<ClassSession[]>([]);
