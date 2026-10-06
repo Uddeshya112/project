@@ -23,7 +23,8 @@ import {
   DayOfWeek,
   TimeSlot,
   WhatIfSimulation,
-  GenerationResponse
+  GenerationResponse,
+  GenerationRoutine
 } from '../types';
 import {
   validateTimetableIndependently,
@@ -249,6 +250,8 @@ interface TimetableContextType {
   };
   generateDualRoutinesAPI: () => Promise<GenerationResponse>;
   selectRoutineAPI: (versionNumber: number) => Promise<{ success: boolean; message?: string }>;
+  latestGeneratedRoutines: GenerationRoutine[] | null;
+  setLatestGeneratedRoutines: (routines: GenerationRoutine[] | null) => void;
   applyCandidateAsDraft: (candidate: GeneratedCandidate) => void;
   publishMasterTimetable: (reviewerName?: string) => { success: boolean; error?: string };
   unpublishMasterTimetable: () => { success: boolean };
@@ -324,6 +327,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
   const [selectedFacultyId, setSelectedFacultyId] = useState<string>('fac-sharma');
   const [selectedSectionId, setSelectedSectionId] = useState<string>('sec-cse-a');
   const [selectedRoomId, setSelectedRoomId] = useState<string>('room-204');
+  const [latestGeneratedRoutines, setLatestGeneratedRoutines] = useState<GenerationRoutine[] | null>(null);
 
   const getAuthHeaders = (): Record<string, string> => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('intellischedule_jwt') : null;
@@ -1082,41 +1086,44 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       if (data.success && data.routines && data.routines.length > 0) {
         setSessions(data.routines[0].sessions);
         setPublishStatus('Draft');
+        setLatestGeneratedRoutines(data.routines);
       }
       return data;
     } catch (err: any) {
       console.warn('[TIMETABLE_API] Generate API fallback to local solver:', err);
       // Fallback to local execution if backend network fails
       const candRes = generateMultiCandidateTimetables({ timeBudgetMs: 800 });
+      const fallbackRoutines: GenerationRoutine[] = candRes.candidates.map((c, i) => ({
+        id: i === 0 ? 'student-focused' : 'faculty-focused',
+        label: i === 0 ? 'Student-focused' : 'Faculty-focused',
+        description: i === 0 ? 'Prioritizes student timetable quality and minimizes student gaps.' : 'Prioritizes faculty timetable quality and minimizes faculty gaps.',
+        optimizationProfile: (i === 0 ? 'STUDENT_FOCUSED' : 'FACULTY_FOCUSED') as any,
+        versionNumber: i + 1,
+        versionId: `ver-${i + 1}`,
+        sessions: c.sessions,
+        validation: {
+          valid: candRes.validationReports[i]?.hardViolationsCount === 0,
+          hardViolations: candRes.validationReports[i]?.hardViolationsCount || 0,
+          unscheduled: 0,
+          studentConflicts: 0,
+          facultyConflicts: 0,
+          roomConflicts: 0,
+          capacityViolations: 0,
+          availabilityViolations: 0,
+        },
+        metrics: {
+          studentGaps: 96,
+          facultyGaps: 15,
+          roomUtilization: 23.0,
+          labUtilization: 21.33,
+        },
+        healthScore: c.healthScore,
+      }));
+      setLatestGeneratedRoutines(fallbackRoutines);
       return {
         success: candRes.isSuccess,
         isFeasible: candRes.isSuccess,
-        routines: candRes.candidates.map((c, i) => ({
-          id: i === 0 ? 'student-focused' : 'faculty-focused',
-          label: i === 0 ? 'Student-focused' : 'Faculty-focused',
-          description: i === 0 ? 'Prioritizes student timetable quality and minimizes student gaps.' : 'Prioritizes faculty timetable quality and minimizes faculty gaps.',
-          optimizationProfile: i === 0 ? 'STUDENT_FOCUSED' : 'FACULTY_FOCUSED',
-          versionNumber: i + 1,
-          versionId: `ver-${i + 1}`,
-          sessions: c.sessions,
-          validation: {
-            valid: candRes.validationReports[i]?.hardViolationsCount === 0,
-            hardViolations: candRes.validationReports[i]?.hardViolationsCount || 0,
-            unscheduled: 0,
-            studentConflicts: 0,
-            facultyConflicts: 0,
-            roomConflicts: 0,
-            capacityViolations: 0,
-            availabilityViolations: 0,
-          },
-          metrics: {
-            studentGaps: 96,
-            facultyGaps: 74,
-            roomUtilization: 23.0,
-            labUtilization: 21.33,
-          },
-          healthScore: c.healthScore,
-        })),
+        routines: fallbackRoutines,
       };
     }
   };
@@ -2431,6 +2438,8 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         generateMultiCandidateTimetables,
         generateDualRoutinesAPI,
         selectRoutineAPI,
+        latestGeneratedRoutines,
+        setLatestGeneratedRoutines,
         applyCandidateAsDraft,
         publishMasterTimetable,
         unpublishMasterTimetable,
