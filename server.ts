@@ -403,6 +403,11 @@ export async function createApp(db: import('./src/server/db').Db) {
     res.json({ success: true, version });
   }));
 
+  app.post('/api/timetable/sessions', requireRole(['FACULTY', 'COORDINATOR', 'COLLEGE_ADMIN']), asyncRoute(async (req, res) => {
+    const session = store.addSession(req.body, toViewer(req));
+    await store.persist();
+    res.status(201).json({ success: true, session });
+  }));
   app.post('/api/timetable/sessions/:id/lock', schedulingWrite, asyncRoute(async (req, res) => {
     const session = store.toggleSessionLock(String(req.params.id), req.body?.reason, req.user!.name);
     await store.persist();
@@ -530,6 +535,22 @@ export async function createApp(db: import('./src/server/db').Db) {
     const faculty = store.toggleProtectedSlot(req.body, toViewer(req));
     await store.persist();
     res.json({ success: true, faculty });
+  }));
+
+  app.post('/api/constraints', schedulingWrite, asyncRoute(async (req, res) => {
+    const constraint = store.createConstraint(req.body, req.user!.name);
+    await store.persist();
+    res.status(201).json({ success: true, constraint });
+  }));
+  app.patch('/api/constraints/:id', schedulingWrite, asyncRoute(async (req, res) => {
+    const constraint = store.updateConstraint(String(req.params.id), req.body, req.user!.name);
+    await store.persist();
+    res.json({ success: true, constraint });
+  }));
+  app.delete('/api/constraints/:id', schedulingWrite, asyncRoute(async (req, res) => {
+    store.deleteConstraint(String(req.params.id), req.user!.name);
+    await store.persist();
+    res.json({ success: true });
   }));
 
   app.post('/api/constraints/:id/toggle', schedulingWrite, asyncRoute(async (req, res) => {
