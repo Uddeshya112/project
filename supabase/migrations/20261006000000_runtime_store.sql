@@ -71,6 +71,12 @@ alter table intellischedule.app_state          enable row level security;
 alter table intellischedule.timetable_versions enable row level security;
 alter table intellischedule.audit_log          enable row level security;
 
+create table if not exists intellischedule.rate_limits (
+  key text primary key,
+  count integer not null,
+  reset_at timestamptz not null
+);
+create index if not exists rate_limits_reset_idx on intellischedule.rate_limits(reset_at);
 create table if not exists intellischedule.password_reset_tokens (
   token_hash  text primary key,
   user_id     text not null references intellischedule.users(id) on delete cascade,
