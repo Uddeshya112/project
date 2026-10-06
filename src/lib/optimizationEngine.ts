@@ -686,7 +686,7 @@ export function executeOptimizationEngine(
     if (isMultiPeriod) {
       // Branch 1: Atomic Multi-Period Block Scheduling (2 or 3 hours)
       const candidateBlocks = [...currentAlloc.feasibleBlocks!];
-      if (candidatesFound.length > 0) {
+      {
         for (let i = candidateBlocks.length - 1; i > 0; i--) {
           const j = Math.floor(prng.next() * (i + 1));
           [candidateBlocks[i], candidateBlocks[j]] = [candidateBlocks[j], candidateBlocks[i]];
@@ -787,7 +787,7 @@ export function executeOptimizationEngine(
     } else {
       // Branch 2: Single-Hour Lecture / Tutorial Scheduling (with 1-lecture/day/course distribution)
       let candidateSlots = [...currentAlloc.feasibleSlotIndices];
-      if (candidatesFound.length > 0) {
+      {
         for (let i = candidateSlots.length - 1; i > 0; i--) {
           const j = Math.floor(prng.next() * (i + 1));
           [candidateSlots[i], candidateSlots[j]] = [candidateSlots[j], candidateSlots[i]];
@@ -903,7 +903,7 @@ export function executeOptimizationEngine(
         // 3. Find Available Compatible Room
         let chosenRoomIdx = -1;
         const roomChoices = [...currentAlloc.candidateRooms];
-        if (candidatesFound.length > 0) {
+        {
           for (let i = roomChoices.length - 1; i > 0; i--) {
             const j = Math.floor(prng.next() * (i + 1));
             [roomChoices[i], roomChoices[j]] = [roomChoices[j], roomChoices[i]];
