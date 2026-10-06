@@ -1,5 +1,3 @@
-import { calculateHealthScore } from './recoveryEngine';
-
 import {
   ClassSession,
   Room,
@@ -1007,6 +1005,76 @@ export function executeOptimizationEngine(
   };
 }
 
+function calculateCandidateHealthScore(sessions: ClassSession[], problem: CompiledProblem): number {
+  const active = sessions.filter((s) => s.status !== 'Cancelled');
+  if (active.length === 0) return 0;
+
+  let hardViolations = 0;
+  const facultyBusy = new Set<string>();
+  const roomBusy = new Set<string>();
+  const wholeBusy = new Set<string>();
+  const subgroupBusy = new Set<string>();
+  const subgroupSlot = new Set<string>();
+  for (const s of active) {
+    const slot = `${s.day}_${s.timeSlotId}`;
+    const fk = `${s.facultyId}_${slot}`;
+    const rk = `${s.roomId}_${slot}`;
+    if (facultyBusy.has(fk)) hardViolations++; else facultyBusy.add(fk);
+    if (roomBusy.has(rk)) hardViolations++; else roomBusy.add(rk);
+    const sk = `${s.sectionId}_${slot}`;
+    if (s.subSectionId) {
+      if (wholeBusy.has(sk)) hardViolations++;
+      const sub = `${s.subSectionId}_${slot}`;
+      if (subgroupBusy.has(sub)) hardViolations++; else subgroupBusy.add(sub);
+      subgroupSlot.add(sk);
+    } else {
+      if (wholeBusy.has(sk) || subgroupSlot.has(sk)) hardViolations++;
+      else wholeBusy.add(sk);
+    }
+  }
+
+  const teachingSlots = (problem.academicYear.timeSlots || []).filter((t) => !t.isBreak && !t.isLunch && t.id !== problem.academicYear.lunchPeriodId);
+  const slotsPerWeek = Math.max(1, (problem.academicYear.workingDays || []).length * teachingSlots.length);
+  const availableRooms = problem.rooms.filter((r) => r.isAvailable);
+  const usedRoomSlots = new Set(active.map((s) => `${s.roomId}_${s.day}_${s.timeSlotId}`)).size;
+  const roomUtilization = Math.min(100, Math.round((usedRoomSlots / Math.max(1, availableRooms.length * slotsPerWeek)) * 100));
+
+  const hoursByFaculty = new Map<string, number>();
+  active.forEach((s) => hoursByFaculty.set(s.facultyId, (hoursByFaculty.get(s.facultyId) ?? 0) + 1));
+  const teachingFaculty = problem.faculty.filter((fac) => hoursByFaculty.has(fac.id));
+  const withinLimit = teachingFaculty.filter((fac) => (hoursByFaculty.get(fac.id) ?? 0) <= (fac.maxDirectTeachingHours || Infinity)).length;
+  const facultyBalance = teachingFaculty.length ? Math.round((withinLimit / teachingFaculty.length) * 100) : 100;
+
+  const sectionDay = new Map<string, Set<string>>();
+  active.forEach((s) => {
+    const k = `${s.sectionId}_${s.day}`;
+    if (!sectionDay.has(k)) sectionDay.set(k, new Set());
+    sectionDay.get(k)!.add(s.timeSlotId);
+  });
+  const dayLoads = [...sectionDay.values()];
+  const studentBalance = dayLoads.length ? Math.round((dayLoads.filter((d) => d.size <= 6).length / dayLoads.length) * 100) : 100;
+
+  const periodOf = new Map((problem.academicYear.timeSlots || []).map((t) => [t.id, t.periodNumber]));
+  const facultyById = new Map(problem.faculty.map((f) => [f.id, f]));
+  const preferred = active.filter((s) => {
+    const p = facultyById.get(s.facultyId)?.preferences;
+    if (!p) return true;
+    const dayOk = !p.preferredDays?.length || p.preferredDays.includes(s.day);
+    const periodOk = !p.preferredPeriods?.length || p.preferredPeriods.includes(periodOf.get(s.timeSlotId) ?? -1);
+    return dayOk && periodOk;
+  }).length;
+  const preferenceScore = Math.round((preferred / active.length) * 100);
+
+  const soft = Math.round(
+    facultyBalance * 0.25 +
+    studentBalance * 0.25 +
+    preferenceScore * 0.15 +
+    Math.min(100, roomUtilization * 2) * 0.1 +
+    100 * 0.15 +
+    100 * 0.1,
+  );
+  return hardViolations > 0 ? Math.min(soft, 40) : soft;
+}
 // ---------------------------------------------------------------------------
 // 3. Helper: Build Candidate Object & Evaluate Soft Constraints
 // ---------------------------------------------------------------------------
@@ -1057,18 +1125,7 @@ function buildCandidateFromState(
   const softPenalty = calculateSoftPenalties(sessions, problem, profile);
 
   // Health is derived from the shared timetable health model; no artificial floor.
-  const healthScore = calculateHealthScore(
-    sessions,
-    problem.rooms,
-    problem.faculty,
-    problem.sections,
-    problem.courses,
-    {
-      workingDays: problem.academicYear.workingDays,
-      timeSlots: problem.academicYear.timeSlots,
-      lunchPeriodId: problem.academicYear.lunchPeriodId,
-    },
-  ).overallScore;
+  const healthScore = calculateCandidateHealthScore(sessions, problem);
 
   return {
     candidateId: `cand-v${candidateNum}`,
@@ -1487,18 +1544,7 @@ function optimizeCandidatesPhaseB(
     // Assign best found solution
     candidate.sessions = bestSessions;
     candidate.softPenalty = bestBreakdown;
-    candidate.healthScore = calculateHealthScore(
-      bestSessions,
-      problem.rooms,
-      problem.faculty,
-      problem.sections,
-      problem.courses,
-      {
-        workingDays: problem.academicYear.workingDays,
-        timeSlots: problem.academicYear.timeSlots,
-        lunchPeriodId: problem.academicYear.lunchPeriodId,
-      },
-    ).overallScore;
+    candidate.healthScore = calculateCandidateHealthScore(bestSessions, problem);
   }
 }
 
