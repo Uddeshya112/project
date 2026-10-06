@@ -35,25 +35,25 @@ export class TimetableJobManager {
 
   async init() {
     await this.db.query(
-      \`update intellischedule.timetable_jobs
+      `update intellischedule.timetable_jobs
        set status = 'FAILED',
            error = 'Server restarted while the job was running.',
            completed_at = now(),
            progress = 100
-       where status = 'RUNNING'\`,
+       where status = 'RUNNING'`,
     );
     const pending = await this.db.query<{ job_id: string; payload: StoredJobPayload }>(
-      \`select job_id, payload from intellischedule.timetable_jobs where status = 'PENDING' order by created_at asc\`,
+      `select job_id, payload from intellischedule.timetable_jobs where status = 'PENDING' order by created_at asc`,
     );
     for (const job of pending) this.spawn(job.job_id, job.payload);
   }
 
   async createJob(payload: StoredJobPayload): Promise<string> {
-    const jobId = \`job_\${Date.now()}_\${randomUUID().slice(0, 8)}\`;
+    const jobId = `job_\${Date.now()}_\${randomUUID().slice(0, 8)}`;
     await this.db.query(
-      \`insert into intellischedule.timetable_jobs
+      `insert into intellischedule.timetable_jobs
        (job_id, status, progress, payload, created_at)
-       values ($1, 'PENDING', 0, $2, now())\`,
+       values ($1, 'PENDING', 0, $2, now())`,
       [jobId, payload],
     );
     this.spawn(jobId, payload);
@@ -62,8 +62,8 @@ export class TimetableJobManager {
 
   async getJob(jobId: string): Promise<TimetableJobState | undefined> {
     const rows = await this.db.query<any>(
-      \`select job_id, status, progress, created_at, started_at, completed_at, result, error
-       from intellischedule.timetable_jobs where job_id = $1\`,
+      `select job_id, status, progress, created_at, started_at, completed_at, result, error
+       from intellischedule.timetable_jobs where job_id = $1`,
       [jobId],
     );
     const row = rows[0];
@@ -82,16 +82,16 @@ export class TimetableJobManager {
 
   async cancelJob(jobId: string): Promise<boolean> {
     const rows = await this.db.query<{ status: JobStatus }>(
-      \`select status from intellischedule.timetable_jobs where job_id = $1\`,
+      `select status from intellischedule.timetable_jobs where job_id = $1`,
       [jobId],
     );
     const current = rows[0]?.status;
     if (!current || current === 'COMPLETED' || current === 'FAILED' || current === 'CANCELLED') return false;
 
     await this.db.query(
-      \`update intellischedule.timetable_jobs
+      `update intellischedule.timetable_jobs
        set status = 'CANCELLED', progress = 100, completed_at = now(), error = 'Cancelled by user.'
-       where job_id = $1 and status in ('PENDING','RUNNING')\`,
+       where job_id = $1 and status in ('PENDING','RUNNING')`,
       [jobId],
     );
     const worker = this.workers.get(jobId);
@@ -117,9 +117,9 @@ export class TimetableJobManager {
       try {
         if (message?.type === 'started') {
           await this.db.query(
-            \`update intellischedule.timetable_jobs
+            `update intellischedule.timetable_jobs
              set status = 'RUNNING', progress = 10, started_at = coalesce(started_at, now())
-             where job_id = $1 and status = 'PENDING'\`,
+             where job_id = $1 and status = 'PENDING'`,
             [jobId],
           );
           return;
@@ -127,9 +127,9 @@ export class TimetableJobManager {
 
         if (message?.type === 'completed') {
           await this.db.query(
-            \`update intellischedule.timetable_jobs
+            `update intellischedule.timetable_jobs
              set status = 'COMPLETED', progress = 100, completed_at = now(), result = $2
-             where job_id = $1 and status <> 'CANCELLED'\`,
+             where job_id = $1 and status <> 'CANCELLED'`,
             [jobId, message.result],
           );
           this.workers.delete(jobId);
@@ -139,9 +139,9 @@ export class TimetableJobManager {
 
         if (message?.type === 'failed') {
           await this.db.query(
-            \`update intellischedule.timetable_jobs
+            `update intellischedule.timetable_jobs
              set status = 'FAILED', progress = 100, completed_at = now(), error = $2
-             where job_id = $1 and status <> 'CANCELLED'\`,
+             where job_id = $1 and status <> 'CANCELLED'`,
             [jobId, String(message.error || 'Worker failed.')],
           );
           this.workers.delete(jobId);
@@ -149,9 +149,9 @@ export class TimetableJobManager {
         }
       } catch (error: any) {
         await this.db.query(
-          \`update intellischedule.timetable_jobs
+          `update intellischedule.timetable_jobs
            set status = 'FAILED', progress = 100, completed_at = now(), error = $2
-           where job_id = $1 and status <> 'CANCELLED'\`,
+           where job_id = $1 and status <> 'CANCELLED'`,
           [jobId, error?.message || 'Unable to persist job state.'],
         ).catch(() => {});
         this.workers.delete(jobId);
@@ -160,9 +160,9 @@ export class TimetableJobManager {
 
     worker.on('error', async (error) => {
       await this.db.query(
-        \`update intellischedule.timetable_jobs
+        `update intellischedule.timetable_jobs
          set status = 'FAILED', progress = 100, completed_at = now(), error = $2
-         where job_id = $1 and status <> 'CANCELLED'\`,
+         where job_id = $1 and status <> 'CANCELLED'`,
         [jobId, error.message],
       ).catch(() => {});
       this.workers.delete(jobId);
@@ -173,10 +173,10 @@ export class TimetableJobManager {
       this.workers.delete(jobId);
       if (code !== 0) {
         await this.db.query(
-          \`update intellischedule.timetable_jobs
+          `update intellischedule.timetable_jobs
            set status = 'FAILED', progress = 100, completed_at = now(), error = $2
-           where job_id = $1 and status in ('PENDING','RUNNING')\`,
-          [jobId, \`Worker exited with code \${code}.\`],
+           where job_id = $1 and status in ('PENDING','RUNNING')`,
+          [jobId, `Worker exited with code \${code}.`],
         ).catch(() => {});
       }
     });
