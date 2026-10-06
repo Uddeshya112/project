@@ -88,3 +88,17 @@ create index if not exists password_reset_tokens_expiry_idx on intellischedule.p
 
 alter table intellischedule.rate_limits              enable row level security;
 alter table intellischedule.password_reset_tokens enable row level security;
+
+create table if not exists intellischedule.timetable_jobs (
+  job_id       text primary key,
+  status       text not null check (status in ('PENDING','RUNNING','COMPLETED','FAILED','CANCELLED')),
+  progress     integer not null default 0 check (progress between 0 and 100),
+  payload      jsonb not null,
+  result       jsonb,
+  error        text,
+  created_at   timestamptz not null default now(),
+  started_at   timestamptz,
+  completed_at timestamptz
+);
+create index if not exists timetable_jobs_status_idx on intellischedule.timetable_jobs(status, created_at);
+alter table intellischedule.timetable_jobs enable row level security;
