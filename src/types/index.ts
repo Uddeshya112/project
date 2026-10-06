@@ -186,6 +186,8 @@ export interface ClassSession {
   durationPeriods?: number;
   /** Shared identifier for all grid cells belonging to one atomic multi-period block. */
   blockId?: string;
+  /** Same electiveGroupId permits explicitly parallel alternative offerings. */
+  electiveGroupId?: string;
   roomId: string;
   day: DayOfWeek;
   timeSlotId: string;
