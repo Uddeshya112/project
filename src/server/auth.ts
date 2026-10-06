@@ -277,7 +277,7 @@ export function createAuth(opts: AuthOptions) {
   /** First start: load the sample accounts; optionally ensure a bootstrap admin. */
   async function seedUsers() {
     const [{ n }] = await db.query<{ n: number }>(`select count(*)::int as n from ${T}.users`);
-    if (n === 0 && process.env.SEED_SAMPLE_USERS !== 'false') {
+    if (n === 0 && process.env.SEED_SAMPLE_USERS === 'true') {
       const roleById: Record<string, RoleCode> = {
         'role-superadmin': 'SUPER_ADMIN',
         'role-admin': 'COLLEGE_ADMIN',
@@ -290,16 +290,14 @@ export function createAuth(opts: AuthOptions) {
       const samplePwd =
         process.env.SAMPLE_ACCOUNTS_PASSWORD ||
         (process.env.NODE_ENV === 'production' ? '' : crypto.randomBytes(24).toString('base64url'));
-      const demoPwd =
-        process.env.DEMO_ACCOUNTS_PASSWORD ||
-        (process.env.NODE_ENV === 'production' ? '' : crypto.randomBytes(24).toString('base64url'));
-      if (!samplePwd || !demoPwd) {
-        throw new Error('Sample/demo account passwords must be supplied explicitly in production.');
+      if (!samplePwd) {
+        throw new Error('SAMPLE_ACCOUNTS_PASSWORD is required when SEED_SAMPLE_USERS=true.');
       }
-      const [sampleHash, demoHash] = await Promise.all([hashPassword(samplePwd), hashPassword(demoPwd)]);
+      const sampleHash = await hashPasswordBcrypt(samplePwd);
       for (const u of SAMPLE_USERS) {
         const membership = INITIAL_MEMBERSHIPS.find((m) => m.userId === u.id);
         const isDemo = u.email.endsWith('@demo.thapar.local');
+        if (isDemo) continue;
         await db.query(
           `insert into ${T}.users (id, email, name, role_code, department, password_hash, is_demo, profile)
            values ($1, $2, $3, $4, $5, $6, $7, $8) on conflict do nothing`,
@@ -309,7 +307,7 @@ export function createAuth(opts: AuthOptions) {
             u.name,
             roleById[membership?.roleId ?? ''] ?? 'STUDENT',
             u.department ?? '',
-            isDemo ? demoHash : sampleHash,
+            sampleHash,
             isDemo,
             { ...pick(u, ADMIN_PROFILE_FIELDS), ...(SAMPLE_FACULTY_LINKS[u.id] ? { facultyId: SAMPLE_FACULTY_LINKS[u.id] } : {}) },
           ],
@@ -321,6 +319,9 @@ export function createAuth(opts: AuthOptions) {
     const adminEmail = normEmail(process.env.BOOTSTRAP_ADMIN_EMAIL);
     if (adminEmail && !(await userByEmail(adminEmail))) {
       const pwd = process.env.BOOTSTRAP_ADMIN_PASSWORD;
+      if (process.env.NODE_ENV === 'production' && (!pwd || !evaluatePasswordPolicy(pwd).isValid)) {
+        throw new Error('BOOTSTRAP_ADMIN_PASSWORD is required and must satisfy the password policy in production.');
+      }
       if (pwd && !evaluatePasswordPolicy(pwd).isValid) {
         throw new Error('BOOTSTRAP_ADMIN_PASSWORD does not meet the password policy (12+ chars, upper, lower, digit, symbol).');
       }
