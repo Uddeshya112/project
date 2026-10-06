@@ -59,6 +59,9 @@ async function demo(roleKey: string) {
   return c;
 }
 
+const scheduleKey = (s: any) =>
+  `${s.courseId}|${s.sectionId}|${s.subSectionId ?? ''}|${s.facultyId}|${s.roomId}|${s.day}|${s.timeSlotId}`;
+
 before(async () => {
   const { connectDb } = await import('../src/server/db');
   const { store } = await import('../src/server/store');
@@ -212,7 +215,7 @@ test('generate -> select -> publish workflow with role checks', async () => {
   assert.equal(routine.validation.hardViolations, 0);
   const draft = (await coord.get('/api/academic/bootstrap')).body;
   assert.equal(draft.activeVersionNumber, gen.body.routines[0].versionNumber, 'first routine is the working draft');
-  assert.deepEqual(draft.sessions.map((s: any) => s.id).sort(), gen.body.routines[0].sessions.map((s: any) => s.id).sort());
+  assert.deepEqual(draft.sessions.map(scheduleKey).sort(), gen.body.routines[0].sessions.map(scheduleKey).sort());
 
   assert.equal((await coord.post('/api/timetable/select-routine', { versionNumber: routine.versionNumber })).status, 200);
   assert.equal((await coord.post('/api/timetable/publish')).status, 403, 'coordinators cannot publish');
@@ -226,7 +229,7 @@ test('generate -> select -> publish workflow with role checks', async () => {
 
   const student = await demo('Student');
   const sb = (await student.get('/api/academic/bootstrap')).body;
-  assert.deepEqual(sb.sessions.map((s: any) => s.id).sort(), routine.sessions.map((s: any) => s.id).sort());
+  assert.deepEqual(sb.sessions.map(scheduleKey).sort(), routine.sessions.map(scheduleKey).sort());
 });
 
 test('manual edits are validated on the server', async () => {
@@ -251,7 +254,12 @@ test('faculty can only cancel their own classes; make-up flow cannot double-book
   assert.ok(me.facultyId);
   const b = (await fac.get('/api/academic/bootstrap')).body;
   const mine = b.sessions.find((s: any) => s.facultyId === me.facultyId && s.status !== 'Cancelled');
-  const notMine = b.sessions.find((s: any) => s.facultyId !== me.facultyId);
+  assert.ok(mine, 'faculty sees at least one of their own published classes');
+
+  const coord = await demo('Coordinator');
+  const all = (await coord.get('/api/academic/bootstrap')).body.sessions;
+  const notMine = all.find((s: any) => s.facultyId !== me.facultyId && s.status !== 'Cancelled');
+  assert.ok(notMine, 'staff can identify another faculty member\'s class for authorization testing');
   assert.equal((await fac.post('/api/recovery/cancel-class', { sessionId: notMine.id, reason: 'x' })).status, 403);
 
   const cancel = await fac.post('/api/recovery/cancel-class', { sessionId: mine.id, reason: 'Conference' });
