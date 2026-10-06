@@ -1220,7 +1220,7 @@ class SupabaseRelationalStore {
       changeSummary: `${courseObj?.code || targetSession.courseId} moved from ${oldDay} ${oldSlot} to ${targetDay} ${targetTimeSlotId} in ${roomObj?.name || targetRoomId}`,
       reason,
       isPublished: false,
-      healthScore: result.bestCandidate?.healthScore ?? 0,
+      healthScore: calculateHealthScore(this.activeSessions, Array.from(this.rooms.values()), Array.from(this.facultyMembers.values()), Array.from(this.groups.values()), Array.from(this.courses.values())).overallScore,
       sessions: this.activeSessions,
     };
     this.versions.unshift(newVersion);
