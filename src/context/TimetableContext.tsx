@@ -174,6 +174,7 @@ interface TimetableContextType {
   addConstraint: (constraint: Omit<AcademicConstraint, 'id'>) => Promise<{ success: boolean; message?: string }>;
   updateConstraint: (id: string, updates: Partial<AcademicConstraint>) => Promise<{ success: boolean; message?: string }>;
   toggleConstraint: (id: string) => Promise<{ success: boolean; message?: string }>;
+  deleteConstraint: (id: string) => Promise<{ success: boolean; message?: string }>;
 
   // Validation & Generation Engine
   runValidation: () => ValidationReport;
@@ -2400,29 +2401,21 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     return { success: true };
   };
 
-  const addSession = (sessionData: Omit<ClassSession, 'id' | 'version'>): { isSuccess: boolean; error?: string } => {
-    const check = checkHardConstraints(
-      sessionData,
-      sessions,
-      rooms,
-      facultyMembers,
-      sections,
-      courses
-    );
-
-    if (!check.isFeasible) {
-      return { isSuccess: false, error: check.violations.join(' | ') };
+  const addSession = async (sessionData: Omit<ClassSession, 'id' | 'version'>): Promise<{ isSuccess: boolean; error?: string }> => {
+    try {
+      const res = await fetch(apiUrl('/api/timetable/sessions'), {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(sessionData),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success || !data.session) return { isSuccess: false, error: data.message || 'Could not add session.' };
+      setSessions(prev => [...prev, data.session]);
+      return { isSuccess: true };
+    } catch {
+      return { isSuccess: false, error: 'Network error adding session.' };
     }
-
-    const newId = `sess-${sessionData.day.slice(0, 3).toLowerCase()}-${Date.now().toString().slice(-4)}`;
-    const newSession: ClassSession = {
-      ...sessionData,
-      id: newId,
-      version: 1,
-    };
-
-    setSessions(prev => [...prev, newSession]);
-    return { isSuccess: true };
   };
 
   return (
@@ -2491,6 +2484,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         addConstraint,
         updateConstraint,
         toggleConstraint,
+        deleteConstraint,
         runValidation,
         resetDemoAcademicData,
         generateDraftTimetable,
