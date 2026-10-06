@@ -1079,6 +1079,7 @@ export class TimetableStore {
     const totalHours = ctx.allocations.reduce((s, a) => s + a.hoursPerWeek, 0);
     const fixedSessions = this.activeSessions.filter((s) => s.isLocked && s.status !== 'Cancelled' && s.type !== 'Makeup');
     const out: any[] = [];
+    let firstGeneratedVersion: TimetableVersion | undefined;
 
     for (const [idx, cfg] of routines.entries()) {
       const result = executeOptimizationEngine(ctx.academicYear, ctx.allocations, ctx.facultyMembers, ctx.rooms, ctx.sections, ctx.courses, ctx.constraints, {
