@@ -630,8 +630,9 @@ export function executeOptimizationEngine(
         prng.range(1000, 9999),
         problem,
         allocAssignedSlots,
-        options.optimizationProfile || 'BALANCED',
-        pinnedSessions
+        profile,
+        pinnedSessions,
+        softWeights
       );
 
       const validation = validateTimetableIndependently(candidate.sessions, {
@@ -1039,13 +1040,11 @@ function calculateSoftPenalties(
   const addFaculty = (id: string, value: number) => { byFaculty[id] = (byFaculty[id] || 0) + value; };
   const addSection = (id: string, value: number) => { bySection[id] = (bySection[id] || 0) + value; };
 
-  const slotByKey = new Map<string, SlotRef>();
-  for (const slot of problem.slots) slotByKey.set(slot.day + '|' + slot.timeSlotId, slot);
+  const slotByKey = new Map(problem.slots.map(s => [s.day + '|' + s.timeSlotId, s]));
   const roomById = new Map(problem.rooms.map(r => [r.id, r]));
-  const sectionById = new Map(problem.sections.map(s => [s.id, s]));
   const facultyById = new Map(problem.faculty.map(f => [f.id, f]));
-  const facultyDayMap = new Map<string, number[]>();
   const sectionDayMap = new Map<string, number[]>();
+  const facultyDayMap = new Map<string, number[]>();
   const courseDays = new Map<string, Set<number>>();
   const coursePeriods = new Map<string, Map<number, Set<number>>>();
   const sectionDaySessions = new Map<string, ClassSession[]>();
@@ -1054,25 +1053,23 @@ function calculateSoftPenalties(
     const slot = slotByKey.get(sess.day + '|' + sess.timeSlotId);
     if (!slot) continue;
 
-    const facKey = sess.facultyId + '|' + sess.day;
-    const facPeriods = facultyDayMap.get(facKey) || [];
-    facPeriods.push(slot.periodIdx);
-    facultyDayMap.set(facKey, facPeriods);
+    const fd = facultyDayMap.get(sess.facultyId + '|' + sess.day) || [];
+    fd.push(slot.periodIdx);
+    facultyDayMap.set(sess.facultyId + '|' + sess.day, fd);
 
-    const secKey = sess.sectionId + '|' + sess.day;
-    const secPeriods = sectionDayMap.get(secKey) || [];
-    secPeriods.push(slot.periodIdx);
-    sectionDayMap.set(secKey, secPeriods);
+    const sd = sectionDayMap.get(sess.sectionId + '|' + sess.day) || [];
+    sd.push(slot.periodIdx);
+    sectionDayMap.set(sess.sectionId + '|' + sess.day, sd);
 
     const courseKey = sess.sectionId + '|' + (sess.subSectionId || 'ALL') + '|' + sess.courseId;
     const days = courseDays.get(courseKey) || new Set<number>();
     days.add(slot.dayIdx);
     courseDays.set(courseKey, days);
-    const periods = coursePeriods.get(courseKey) || new Map<number, Set<number>>();
-    const daySet = periods.get(slot.periodIdx) || new Set<number>();
-    daySet.add(slot.dayIdx);
-    periods.set(slot.periodIdx, daySet);
-    coursePeriods.set(courseKey, periods);
+    const periodMap = coursePeriods.get(courseKey) || new Map<number, Set<number>>();
+    const samePeriodDays = periodMap.get(slot.periodIdx) || new Set<number>();
+    samePeriodDays.add(slot.dayIdx);
+    periodMap.set(slot.periodIdx, samePeriodDays);
+    coursePeriods.set(courseKey, periodMap);
 
     const sdKey = sess.sectionId + '|' + sess.day;
     const daySessions = sectionDaySessions.get(sdKey) || [];
@@ -1080,13 +1077,10 @@ function calculateSoftPenalties(
     sectionDaySessions.set(sdKey, daySessions);
 
     const room = roomById.get(sess.roomId);
-    const section = sectionById.get(sess.sectionId);
-    if (room && section) {
-      const unusedChairs = Math.max(0, room.capacity - section.studentCount);
-      if (unusedChairs > 40) {
-        roomCapacityFitPenalty += softWeights.roomCapacityFit;
-        addSection(sess.sectionId, softWeights.roomCapacityFit);
-      }
+    const section = problem.sections.find(s => s.id === sess.sectionId);
+    if (room && section && room.capacity - section.studentCount > 40) {
+      roomCapacityFitPenalty += softWeights.roomCapacityFit;
+      addSection(sess.sectionId, softWeights.roomCapacityFit);
     }
 
     const faculty = facultyById.get(sess.facultyId);
@@ -1097,122 +1091,82 @@ function calculateSoftPenalties(
   }
 
   for (const [key, periods] of facultyDayMap) {
-    periods.sort((a, b) => a - b);
+    periods.sort((a,b)=>a-b);
     const facultyId = key.split('|')[0];
     let consecutive = 1;
-    for (let i = 1; i < periods.length; i++) {
-      const gap = periods[i] - periods[i - 1] - 1;
-      if (gap > 0) {
-        const penalty = gap * softWeights.facultyGap;
-        facultyGapsPenalty += penalty;
-        addFaculty(facultyId, penalty);
+    for(let i=1;i<periods.length;i++){
+      const gap=periods[i]-periods[i-1]-1;
+      const intermediate=problem.slots.find(s=>s.periodIdx===periods[i-1]+1);
+      if(gap>0 && !intermediate?.isLunch){
+        const p=gap*softWeights.facultyGap;
+        facultyGapsPenalty+=p; addFaculty(facultyId,p);
       }
-      if (periods[i] === periods[i - 1] + 1) {
-        consecutive++;
-        if (consecutive > 3) {
-          facultyConsecutivePenalty += softWeights.facultyConsecutive;
-          addFaculty(facultyId, softWeights.facultyConsecutive);
-        }
-      } else consecutive = 1;
+      if(periods[i]===periods[i-1]+1){ consecutive++; if(consecutive>3){facultyConsecutivePenalty+=softWeights.facultyConsecutive; addFaculty(facultyId,softWeights.facultyConsecutive);} }
+      else consecutive=1;
     }
   }
 
   for (const [key, periods] of sectionDayMap) {
-    periods.sort((a, b) => a - b);
-    const sectionId = key.split('|')[0];
-    let consecutive = 1;
-    for (let i = 1; i < periods.length; i++) {
-      const gap = periods[i] - periods[i - 1] - 1;
-      if (gap > 0) {
-        const intermediate = periods[i - 1] + 1;
-        const isLunch = problem.slots.find(s => s.periodIdx === intermediate && s.isLunch);
-        if (!isLunch) {
-          const penalty = gap * softWeights.studentGap;
-          studentGapsPenalty += penalty;
-          addSection(sectionId, penalty);
-        }
-      }
-      if (periods[i] === periods[i - 1] + 1) {
-        consecutive++;
-        if (consecutive > 3) {
-          studentConsecutivePenalty += softWeights.studentConsecutive;
-          addSection(sectionId, softWeights.studentConsecutive);
-        }
-      } else consecutive = 1;
+    periods.sort((a,b)=>a-b);
+    const sectionId=key.split('|')[0];
+    let consecutive=1;
+    for(let i=1;i<periods.length;i++){
+      const gap=periods[i]-periods[i-1]-1;
+      const intermediate=problem.slots.find(s=>s.periodIdx===periods[i-1]+1);
+      if(gap>0 && !intermediate?.isLunch){const p=gap*softWeights.studentGap; studentGapsPenalty+=p; addSection(sectionId,p);}
+      if(periods[i]===periods[i-1]+1){consecutive++; if(consecutive>3){studentConsecutivePenalty+=softWeights.studentConsecutive; addSection(sectionId,softWeights.studentConsecutive);}}
+      else consecutive=1;
     }
-    if (periods.length > 5) {
-      const penalty = (periods.length - 5) * softWeights.studentWorkload;
-      studentWorkloadImbalancePenalty += penalty;
-      addSection(sectionId, penalty);
+    if(periods.length>5){const p=(periods.length-5)*softWeights.studentWorkload; studentWorkloadImbalancePenalty+=p; addSection(sectionId,p);}
+  }
+
+  for(const [key,days] of courseDays){
+    const count=sessions.filter(s=>(s.sectionId+'|'+(s.subSectionId||'ALL')+'|'+s.courseId)===key).length;
+    const sample=sessions.find(s=>(s.sectionId+'|'+(s.subSectionId||'ALL')+'|'+s.courseId)===key);
+    const blocks=Math.max(1,sample?.durationPeriods||1);
+    const desired=Math.min(3,Math.max(1,Math.ceil(count/blocks)));
+    if(days.size<desired){const p=(desired-days.size)*softWeights.courseDistribution; courseDistributionPenalty+=p; courseSpreadPenalty+=p; addSection(key.split('|')[0],p);}
+  }
+
+  for(const [key,periodMap] of coursePeriods){
+    for(const daySet of periodMap.values()) if(daySet.size>1){const p=(daySet.size-1)*softWeights.repeatedCoursePeriod; repeatedPeriodPenalty+=p; addSection(key.split('|')[0],p);}
+  }
+
+  for(const [key,arr] of sectionDaySessions){
+    arr.sort((a,b)=>(slotByKey.get(a.day+'|'+a.timeSlotId)?.periodIdx??0)-(slotByKey.get(b.day+'|'+b.timeSlotId)?.periodIdx??0));
+    for(let i=0;i<arr.length-1;i++){
+      const pa=slotByKey.get(arr[i].day+'|'+arr[i].timeSlotId)?.periodIdx;
+      const pb=slotByKey.get(arr[i+1].day+'|'+arr[i+1].timeSlotId)?.periodIdx;
+      if(pa===undefined||pb!==pa+1) continue;
+      const ra=roomById.get(arr[i].roomId), rb=roomById.get(arr[i+1].roomId);
+      if(!ra||!rb||ra.building===rb.building) continue;
+      const p=Math.max(10,10)/10*softWeights.travel;
+      travelPenalty+=p; addSection(key.split('|')[0],p);
     }
   }
 
-  for (const [key, days] of courseDays) {
-    const sessionCount = sessions.filter(s => (s.sectionId + '|' + (s.subSectionId || 'ALL') + '|' + s.courseId) === key).length;
-    const blockLength = Math.max(1, sessions.find(s => (s.sectionId + '|' + (s.subSectionId || 'ALL') + '|' + s.courseId) === key)?.durationPeriods || 1);
-    const desiredDays = Math.min(3, Math.max(1, Math.ceil(sessionCount / blockLength)));
-    if (days.size < desiredDays) {
-      const penalty = (desiredDays - days.size) * softWeights.courseDistribution;
-      courseDistributionPenalty += penalty;
-      addSection(key.split('|')[0], penalty);
-    }
-  }
-
-  for (const [key, periodMap] of coursePeriods) {
-    for (const daySet of periodMap.values()) {
-      if (daySet.size > 1) {
-        const penalty = (daySet.size - 1) * softWeights.repeatedCoursePeriod;
-        repeatedPeriodPenalty += penalty;
-        addSection(key.split('|')[0], penalty);
-      }
-    }
-  }
-
-  for (const [key, arr] of sectionDaySessions) {
-    arr.sort((a, b) => (slotByKey.get(a.day + '|' + a.timeSlotId)?.periodIdx || 0) - (slotByKey.get(b.day + '|' + b.timeSlotId)?.periodIdx || 0));
-    for (let i = 0; i < arr.length - 1; i++) {
-      const a = arr[i], b = arr[i + 1];
-      const pa = slotByKey.get(a.day + '|' + a.timeSlotId)?.periodIdx;
-      const pb = slotByKey.get(b.day + '|' + b.timeSlotId)?.periodIdx;
-      if (pa === undefined || pb !== pa + 1) continue;
-      const ra = roomById.get(a.roomId), rb = roomById.get(b.roomId);
-      if (!ra || !rb || ra.building === rb.building) continue;
-      const minutes = Math.max(10, softWeights.travel > 0 ? Number(problem.slots.length ? 10 : 10) : 10);
-      const penalty = (minutes / 10) * softWeights.travel;
-      travelPenalty += penalty;
-      addSection(key.split('|')[0], penalty);
-    }
-  }
-
-  const totalPenalty = Math.max(
-    0,
-    facultyGapsPenalty +
-      facultyConsecutivePenalty +
-      studentGapsPenalty +
-      studentWorkloadImbalancePenalty +
-      courseDistributionPenalty +
-      roomCapacityFitPenalty +
-      studentConsecutivePenalty +
-      travelPenalty +
-      repeatedPeriodPenalty -
-      facultyPreferenceBonus
+  const totalPenalty=Math.max(0,
+    facultyGapsPenalty+facultyConsecutivePenalty+studentGapsPenalty+
+    studentWorkloadImbalancePenalty+courseDistributionPenalty+
+    roomCapacityFitPenalty+studentConsecutivePenalty+travelPenalty+
+    repeatedPeriodPenalty-facultyPreferenceBonus
   );
-
+  const round=(n:number)=>Number(n.toFixed(1));
   return {
-    facultyGapsPenalty: Number(facultyGapsPenalty.toFixed(1)),
-    facultyConsecutivePenalty: Number(facultyConsecutivePenalty.toFixed(1)),
-    studentGapsPenalty: Number(studentGapsPenalty.toFixed(1)),
-    studentWorkloadImbalancePenalty: Number(studentWorkloadImbalancePenalty.toFixed(1)),
-    courseDistributionPenalty: Number(courseDistributionPenalty.toFixed(1)),
-    roomCapacityFitPenalty: Number(roomCapacityFitPenalty.toFixed(1)),
-    facultyPreferenceBonus: Number(facultyPreferenceBonus.toFixed(1)),
-    studentConsecutivePenalty: Number(studentConsecutivePenalty.toFixed(1)),
-    travelPenalty: Number(travelPenalty.toFixed(1)),
-    courseSpreadPenalty: Number(courseDistributionPenalty.toFixed(1)),
-    repeatedPeriodPenalty: Number(repeatedPeriodPenalty.toFixed(1)),
-    byFaculty: Object.fromEntries(Object.entries(byFaculty).map(([k,v]) => [k, Number(v.toFixed(1))])),
-    bySection: Object.fromEntries(Object.entries(bySection).map(([k,v]) => [k, Number(v.toFixed(1))])),
-    totalPenalty: Number(totalPenalty.toFixed(1)),
+    facultyGapsPenalty:round(facultyGapsPenalty),
+    facultyConsecutivePenalty:round(facultyConsecutivePenalty),
+    studentGapsPenalty:round(studentGapsPenalty),
+    studentWorkloadImbalancePenalty:round(studentWorkloadImbalancePenalty),
+    courseDistributionPenalty:round(courseDistributionPenalty),
+    roomCapacityFitPenalty:round(roomCapacityFitPenalty),
+    facultyPreferenceBonus:round(facultyPreferenceBonus),
+    studentConsecutivePenalty:round(studentConsecutivePenalty),
+    travelPenalty:round(travelPenalty),
+    courseSpreadPenalty:round(courseSpreadPenalty),
+    repeatedPeriodPenalty:round(repeatedPeriodPenalty),
+    byFaculty:Object.fromEntries(Object.entries(byFaculty).map(([k,v])=>[k,round(v)])),
+    bySection:Object.fromEntries(Object.entries(bySection).map(([k,v])=>[k,round(v)])),
+    totalPenalty:round(totalPenalty)
   };
 }
 
