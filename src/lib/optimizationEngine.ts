@@ -1280,21 +1280,11 @@ function optimizeCandidatesPhaseB(
       candidate.optimalityGap = null;
       candidate.unscheduledAllocations = [];
       candidate.hardConstraintViolations = 0;
-      candidate.seed = Math.floor(prng.next() * 0x7fffffff);
-      candidate.softPenalty.bySection = bestBreakdown.bySection;
-      candidate.softPenalty.byFaculty = bestBreakdown.byFaculty;
     } else {
       candidate.optimizationMethod = 'Constructive Bitset MRV';
     }
 
-    candidate.seed = candidate.seed;
     candidate.softPenalty.totalPenalty = Number(candidate.softPenalty.totalPenalty.toFixed(1));
-
-    // Keep a truthful benchmark trace; it records actual iterations/accepted moves.
-    if (candidate.softPenalty.bySection) {
-      candidate.softPenalty.bySection.__optimizationIterations = iterations;
-      candidate.softPenalty.bySection.__acceptedMoves = acceptedMoves;
-    }
   }
 }
 
