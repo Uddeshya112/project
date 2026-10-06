@@ -1,3 +1,5 @@
+import { calculateHealthScore } from './recoveryEngine';
+
 import {
   ClassSession,
   Room,
@@ -142,6 +144,7 @@ interface InternalAllocation {
 }
 
 interface CompiledProblem {
+  academicYear: AcademicYearConfig;
   allocations: InternalAllocation[];
   slots: SlotRef[];
   rooms: Room[];
@@ -451,6 +454,7 @@ export function compileSchedulingProblem(
   courses.forEach(c => courseMap.set(c.id, c));
 
   return {
+    academicYear,
     allocations: compiledAllocations,
     slots,
     rooms: activeRooms,
@@ -556,6 +560,8 @@ export function executeOptimizationEngine(
   // Tracking hours assigned per allocation
   const allocHoursAssigned = new Array<number>(problem.allocations.length).fill(0);
   const allocAssignedSlots = Array.from({ length: problem.allocations.length }, () => [] as { slotIdx: number; roomIdx: number }[]);
+  const fixedSessionKeys = new Set<string>();
+  const fixedAssignmentCounts = new Map<number, number>();
 
   // Pre-assign pinned immutable sessions
   for (const alloc of problem.allocations) {
@@ -576,6 +582,53 @@ export function executeOptimizationEngine(
     }
   }
 
+  // Also pre-assign explicit fixedSessions supplied by the caller.
+  // These are immutable even when the originating allocation lacks isPinned metadata.
+  for (const fixed of options.fixedSessions ?? []) {
+    const slotRef = problem.slotKeyMap.get(`${fixed.day}_${fixed.timeSlotId}`);
+    const roomIdx = problem.rooms.findIndex((r) => r.id === fixed.roomId);
+    if (!slotRef || roomIdx < 0) continue;
+
+    let chosenAllocIdx = -1;
+    let chosenCount = Number.POSITIVE_INFINITY;
+    for (const alloc of problem.allocations) {
+      if (
+        alloc.course.id !== fixed.courseId ||
+        alloc.section.id !== fixed.sectionId ||
+        alloc.faculty.id !== fixed.facultyId ||
+        (alloc.allocation.subSectionId ?? '') !== (fixed.subSectionId ?? '')
+      ) continue;
+      const count = fixedAssignmentCounts.get(alloc.allocIdx) ?? 0;
+      if (count < alloc.requiredHours && count < chosenCount) {
+        chosenAllocIdx = alloc.allocIdx;
+        chosenCount = count;
+      }
+    }
+    if (chosenAllocIdx < 0) continue;
+
+    const alloc = problem.allocations[chosenAllocIdx];
+    const bit = 1n << BigInt(slotRef.slotIdx);
+    const subgroup = alloc.subSectionIdx !== undefined;
+    if ((facultyOccupancy[alloc.facultyIdx] & bit) !== 0n) continue;
+    if ((roomOccupancy[roomIdx] & bit) !== 0n) continue;
+    if (subgroup) {
+      if ((sectionWholeOccupancy[alloc.sectionIdx] & bit) !== 0n) continue;
+      if ((subSectionOccupancy[alloc.subSectionIdx!] & bit) !== 0n) continue;
+      subSectionOccupancy[alloc.subSectionIdx!] |= bit;
+      sectionSubgroupCounts[alloc.sectionIdx][slotRef.slotIdx]++;
+    } else {
+      if ((sectionWholeOccupancy[alloc.sectionIdx] & bit) !== 0n) continue;
+      if (sectionSubgroupCounts[alloc.sectionIdx][slotRef.slotIdx] > 0) continue;
+      sectionWholeOccupancy[alloc.sectionIdx] |= bit;
+    }
+
+    facultyOccupancy[alloc.facultyIdx] |= bit;
+    roomOccupancy[roomIdx] |= bit;
+    allocHoursAssigned[chosenAllocIdx] += 1;
+    allocAssignedSlots[chosenAllocIdx].push({ slotIdx: slotRef.slotIdx, roomIdx });
+    fixedAssignmentCounts.set(chosenAllocIdx, chosenCount + 1);
+    fixedSessionKeys.add(`${fixed.courseId}|${fixed.sectionId}|${fixed.subSectionId ?? ''}|${fixed.day}|${fixed.timeSlotId}|${fixed.roomId}`);
+  }
   // Phase A: Feasibility Backtracking Search
   const feasibilityStart = performance.now();
 
@@ -605,7 +658,8 @@ export function executeOptimizationEngine(
         prng.range(1000, 9999),
         problem,
         allocAssignedSlots,
-        options.optimizationProfile || 'BALANCED'
+        options.optimizationProfile || 'BALANCED',
+        fixedSessionKeys,
       );
       candidatesFound.push(candidate);
 
@@ -628,6 +682,7 @@ export function executeOptimizationEngine(
 
     const isMultiPeriod =
       currentAlloc.durationPeriods > 1 &&
+      hoursNeeded >= currentAlloc.durationPeriods &&
       Boolean(currentAlloc.feasibleBlocks && currentAlloc.feasibleBlocks.length > 0);
 
     if (isMultiPeriod) {
@@ -739,6 +794,10 @@ export function executeOptimizationEngine(
           const j = Math.floor(prng.next() * (i + 1));
           [candidateSlots[i], candidateSlots[j]] = [candidateSlots[j], candidateSlots[i]];
         }
+        if (candidateSlots.length > 1) {
+          const rotation = (candidatesFound.length * 17) % candidateSlots.length;
+          candidateSlots = candidateSlots.slice(rotation).concat(candidateSlots.slice(0, rotation));
+        }
       }
 
       // Track days already assigned for this allocation
@@ -845,7 +904,14 @@ export function executeOptimizationEngine(
 
         // 3. Find Available Compatible Room
         let chosenRoomIdx = -1;
-        for (const rIdx of currentAlloc.candidateRooms) {
+        const roomChoices = [...currentAlloc.candidateRooms];
+        if (candidatesFound.length > 0) {
+          for (let i = roomChoices.length - 1; i > 0; i--) {
+            const j = Math.floor(prng.next() * (i + 1));
+            [roomChoices[i], roomChoices[j]] = [roomChoices[j], roomChoices[i]];
+          }
+        }
+        for (const rIdx of roomChoices) {
           constraintChecksCount++;
           if ((roomOccupancy[rIdx] & slotBit) === 0n) {
             chosenRoomIdx = rIdx;
@@ -949,7 +1015,8 @@ function buildCandidateFromState(
   seed: number,
   problem: CompiledProblem,
   allocAssignedSlots: { slotIdx: number; roomIdx: number }[][],
-  profile: OptimizationProfile = 'BALANCED'
+  profile: OptimizationProfile = 'BALANCED',
+  fixedSessionKeys: Set<string> = new Set(),
 ): GeneratedCandidate {
   const sessions: ClassSession[] = [];
   let scheduledHours = 0;
@@ -963,6 +1030,8 @@ function buildCandidateFromState(
       const slotRef = problem.slots[item.slotIdx];
       const room = problem.rooms[item.roomIdx];
 
+      const sessionKey = `${internalAlloc.course.id}|${internalAlloc.section.id}|${internalAlloc.allocation.subSectionId ?? ''}|${slotRef.day}|${slotRef.timeSlotId}|${room.id}`;
+      const isFixed = fixedSessionKeys.has(sessionKey) || Boolean(internalAlloc.isPinned);
       sessions.push({
         id: `sess-cand${candidateNum}-${sessionCounter++}`,
         courseId: internalAlloc.course.id,
@@ -974,7 +1043,9 @@ function buildCandidateFromState(
         timeSlotId: slotRef.timeSlotId,
         durationPeriods: internalAlloc.durationPeriods || 1,
         type: internalAlloc.sessionType as any,
-        status: 'Planned',
+        status: isFixed ? 'Confirmed' : 'Planned',
+        isLocked: isFixed ? true : undefined,
+        isPinned: isFixed ? true : undefined,
         version: 1,
       });
 
@@ -985,8 +1056,19 @@ function buildCandidateFromState(
   const totalRequestedHours = problem.allocations.reduce((sum, a) => sum + a.requiredHours, 0);
   const softPenalty = calculateSoftPenalties(sessions, problem, profile);
 
-  // Health Score: 100 - softPenalty.totalPenalty, clamped to [10, 100]
-  const healthScore = Math.max(10, Math.min(100, Math.round(100 - softPenalty.totalPenalty)));
+  // Health is derived from the shared timetable health model; no artificial floor.
+  const healthScore = calculateHealthScore(
+    sessions,
+    problem.rooms,
+    problem.faculty,
+    problem.sections,
+    problem.courses,
+    {
+      workingDays: problem.academicYear.workingDays,
+      timeSlots: problem.academicYear.timeSlots,
+      lunchPeriodId: problem.academicYear.lunchPeriodId,
+    },
+  ).overallScore;
 
   return {
     candidateId: `cand-v${candidateNum}`,
@@ -1298,7 +1380,7 @@ function optimizeCandidatesPhaseB(
     const movableIndices: number[] = [];
     for (let i = 0; i < currentSessions.length; i++) {
       const s = currentSessions[i];
-      if (s.isPinned) continue;
+      if (s.isPinned || s.isLocked) continue;
       if (s.type === 'Lab' || s.type === 'Practical') continue;
       movableIndices.push(i);
     }
@@ -1371,7 +1453,7 @@ function optimizeCandidatesPhaseB(
       // Evaluate new soft penalties
       const newBreakdown = calculateSoftPenalties(neighborSessions, problem, profile);
       const newPenalty = newBreakdown.totalPenalty;
-      const newScore = Math.max(10, Math.min(100, Math.round(100 - newPenalty)));
+      const newScore = Math.max(0, Math.min(100, Math.round(100 - newPenalty)));
 
       const deltaPenalty = newPenalty - currentPenalty;
 
@@ -1404,8 +1486,19 @@ function optimizeCandidatesPhaseB(
 
     // Assign best found solution
     candidate.sessions = bestSessions;
-    candidate.healthScore = bestScore;
     candidate.softPenalty = bestBreakdown;
+    candidate.healthScore = calculateHealthScore(
+      bestSessions,
+      problem.rooms,
+      problem.faculty,
+      problem.sections,
+      problem.courses,
+      {
+        workingDays: problem.academicYear.workingDays,
+        timeSlots: problem.academicYear.timeSlots,
+        lunchPeriodId: problem.academicYear.lunchPeriodId,
+      },
+    ).overallScore;
   }
 }
 
@@ -1432,15 +1525,20 @@ function validateHardConstraintsFast(sessions: ClassSession[], problem: Compiled
     if (roomOccupancy.has(roomKey)) return false;
     roomOccupancy.set(roomKey, true);
 
-    // 4. Section and Subgroup Collisions
+    // 4. Section and subgroup collisions
     const secKey = `${s.sectionId}_${keySlot}`;
     if (s.subSectionId) {
-      if (secWholeOccupancy.has(secKey)) return false; // Whole section lecture already occupying
+      if (secWholeOccupancy.has(secKey)) return false;
       const subKey = `${s.subSectionId}_${keySlot}`;
-      if (subSecOccupancy.has(subKey)) return false; // Same subgroup already occupied
+      if (subSecOccupancy.has(subKey)) return false;
       subSecOccupancy.set(subKey, true);
     } else {
-      if (secWholeOccupancy.has(secKey) || subSecOccupancy.has(`${s.sectionId}_has_sub_${keySlot}`)) return false;
+      if (secWholeOccupancy.has(secKey)) return false;
+      for (const k of subSecOccupancy.keys()) {
+        if (k.endsWith(`_${keySlot}`) && k.startsWith(`${s.sectionId}`)) {
+          return false;
+        }
+      }
       secWholeOccupancy.set(secKey, true);
     }
 
