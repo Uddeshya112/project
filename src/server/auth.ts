@@ -188,36 +188,60 @@ export function createAuth(opts: AuthOptions) {
     return (await db.query<UserRow>(`select * from ${T}.users where id = $1`, [id]))[0];
   }
 
-  async function startSession(req: Request, res: Response, user: UserRow) {
+  async function startSession(req: Request, res: Response, user: UserRow): Promise<string> {
     const token = crypto.randomBytes(32).toString('base64url');
-    const ttlMs = opts.sessionTtlHours * 3600_000;
-    await db.query(`insert into ${T}.auth_sessions (token_hash, user_id, expires_at) values ($1, $2, $3)`, [
-      sha256(token),
-      user.id,
-      new Date(Date.now() + ttlMs),
-    ]);
-    await db.query(`update ${T}.users set last_login_at = now() where id = $1`, [user.id]);
-    res.cookie(SESSION_COOKIE, token, { httpOnly: true, secure: req.secure, sameSite: 'lax', path: '/', maxAge: ttlMs });
-  }
+    const now = Date.now();
+    const maxAge = Math.min(opts.sessionTtlHours * 3600_000, IDLE_TIMEOUT_MS, ABSOLUTE_SESSION_MS);
+    const idleExpiry = new Date(now + maxAge);
+    const absoluteExpiry = new Date(now + ABSOLUTE_SESSION_MS);
 
-  async function revokeSessions(userId: string) {
-    await db.query(`delete from ${T}.auth_sessions where user_id = $1`, [userId]);
-  }
-
-  /** Attaches req.user when the session cookie is valid. Never rejects. */
-  async function loadUser(req: Request, _res: Response, next: NextFunction) {
-    const token = readCookie(req, SESSION_COOKIE);
-    if (token) {
-      const rows = await db.query<UserRow>(
-        `select u.* from ${T}.auth_sessions s join ${T}.users u on u.id = s.user_id
-          where s.token_hash = $1 and s.expires_at > now() and u.status = 'ACTIVE'`,
-        [sha256(token)],
+    await db.tx(async (q) => {
+      await q(`delete from ${T}.auth_sessions where user_id = $1 and expires_at <= now()`, [user.id]);
+      await q(
+        `insert into ${T}.auth_sessions
+          (token_hash, user_id, last_seen_at, expires_at, absolute_expires_at, user_agent, ip_address)
+         values ($1, $2, now(), $3, $4, $5, $6)`,
+        [
+          sha256(token),
+          user.id,
+          idleExpiry,
+          absoluteExpiry,
+          String(req.get('user-agent') || '').slice(0, 500),
+          String(req.ip || '').slice(0, 128),
+        ],
       );
-      req.user = rows[0]?.is_demo && !opts.demoMode ? undefined : rows[0];
-    }
-    next();
-  }
+      await q(
+        `delete from ${T}.auth_sessions
+          where user_id = $1
+            and token_hash not in (
+              select token_hash from ${T}.auth_sessions
+               where user_id = $1
+               order by created_at desc
+               limit ${MAX_ACTIVE_SESSIONS}
+            )`,
+        [user.id],
+      );
+      await q(`update ${T}.users set last_login_at = now() where id = $1`, [user.id]);
+    });
 
+    const production = process.env.NODE_ENV === 'production';
+    res.cookie(SESSION_COOKIE, token, {
+      httpOnly: true,
+      secure: production || req.secure,
+      sameSite: production ? 'none' : 'lax',
+      path: '/',
+      maxAge,
+    });
+    const csrf = crypto.randomBytes(32).toString('base64url');
+    res.cookie(CSRF_COOKIE, csrf, {
+      httpOnly: false,
+      secure: production || req.secure,
+      sameSite: production ? 'none' : 'lax',
+      path: '/',
+      maxAge,
+    });
+    return token;
+  }
   /** First start: load the sample accounts; optionally ensure a bootstrap admin. */
   async function seedUsers() {
     const [{ n }] = await db.query<{ n: number }>(`select count(*)::int as n from ${T}.users`);
