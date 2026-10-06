@@ -85,3 +85,6 @@ create table if not exists intellischedule.password_reset_tokens (
   created_at  timestamptz not null default now()
 );
 create index if not exists password_reset_tokens_expiry_idx on intellischedule.password_reset_tokens(expires_at);
+
+alter table intellischedule.rate_limits              enable row level security;
+alter table intellischedule.password_reset_tokens enable row level security;
