@@ -38,7 +38,7 @@ async function waitForServer(timeoutMs = 30000): Promise<void> {
 function startServer(testPassword: string): ChildProcess {
   const child = spawn(commandName('tsx'), ['server.ts'], {
     cwd: ROOT,
-    env: { ...process.env, NODE_ENV: 'test', PORT: '3000', SEED_USER_PASSWORD: testPassword, DEMO_ACCOUNT_PASSWORD: testPassword },
+    env: { ...process.env, NODE_ENV: 'test', PORT: '3000', DATABASE_URL: 'pglite:memory', SEED_SAMPLE_USERS: 'true', SAMPLE_ACCOUNTS_PASSWORD: testPassword, SEED_USER_PASSWORD: testPassword, ALLOW_TEST_RESET_TOKEN: 'true' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   child.stdout?.on('data', chunk => process.stdout.write('[test-server] ' + chunk));
@@ -75,7 +75,7 @@ async function main(): Promise<void> {
     .sort()
     .map(name => path.join('tests', name));
 
-  let testPassword = process.env.SEED_USER_PASSWORD || process.env.DEMO_ACCOUNT_PASSWORD || randomTestPassword();
+  const testPassword = process.env.SEED_USER_PASSWORD || randomTestPassword();
 
   try {
     if (await isServerReady()) {
@@ -85,7 +85,7 @@ async function main(): Promise<void> {
       await waitForServer();
     }
 
-    const testEnv = { NODE_ENV: 'test', SEED_USER_PASSWORD: testPassword, DEMO_ACCOUNT_PASSWORD: testPassword };
+    const testEnv = { NODE_ENV: 'test', DATABASE_URL: 'pglite:memory', SEED_SAMPLE_USERS: 'true', SAMPLE_ACCOUNTS_PASSWORD: testPassword, SEED_USER_PASSWORD: testPassword, ALLOW_TEST_RESET_TOKEN: 'true' };
     const unitExit = await runCommand('tsx', ['--test', ...testFiles], testEnv);
     if (unitExit !== 0) {
       process.exitCode = unitExit;
