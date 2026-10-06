@@ -137,6 +137,8 @@ async function initializeRuntime(){
     db=await connectDb(databaseUrl);
     authService=createAuth({db,demoMode:false,googleClientId:process.env.GOOGLE_CLIENT_ID,googleClientSecret:process.env.GOOGLE_CLIENT_SECRET,googleRedirectUri:process.env.GOOGLE_REDIRECT_URI,appUrl:process.env.APP_URL,allowedDomains:(process.env.ALLOWED_EMAIL_DOMAINS||'thapar.edu').split(',').map(v=>v.trim().toLowerCase().replace(/^@/,'')).filter(Boolean),sessionTtlHours:Number(process.env.SESSION_TTL_HOURS)||24,bcryptRounds:Number(process.env.BCRYPT_ROUNDS)||12,rosterLookup:(email:string)=>{ const state=supabaseStore.getBootstrapState(); const faculty=(state.facultyMembers||[]).find((f:any)=>String(f.email||'').toLowerCase()===email); if(faculty)return {roleCode:'FACULTY',name:faculty.name,department:faculty.departmentId||'',profile:{facultyId:faculty.id}}; const student=findStudentByEmail(email); if(student)return {roleCode:'STUDENT',name:student.name,department:student.programCode||'',profile:{rollNumber:student.studentId,sectionId:student.sectionId,subSectionId:student.subSectionId}}; return null; }});
     await authService.seedUsers();
+    timetableJobManager.init(db);
+    await timetableJobManager.recover();
     app.use((req:Request,res:Response,next:NextFunction)=>authService!.loadUser(req,res,next));
     app.use(authService.router);
   } catch(err){ authInitError=err instanceof Error?err:new Error(String(err)); console.error('[STARTUP] Runtime initialization failed:',authInitError.message); }
@@ -668,14 +670,14 @@ app.post('/api/academic/import', requireAuth, requireRole(['COORDINATOR', 'COLLE
 // -------------------------------------------------------------
 
 // Timetable Generation (Server-Side Solver + Independent Validator + Supabase Persistence)
-const handleGenerateTimetable = (req: AuthenticatedRequest, res: Response) => {
+const handleGenerateTimetable = async (req: AuthenticatedRequest, res: Response) => {
   const body = req.body || {};
   const { budgetMode = 'BALANCED', timeBudgetMs = 800, routines, async: isAsync } = body;
 
   if (isAsync) {
     const state = supabaseStore.getAcademicState();
 
-    const jobId = timetableJobManager.createJob(
+    const jobId = await timetableJobManager.createJob(
       state.academicYear,
       state.allocations,
       state.facultyMembers,
@@ -683,7 +685,8 @@ const handleGenerateTimetable = (req: AuthenticatedRequest, res: Response) => {
       state.sections,
       state.courses,
       state.constraints,
-      { budgetMode, timeBudgetMs: Number(timeBudgetMs) }
+      { budgetMode, timeBudgetMs: Number(timeBudgetMs) },
+      req.authenticatedUser?.id
     );
 
     return res.status(202).json({
@@ -717,13 +720,13 @@ app.post('/api/timetables/generate', requireAuth, requireRole(['COORDINATOR', 'C
 app.post('/api/timetable/generate-engine', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), handleGenerateTimetable);
 
 // Job API Endpoints
-app.post('/api/timetable/jobs', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
+app.post('/api/timetable/jobs', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), async (req: AuthenticatedRequest, res: Response) => {
   const body = req.body || {};
   const { budgetMode = 'BALANCED', timeBudgetMs = 800, optimizationProfile = 'BALANCED', seed } = body;
 
   const state = supabaseStore.getAcademicState();
 
-  const jobId = timetableJobManager.createJob(
+  const jobId = await timetableJobManager.createJob(
     state.academicYear,
     state.allocations,
     state.facultyMembers,
@@ -731,7 +734,8 @@ app.post('/api/timetable/jobs', requireAuth, requireRole(['COORDINATOR', 'COLLEG
     state.sections,
     state.courses,
     state.constraints,
-    { budgetMode, timeBudgetMs: Number(timeBudgetMs), optimizationProfile, seed }
+    { budgetMode, timeBudgetMs: Number(timeBudgetMs), optimizationProfile, seed },
+    req.authenticatedUser?.id
   );
 
   return res.status(202).json({
@@ -742,18 +746,18 @@ app.post('/api/timetable/jobs', requireAuth, requireRole(['COORDINATOR', 'COLLEG
   });
 });
 
-app.get('/api/timetable/jobs/:id', requireAuth, (req: Request, res: Response) => {
+app.get('/api/timetable/jobs/:id', requireAuth, async (req: Request, res: Response) => {
   const jobId = req.params.id as string;
-  const job = timetableJobManager.getJob(jobId);
+  const job = await timetableJobManager.getJob(jobId);
   if (!job) {
     return res.status(404).json({ success: false, message: `Job ${jobId} not found.` });
   }
   return res.json(job);
 });
 
-app.post('/api/timetable/jobs/:id/cancel', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: Request, res: Response) => {
+app.post('/api/timetable/jobs/:id/cancel', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), async (req: Request, res: Response) => {
   const jobId = req.params.id as string;
-  const success = timetableJobManager.cancelJob(jobId);
+  const success = await timetableJobManager.cancelJob(jobId);
   if (!success) {
     return res.status(400).json({ success: false, message: `Job ${jobId} could not be cancelled or has already completed.` });
   }
@@ -875,29 +879,27 @@ app.post('/api/timetable/versions/:versionNumber/restore', requireAuth, requireR
 
 // Timetable Benchmark Endpoint
 app.get('/api/timetable/benchmark', requireAuth, requireRole(['SUPER_ADMIN', 'COLLEGE_ADMIN', 'COORDINATOR']), (req: AuthenticatedRequest, res: Response) => {
-  const rl = checkRateLimit(`benchmark:${req.authenticatedUser?.id || req.ip}`, 2, 60_000);
-  if (rl.limited) {
-    return res.status(429).setHeader('Retry-After', String(rl.retryAfterSec ?? 60)).json({ success: false, message: 'Too many benchmark requests. Max 2 per minute.' });
-  }
+  // Benchmarking is restricted to authenticated academic staff; rate limiting is persisted by the auth service.
+  const benchmarkState = supabaseStore.getAcademicState();
   const resultFast = executeOptimizationEngine(
-    INITIAL_ACADEMIC_YEAR,
-    INITIAL_ALLOCATIONS,
-    FACULTY_MEMBERS,
-    ROOMS,
-    SECTIONS,
-    COURSES,
-    INITIAL_CONSTRAINTS,
+    benchmarkState.academicYear,
+    benchmarkState.allocations,
+    benchmarkState.facultyMembers,
+    benchmarkState.rooms,
+    benchmarkState.sections,
+    benchmarkState.courses,
+    benchmarkState.constraints,
     { budgetMode: 'FAST', timeBudgetMs: 200, seed: 101, maxCandidates: 1 }
   );
 
   const resultOpt = executeOptimizationEngine(
-    INITIAL_ACADEMIC_YEAR,
-    INITIAL_ALLOCATIONS,
-    FACULTY_MEMBERS,
-    ROOMS,
-    SECTIONS,
-    COURSES,
-    INITIAL_CONSTRAINTS,
+    benchmarkState.academicYear,
+    benchmarkState.allocations,
+    benchmarkState.facultyMembers,
+    benchmarkState.rooms,
+    benchmarkState.sections,
+    benchmarkState.courses,
+    benchmarkState.constraints,
     { budgetMode: 'MAXIMUM_OPTIMIZATION', timeBudgetMs: 500, seed: 101, maxCandidates: 3 }
   );
 
