@@ -1144,11 +1144,14 @@ export class TimetableStore {
         },
         healthScore: health,
       });
-      if (idx === 0 && sessions.length) {
-        this.activeSessions = clone(sessions);
-        this.activeVersionNumber = version!.versionNumber;
-        this.academicYear.publishStatus = 'Draft';
-      }
+    }
+
+    const firstGenerated = out.find((r) => r.versionNumber != null);
+    if (firstGenerated?.versionNumber != null) {
+      const firstVersion = this.getVersion(firstGenerated.versionNumber);
+      this.activeSessions = clone(firstVersion.sessions);
+      this.activeVersionNumber = firstVersion.versionNumber;
+      this.academicYear.publishStatus = 'Draft';
     }
 
     this.logAudit(user, 'ROUTINES_GENERATED', 'TimetableVersion', 'solver-run', `Generated ${out.filter((r) => r.versionNumber).length} of ${out.length} routines.`);
