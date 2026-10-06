@@ -488,21 +488,16 @@ async function runTestSuite() {
     assert(false, 'Google OAuth', 'Google status check failed', String(err));
   }
 
-  // Test 3.2: Google Debug Endpoint (Diagnostic parameters validation)
+  // Test 3.2: Google debug endpoint is not publicly exposed.
   try {
     const res = await fetch(`${BASE_URL}/api/auth/google/debug`);
-    const data = await res.json();
     assert(
-      res.status === 200 &&
-      data.oauthParameters.requestedScopes.includes('openid') &&
-      data.oauthParameters.requestedScopes.includes('email') &&
-      data.oauthParameters.requestedScopes.includes('profile') &&
-      data.oauthParameters.requestedScopes.length === 3,
+      res.status === 404,
       'Google OAuth',
-      'OAuth scope audit: EXACTLY openid, email, profile (zero unnecessary Google scopes)'
+      'Google debug endpoint is removed from the public API surface'
     );
   } catch (err) {
-    assert(false, 'Google OAuth', 'Google debug check failed', String(err));
+    assert(false, 'Google OAuth', 'Google debug endpoint removal check failed', String(err));
   }
 
   // Test 3.3: Google Authorization Initiation Endpoint
