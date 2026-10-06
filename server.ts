@@ -9,6 +9,7 @@ import { createAuth, requireAuth, requireRole, STAFF_ROLES, type Viewer } from '
 import { store } from './src/server/store';
 import { executeOptimizationEngine } from './src/lib/optimizationEngine';
 import { HttpError } from './src/server/validate';
+import { TimetableJobManager } from './src/server/jobManager';
 
 const WORKSPACES: Record<string, string[]> = {
   SUPER_ADMIN: ['Admin', 'Coordinator'],
@@ -89,7 +90,7 @@ function parseVersionId(value: unknown): number | undefined {
   return Number.isInteger(n) && n > 0 ? n : undefined;
 }
 
-export async function createApp(db: import('./src/server/db').Db) {
+export async function createApp(db: import('./src/server/db').Db, jobManager?: TimetableJobManager) {
   const allowedOrigins = new Set(envList('ALLOWED_ORIGINS', DEFAULT_ALLOWED_ORIGINS));
   const app = express();
   app.disable('x-powered-by');
@@ -364,6 +365,29 @@ export async function createApp(db: import('./src/server/db').Db) {
   const schedulingWrite = requireRole(['COORDINATOR', 'COLLEGE_ADMIN']);
 
   const generate = asyncRoute(async (req, res) => {
+    if (req.body?.async === true) {
+      if (!jobManager) throw new HttpError(503, 'Background timetable jobs are not configured.');
+      const state = store.getBootstrapState(toViewer(req));
+      const jobId = await jobManager.createJob({
+        academicYear: state.academicYear,
+        allocations: state.allocations,
+        facultyMembers: state.facultyMembers,
+        rooms: state.rooms,
+        sections: state.sections,
+        courses: state.courses,
+        constraints: state.constraints,
+        options: {
+          budgetMode: req.body?.budgetMode ?? 'BALANCED',
+          timeBudgetMs: Math.min(30_000, Math.max(100, Number(req.body?.timeBudgetMs) || 800)),
+          maxCandidates: Math.min(5, Math.max(1, Number(req.body?.maxCandidates) || 2)),
+          seed: Number.isInteger(req.body?.seed) ? req.body.seed : 1337,
+          optimizationProfile: req.body?.optimizationProfile,
+        },
+      });
+      res.status(202).json({ jobId, status: 'PENDING', progress: 0 });
+      return;
+    }
+
     const result = store.generateRoutines(req.body, req.user!.name);
     await store.persist();
     res.json({ jobId: `job_sync_${Date.now()}`, ...result, generatedBy: req.user!.name });
@@ -372,6 +396,42 @@ export async function createApp(db: import('./src/server/db').Db) {
   app.post('/api/timetable/generate', schedulingWrite, generate);
   app.post('/api/timetables/generate', schedulingWrite, generate);
   app.post('/api/timetable/generate-engine', schedulingWrite, generate);
+
+  app.post('/api/timetable/jobs', schedulingWrite, asyncRoute(async (req, res) => {
+    if (!jobManager) throw new HttpError(503, 'Background timetable jobs are not configured.');
+    const state = store.getBootstrapState(toViewer(req));
+    const jobId = await jobManager.createJob({
+      academicYear: state.academicYear,
+      allocations: state.allocations,
+      facultyMembers: state.facultyMembers,
+      rooms: state.rooms,
+      sections: state.sections,
+      courses: state.courses,
+      constraints: state.constraints,
+      options: {
+        budgetMode: req.body?.budgetMode ?? 'BALANCED',
+        timeBudgetMs: Math.min(30_000, Math.max(100, Number(req.body?.timeBudgetMs) || 800)),
+        maxCandidates: Math.min(5, Math.max(1, Number(req.body?.maxCandidates) || 1)),
+        seed: Number.isInteger(req.body?.seed) ? req.body.seed : 1337,
+        optimizationProfile: req.body?.optimizationProfile,
+      },
+    });
+    res.status(202).json({ success: true, jobId, status: 'PENDING', progress: 0 });
+  }));
+
+  app.get('/api/timetable/jobs/:id', requireAuth, asyncRoute(async (req, res) => {
+    if (!jobManager) throw new HttpError(503, 'Background timetable jobs are not configured.');
+    const job = await jobManager.getJob(String(req.params.id));
+    if (!job) throw new HttpError(404, 'Generation job not found.');
+    res.json(job);
+  }));
+
+  app.post('/api/timetable/jobs/:id/cancel', schedulingWrite, asyncRoute(async (req, res) => {
+    if (!jobManager) throw new HttpError(503, 'Background timetable jobs are not configured.');
+    const cancelled = await jobManager.cancelJob(String(req.params.id));
+    if (!cancelled) throw new HttpError(409, 'Generation job cannot be cancelled in its current state.');
+    res.json({ success: true });
+  }));
 
   app.get('/api/timetable/versions', requireAuth, (req, res) => {
     res.json({ success: true, versions: store.getBootstrapState(toViewer(req)).versions });
@@ -620,7 +680,9 @@ export async function startServer() {
 
   const db = await connectDb(databaseUrl);
   await store.init(db, { seedDemoData: process.env.SEED_DEMO_DATA === 'true' });
-  const { app, seedUsers } = await createApp(db);
+  const jobManager = new TimetableJobManager(db);
+  await jobManager.init();
+  const { app, seedUsers } = await createApp(db, jobManager);
   await seedUsers();
 
   const port = Number(process.env.PORT) || 3000;
