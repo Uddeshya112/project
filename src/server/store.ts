@@ -1162,7 +1162,9 @@ export class TimetableStore {
   selectVersion(versionNumber: number, user: string) {
     const version = this.getVersion(versionNumber);
     const report = validateTimetableIndependently(version.sessions, this.context());
-    if (report.hardViolationsCount > 0) throw new HttpError(422, `Cannot select a version with ${report.hardViolationsCount} hard violations.`);
+    if (!report.canPublish) {
+      throw new HttpError(422, `Cannot select this version: ${report.hardViolationsCount} hard violations and ${Math.max(0, report.requiredSessionsCount - report.scheduledSessionsCount)} unscheduled hours remain.`);
+    }
     this.activeSessions = clone(version.sessions);
     this.activeVersionNumber = versionNumber;
     this.academicYear.publishStatus = 'Draft';
@@ -1243,7 +1245,9 @@ export class TimetableStore {
   approve(user: string) {
     if (!this.activeSessions.length) throw new HttpError(400, 'There is no draft timetable to approve.');
     const report = validateTimetableIndependently(this.activeSessions, this.context());
-    if (report.hardViolationsCount > 0) throw new HttpError(422, `Cannot approve: the draft has ${report.hardViolationsCount} hard violations.`);
+    if (!report.canPublish) {
+      throw new HttpError(422, `Cannot approve: the draft has ${report.hardViolationsCount} hard violations and ${Math.max(0, report.requiredSessionsCount - report.scheduledSessionsCount)} unscheduled hours.`);
+    }
     this.academicYear.publishStatus = 'Approved';
     this.academicYear.approvedBy = user;
     this.academicYear.approvedAt = new Date().toISOString();
@@ -1263,7 +1267,9 @@ export class TimetableStore {
   publish(user: string) {
     if (!this.activeSessions.length) throw new HttpError(400, 'There is no draft timetable to publish.');
     const report = validateTimetableIndependently(this.activeSessions, this.context());
-    if (report.hardViolationsCount > 0) throw new HttpError(422, `Cannot publish: the draft has ${report.hardViolationsCount} hard violations.`);
+    if (!report.canPublish) {
+      throw new HttpError(422, `Cannot publish: the draft has ${report.hardViolationsCount} hard violations and ${Math.max(0, report.requiredSessionsCount - report.scheduledSessionsCount)} unscheduled hours.`);
+    }
     this.publishActive(user);
     this.notify({
       type: 'system_alert',
