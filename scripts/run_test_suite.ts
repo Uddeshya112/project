@@ -30,10 +30,10 @@ async function waitForServer(timeoutMs = 30000): Promise<void> {
   throw new Error('Timed out waiting for the local test server on port 3000.');
 }
 
-function startServer(seedPassword: string): ChildProcess {
+function startServer(testPassword: string): ChildProcess {
   const child = spawn(commandName('tsx'), ['server.ts'], {
     cwd: ROOT,
-    env: { ...process.env, NODE_ENV: 'test', PORT: '3000', SEED_USER_PASSWORD: seedPassword },
+    env: { ...process.env, NODE_ENV: 'test', PORT: '3000', SEED_USER_PASSWORD: testPassword, DEMO_ACCOUNT_PASSWORD: testPassword },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   child.stdout?.on('data', chunk => process.stdout.write('[test-server] ' + chunk));
@@ -70,20 +70,17 @@ async function main(): Promise<void> {
     .sort()
     .map(name => path.join('tests', name));
 
-  let seedPassword = process.env.SEED_USER_PASSWORD;
+  let testPassword = process.env.SEED_USER_PASSWORD || process.env.DEMO_ACCOUNT_PASSWORD || randomTestPassword();
 
   try {
     if (await isServerReady()) {
-      if (!seedPassword) {
-        throw new Error('SEED_USER_PASSWORD must be set when reusing an already-running test server.');
-      }
+      // Server already running
     } else {
-      seedPassword = seedPassword || randomTestPassword();
-      ownedServer = startServer(seedPassword);
+      ownedServer = startServer(testPassword);
       await waitForServer();
     }
 
-    const testEnv = { NODE_ENV: 'test', SEED_USER_PASSWORD: seedPassword };
+    const testEnv = { NODE_ENV: 'test', SEED_USER_PASSWORD: testPassword, DEMO_ACCOUNT_PASSWORD: testPassword };
     const unitExit = await runCommand('tsx', ['--test', ...testFiles], testEnv);
     if (unitExit !== 0) {
       process.exitCode = unitExit;

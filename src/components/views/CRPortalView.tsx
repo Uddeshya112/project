@@ -148,7 +148,7 @@ export function CRPortalView() {
           options: pollOptions.map(o => ({ day: o.day, timeSlotLabel: optionLabel(o) })),
         },
       });
-      await refresh();
+      await refresh?.();
       setShowPollModal(false);
     } catch (err) {
       setPollError(err instanceof Error ? err.message : 'Could not publish the poll.');
@@ -272,7 +272,7 @@ export function CRPortalView() {
             </div>
 
             {/* Schedule Items */}
-            {publishedSessions.length === 0 ? (
+            {(publishedSessions?.length ?? 0) === 0 ? (
               <div className="p-6 text-xs text-stone-500 dark:text-zinc-400 italic">No timetable published yet.</div>
             ) : (
               <div className="divide-y divide-[#E5E2D9] dark:divide-zinc-800/80">

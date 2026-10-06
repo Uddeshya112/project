@@ -674,26 +674,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       };
       const demoEmail = roleEmailMap[roleKey];
 
-      // Sign into Supabase client to establish real client session
-      if (supabaseClient && demoEmail) {
-        try {
-          const { data: supaData, error: supaErr } = await supabaseClient.auth.signInWithPassword({
-            email: demoEmail,
-            password: 'ThaparDemo@2026Test!',
-          });
-          if (import.meta.env.DEV) {
-            console.info('[AUTH TRACE demo login]', {
-              roleKey,
-              success: !supaErr && Boolean(supaData?.session),
-              error: supaErr?.message || null,
-              sessionExists: Boolean(supaData?.session),
-            });
-          }
-        } catch (err) {
-          console.warn('[AUTH TRACE] Direct Supabase demo sign-in notice:', err);
-        }
-      }
-
       const resp = await fetch(apiUrl('/api/auth/demo-login'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },

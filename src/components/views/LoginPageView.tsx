@@ -1509,12 +1509,6 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
             </div>
 
             <div className="space-y-3">
-              <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 text-[11px] text-amber-900 dark:text-amber-200/90 leading-relaxed">
-                <span className="font-semibold text-amber-800 dark:text-amber-300">Shared Demo Password:</span>{' '}
-                <code className="bg-white dark:bg-zinc-950 px-1.5 py-0.5 rounded font-mono text-stone-900 dark:text-white border border-amber-300 dark:border-amber-800/40">ThaparDemo@2026Test!</code>{' '}
-                <span className="text-stone-600 dark:text-zinc-400">(Or click any one-click demo button to sign in directly).</span>
-              </div>
-
               <div className="space-y-2">
                 <div className="p-3 bg-white dark:bg-zinc-950 rounded-xl border border-[#E5E2D9] dark:border-zinc-800/80 space-y-1">
                   <div className="flex items-center justify-between">

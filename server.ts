@@ -721,7 +721,7 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
 
     // Generate session
     const session: StoredSession = {
-      id: 'sess_' + Date.now(),
+      id: 'sess_' + crypto.randomUUID(),
       userId: user.id,
       token: sessionToken,
       roleCode: user.roleCode,
@@ -800,7 +800,7 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
 
   const sessionToken = 'jwt_live_' + crypto.randomBytes(32).toString('hex');
   const session: StoredSession = {
-    id: 'sess_' + Date.now(),
+    id: 'sess_' + crypto.randomUUID(),
     userId: user.id,
     token: sessionToken,
     roleCode: user.roleCode,
@@ -887,7 +887,7 @@ app.post('/api/auth/logout', async (req: Request, res: Response) => {
       sessionsDatabase.set(token, session);
     } else {
       sessionsDatabase.set(token, {
-        id: 'sess_revoked_' + Date.now(),
+        id: 'sess_revoked_' + crypto.randomUUID(),
         userId: 'revoked_token',
         token,
         roleCode: 'STUDENT',
@@ -1125,7 +1125,7 @@ app.post('/api/auth/demo-login', async (req: Request, res: Response) => {
   }
 
   const session: StoredSession = {
-    id: 'sess_demo_' + Date.now(),
+    id: 'sess_demo_' + crypto.randomUUID(),
     userId: user.id,
     token: sessionToken,
     roleCode: user.roleCode,
@@ -1303,7 +1303,7 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
     }
   }
 
-  let authUserId = 'usr_' + Date.now();
+  let authUserId = 'usr_' + crypto.randomUUID();
 
   // 1. Authoritative Registration in Supabase Auth
   if (supabaseAdmin) {
@@ -1602,7 +1602,7 @@ app.get('/api/auth/google/callback', async (req: Request, res: Response) => {
       user = usersDatabase.get(normalizedEmail);
       if (user) {
         userIdentitiesDatabase.set(identityKey, {
-          id: 'ident_' + Date.now(),
+          id: 'ident_' + crypto.randomUUID(),
           userId: user.id,
           provider: 'google',
           providerSubject: sub,
@@ -1615,7 +1615,7 @@ app.get('/api/auth/google/callback', async (req: Request, res: Response) => {
         const department = preAuth ? preAuth.department : 'Computer Science and Engineering (CSED)';
 
         user = {
-          id: 'usr_g_' + Date.now(),
+          id: 'usr_g_' + crypto.randomUUID(),
           name: name ? String(name).trim() : normalizedEmail.split('@')[0].toUpperCase(),
           email: normalizedEmail,
           passwordHash: hashPasswordBcryptSync('OAuth_Google_' + sub + '_' + normalizedEmail),
@@ -1631,7 +1631,7 @@ app.get('/api/auth/google/callback', async (req: Request, res: Response) => {
         usersDatabase.set(normalizedEmail, user);
 
         userIdentitiesDatabase.set(identityKey, {
-          id: 'ident_' + Date.now(),
+          id: 'ident_' + crypto.randomUUID(),
           userId: user.id,
           provider: 'google',
           providerSubject: sub,
@@ -1643,7 +1643,7 @@ app.get('/api/auth/google/callback', async (req: Request, res: Response) => {
     // Create session
     const sessionToken = 'jwt_live_' + crypto.randomBytes(32).toString('hex');
     const session: StoredSession = {
-      id: 'sess_' + Date.now(),
+      id: 'sess_' + crypto.randomUUID(),
       userId: user.id,
       token: sessionToken,
       roleCode: user.roleCode,
@@ -1743,7 +1743,7 @@ const handleForgotPassword = async (req: Request, res: Response) => {
 
     // Store reset token keyed by tokenHash, never by raw token
     resetTokensDatabase.set(tokenHash, {
-      id: 'prt_' + Date.now(),
+      id: 'prt_' + crypto.randomUUID(),
       email: normalizedEmail,
       tokenHash,
       expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(), // 15 mins
@@ -2053,20 +2053,36 @@ export function requireRole(allowedRoles: RoleCode[]) {
 // SUPABASE-BACKED MASTER ACADEMIC & TIMETABLE API ENDPOINTS
 // -------------------------------------------------------------
 
+function sanitizeAcademicState(state: any, roleCode?: string) {
+  if (roleCode !== 'STUDENT' && roleCode !== 'CLASS_REPRESENTATIVE') return state;
+  return {
+    ...state,
+    facultyMembers: (state.facultyMembers || []).map((f: any) => ({
+      id: f.id,
+      name: f.name,
+      departmentId: f.departmentId,
+      designation: f.designation,
+      subjectsQualified: f.subjectsQualified,
+      status: f.status,
+    })),
+  };
+}
+
 // Master Bootstrap State (Database-backed read for complete academic workspace)
-app.get('/api/academic/bootstrap', requireAuth, (req: Request, res: Response) => {
+app.get('/api/academic/bootstrap', requireAuth, (req: AuthenticatedRequest, res: Response) => {
   const state = supabaseStore.getBootstrapState();
+  const sanitized = sanitizeAcademicState(state, req.authenticatedUser?.roleCode);
   return res.json({
     success: true,
-    ...state,
+    ...sanitized,
     timestamp: new Date().toISOString(),
   });
 });
 
 // Paginated Students Query Endpoint
-app.get('/api/students', requireAuth, (req: Request, res: Response) => {
+app.get('/api/students', requireAuth, requireRole(['SUPER_ADMIN', 'COLLEGE_ADMIN', 'COORDINATOR', 'HOD']), (req: Request, res: Response) => {
   const page = parseInt(req.query.page as string) || 1;
-  const limit = parseInt(req.query.limit as string) || 20;
+  const limit = Math.min(100, parseInt(req.query.limit as string) || 20);
   const search = (req.query.search as string) || '';
   const sectionId = (req.query.sectionId as string) || '';
 
@@ -2583,7 +2599,7 @@ const handleGenerateTimetable = (req: AuthenticatedRequest, res: Response) => {
     req.authenticatedUser?.name
   );
 
-  const jobId = `job_sync_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const jobId = `job_sync_${crypto.randomUUID()}`;
 
   return res.json({
     jobId,
@@ -2755,7 +2771,11 @@ app.post('/api/timetable/versions/:versionNumber/restore', requireAuth, requireR
 });
 
 // Timetable Benchmark Endpoint
-app.get('/api/timetable/benchmark', requireAuth, (req: Request, res: Response) => {
+app.get('/api/timetable/benchmark', requireAuth, requireRole(['SUPER_ADMIN', 'COLLEGE_ADMIN', 'COORDINATOR']), (req: AuthenticatedRequest, res: Response) => {
+  const rl = checkRateLimit(`benchmark:${req.authenticatedUser?.id || req.ip}`, 2, 60_000);
+  if (rl.limited) {
+    return res.status(429).setHeader('Retry-After', String(rl.retryAfterSec ?? 60)).json({ success: false, message: 'Too many benchmark requests. Max 2 per minute.' });
+  }
   const resultFast = executeOptimizationEngine(
     INITIAL_ACADEMIC_YEAR,
     INITIAL_ALLOCATIONS,
@@ -2803,12 +2823,32 @@ app.get('/api/timetable/benchmark', requireAuth, (req: Request, res: Response) =
 // -------------------------------------------------------------
 
 // Cancel Class (Faculty, Coordinator, Admin)
-app.post('/api/recovery/cancel-class', requireAuth, requireRole(['FACULTY', 'COORDINATOR', 'COLLEGE_ADMIN', 'HOD']), (req: AuthenticatedRequest, res: Response) => {
+app.post('/api/recovery/cancel-class', requireAuth, requireRole(['FACULTY', 'COORDINATOR', 'COLLEGE_ADMIN', 'HOD', 'SUPER_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
   const { sessionId, reason } = req.body;
   if (!sessionId) {
     return res.status(400).json({ success: false, message: 'Session ID is required.' });
   }
-  const result = supabaseStore.cancelClassSession(sessionId, reason || 'Unforeseen conflict', req.authenticatedUser?.name);
+
+  const user = req.authenticatedUser;
+  const state = supabaseStore.getBootstrapState();
+  const session = (state.sessions || []).find((s: any) => s.id === sessionId);
+  if (!session) {
+    return res.status(404).json({ success: false, message: 'Session not found.' });
+  }
+
+  if (user?.roleCode === 'FACULTY') {
+    const faculty = (state.facultyMembers || []).find((f: any) => f.email.toLowerCase() === user.email.toLowerCase() || f.id === (user as any).facultyId);
+    if (!faculty || session.facultyId !== faculty.id) {
+      return res.status(403).json({ success: false, message: 'Forbidden: Faculty can only cancel classes they teach.' });
+    }
+  } else if (user?.roleCode === 'HOD') {
+    const faculty = (state.facultyMembers || []).find((f: any) => f.id === session.facultyId);
+    if (!faculty || faculty.departmentId !== user.department) {
+      return res.status(403).json({ success: false, message: 'Forbidden: HOD can only cancel classes within their department.' });
+    }
+  }
+
+  const result = supabaseStore.cancelClassSession(sessionId, reason || 'Unforeseen conflict', user?.name);
   if (!result.success) {
     return res.status(404).json({ success: false, message: 'Session not found.' });
   }

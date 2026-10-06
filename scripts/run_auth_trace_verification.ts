@@ -67,7 +67,11 @@ async function runAuthTraceVerification() {
     // -------------------------------------------------------------------------
     console.log('--- STEP 1 to 4: Real Supabase Coordinator Login ---');
     const coordEmail = 'coordinator.demo@demo.thapar.local';
-    const coordPass = 'ThaparDemo@2026Test!';
+    const demoPassword = process.env.DEMO_ACCOUNT_PASSWORD;
+    if (!demoPassword) {
+      throw new Error('DEMO_ACCOUNT_PASSWORD must be set when running auth trace verification.');
+    }
+    const coordPass = demoPassword;
 
     const { data: loginData, error: loginError } = await clientSupabase.auth.signInWithPassword({
       email: coordEmail,
@@ -204,7 +208,7 @@ async function runAuthTraceVerification() {
     // -------------------------------------------------------------------------
     console.log('--- STEP 20 to 22: Non-Coordinator (Student) Access Rejection ---');
     const studentEmail = 'student.demo@demo.thapar.local';
-    const studentPass = 'ThaparDemo@2026Test!';
+    const studentPass = demoPassword;
 
     const { data: studentLogin, error: studErr } = await clientSupabase.auth.signInWithPassword({
       email: studentEmail,

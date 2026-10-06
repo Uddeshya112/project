@@ -112,7 +112,10 @@ async function runDemoAudit() {
   }
 
   // 3. Bcrypt Password Verification with Configured Demo Password
-  const demoPassword = process.env.DEMO_ACCOUNT_PASSWORD || 'ThaparDemo@2026Test!';
+  const demoPassword = process.env.DEMO_ACCOUNT_PASSWORD;
+  if (!demoPassword) {
+    throw new Error('DEMO_ACCOUNT_PASSWORD must be set when running demo tests.');
+  }
   console.log('\n--- 3. Testing Standard Credentials Login ---');
   const standardLoginRes = await request('POST', '/api/auth/login', {
     email: 'coordinator.demo@demo.thapar.local',

@@ -36,7 +36,10 @@ async function runAdversarialSuite() {
   // SETUP: Authenticate distinct personas
   // -------------------------------------------------------------
   console.log('--- Phase 0: Authenticating Personas for Adversarial Testing ---');
-  const seedPassword = process.env.SEED_USER_PASSWORD || 'ThaparInstitute@2026!';
+  const seedPassword = process.env.SEED_USER_PASSWORD;
+  if (!seedPassword) {
+    throw new Error('SEED_USER_PASSWORD must be set when running adversarial tests.');
+  }
   
   // Student: Aarav Mehta
   const studentLoginRes = await fetch(`${BASE_URL}/api/auth/login`, {
