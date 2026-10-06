@@ -1276,52 +1276,43 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     if (!report.canPublish) {
       return {
         success: false,
-        error: `Cannot publish: timetable has ${report.hardViolationsCount} hard constraint violations and ${report.requiredSessionsCount - report.scheduledSessionsCount} unscheduled hours.`
+        error: `Cannot publish: timetable has ${report.hardViolationsCount} hard constraint violations and ${report.requiredSessionsCount - report.scheduledSessionsCount} unscheduled hours.`,
       };
     }
 
-    setPublishStatus('Published');
-    setAcademicYear(prev => ({
-      ...prev,
-      publishStatus: 'Published',
-      approvedBy: reviewerName,
-      approvedAt: new Date().toISOString(),
-      publishedAt: new Date().toISOString(),
-    }));
+    try {
+      const activeVersion = versions.find((v) => v.versionNumber === (activeVersionNumber ?? versions[0]?.versionNumber));
+      const resp = await fetch(apiUrl('/api/timetable/publish'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ versionId: activeVersion?.versionNumber }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.success) {
+        return { success: false, error: data.message || 'The server rejected publication.' };
+      }
 
-    setVersions(prev =>
-      prev.map((v, i) => (i === 0 ? { ...v, isPublished: true, versionLabel: `Published Master V${v.versionNumber}.0` } : v))
-    );
-
-    setNotifications(prev => [
-      {
-        id: `notif-pub-${Date.now()}`,
-        type: 'system_alert',
-        title: 'Master Timetable Published & Live',
-        message: `Official semester timetable has been verified (0 violations) and published for campus access across all sections and faculty.`,
-        timestamp: 'Just now',
-        read: false,
-        category: 'Success',
-      },
-      ...prev,
-    ]);
-
-    setAuditLogs(prev => [
-      {
-        id: `log-publish-${Date.now()}`,
-        timestamp: new Date().toLocaleString(),
-        userId: 'coordinator',
-        userName: reviewerName,
-        action: 'TIMETABLE_PUBLISHED',
-        entityType: 'TimetableVersion',
-        entityId: `master-${academicYear.yearLabel}`,
-        details: `Published master timetable with ${sessions.length} conflict-free sessions across ${sections.length} student groups. Independent validation PASS.`
-      },
-      ...prev
-    ]);
-
-    return { success: true };
+      setPublishStatus('Published');
+      setAcademicYear(prev => ({
+        ...prev,
+        publishStatus: 'Published',
+        approvedBy: reviewerName,
+        approvedAt: prev.approvedAt ?? new Date().toISOString(),
+        publishedAt: new Date().toISOString(),
+      }));
+      setVersions(prev =>
+        prev.map(v => (activeVersion && v.versionNumber === activeVersion.versionNumber)
+          ? { ...v, isPublished: true, versionLabel: `Published Master V${v.versionNumber}.0` }
+          : { ...v, isPublished: false })
+      );
+      setSessions(prev => [...prev]);
+      return { success: true };
+    } catch {
+      return { success: false, error: 'Network error publishing timetable.' };
+    }
   };
+
 
   const unpublishMasterTimetable = async (): Promise<{ success: boolean }> => {
     setPublishStatus('Draft');
