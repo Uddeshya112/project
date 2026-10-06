@@ -375,6 +375,11 @@ export function compileSchedulingProblem(
         `Faculty ${fac?.name || facId}: Total assigned teaching hours (${totalFacHours} hrs) exceeds total available weekly teaching slots (${maxAvailableNonLunchSlots} hrs).`
       );
     }
+    if (fac && totalFacHours > fac.maxDirectTeachingHours) {
+      infeasibilityReasons.push(
+        `Faculty ${fac.name}: Assigned teaching load ${totalFacHours} hrs/week exceeds direct-teaching cap ${fac.maxDirectTeachingHours} hrs/week.`
+      );
+    }
   }
 
   // Verify total required laboratory hours vs available lab room slot capacity
@@ -518,6 +523,7 @@ export function executeOptimizationEngine(
         prng.range(1000, 9999),
         problem,
         allocAssignedSlots,
+        pinnedSessions,
         options.optimizationProfile || 'BALANCED'
       );
 

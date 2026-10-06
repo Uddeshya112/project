@@ -793,6 +793,15 @@ export function validateProposedSessionMove(
   const report = validateTimetableIndependently(simulatedSessions, context);
 
   // Check if this specific session has any violations in the simulation
+  const originalSession = currentSessions.find(s => s.id === sessionId);
+  if (originalSession?.isLocked) {
+    return {
+      allowed: false,
+      blockingReason: `Session ${sessionId} is locked and cannot be moved.`,
+      hypotheticalReport: report
+    };
+  }
+
   const sessionViolations = report.violations.filter(v => v.sessionIds.includes(sessionId));
 
   if (sessionViolations.length > 0) {
@@ -826,6 +835,14 @@ export function validateProposedSessionSwap(
     return {
       allowed: false,
       blockingReason: 'One or both sessions to swap could not be found.',
+      hypotheticalReport: validateTimetableIndependently(currentSessions, context)
+    };
+  }
+
+  if (sessionA.isLocked || sessionB.isLocked) {
+    return {
+      allowed: false,
+      blockingReason: 'Locked sessions cannot be swapped.',
       hypotheticalReport: validateTimetableIndependently(currentSessions, context)
     };
   }

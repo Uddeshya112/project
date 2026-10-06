@@ -274,8 +274,8 @@ export function validateAcademicSetup(
       id: 'val-workload-warn',
       title: 'UGC Faculty Workload Overload',
       category: 'Workload',
-      status: 'Warning',
-      message: `${workloadOverloadedFaculty} faculty member(s) assigned hours exceed their UGC direct teaching limit.`,
+      status: 'Error',
+      message: `${workloadOverloadedFaculty} faculty member(s) have allocations above their direct-teaching cap; reduce allocations or reassign teaching load.`,
       fixTab: 'faculty_mgmt',
     });
   } else {

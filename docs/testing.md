@@ -66,3 +66,7 @@ Run: `npm run test:solver`.
 ## 5. Solver Hardening Gate — Task 4
 
 Pre-generation room compatibility is a hard gate. Each allocation must have an available room whose type, capacity, and declared equipment all match the activity. Missing compatibility is surfaced as a blocking validation item with the Rooms Management fix path.
+
+## 6. Solver Hardening Gate — Task 5
+
+Faculty status/qualification and direct-teaching caps are hard constraints. Explicit `electiveGroupId` allows alternative elective offerings for the same section to share a slot only when the group is identical. Locked/pinned sessions are reserved before search and preserved immutably; manual move/swap validation rejects locked sessions. Soft scoring includes the student three-consecutive-period cap, course spread/repeated-period penalties, faculty preferences, and a default 10-minute inter-building travel penalty for adjacent periods.
