@@ -207,6 +207,9 @@ test('excel import validates everything before changing anything', async () => {
 
 test('generate -> select -> publish workflow with role checks', async () => {
   const coord = await demo('Coordinator');
+  const coordMe = (await coord.get('/api/me')).body;
+  assert.equal(coordMe.user.roleCode, 'COORDINATOR');
+  assert.equal(coordMe.user.authorizedWorkspaces.includes('Coordinator'), true);
   const gen = await coord.post('/api/academic/generate', { budgetMode: 'FAST' });
   assert.equal(gen.status, 200, JSON.stringify(gen.body).slice(0, 300));
   assert.equal(gen.body.success, true);
