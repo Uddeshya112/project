@@ -3,7 +3,8 @@ import { useAuth } from '../../context/AuthContext';
 import { useTimetable } from '../../context/TimetableContext';
 import { ThaparLogo } from '../ThaparLogo';
 import { evaluatePasswordPolicy } from '../../lib/passwordUtils';
-import { supabaseClient, apiFetch } from '../../lib/supabaseClient';
+import { api } from '../../lib/api';
+import { apiUrl } from '../../lib/apiConfig';
 import {
   Mail,
   Lock,
@@ -33,7 +34,6 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
     login,
     register,
     loginWithGoogle,
-    loginAsDemoRole,
     requestPasswordReset,
     resetPassword
   } = useAuth();
@@ -61,6 +61,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
   // Forgot Password & OTP States
   const [forgotEmail, setForgotEmail] = useState('');
   const [otpDigits, setOtpDigits] = useState<string[]>(['', '', '', '', '', '']);
+  const [resetToken, setResetToken] = useState<string | null>(null);
   const [resendCooldown, setResendCooldown] = useState<number>(0);
   const otpInputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
@@ -84,8 +85,6 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
   // Status & Loading States
   const [isLoading, setIsLoading] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
-  const [demoRoleLoading, setDemoRoleLoading] = useState<string | null>(null);
-  const [showDemoModal, setShowDemoModal] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
@@ -93,153 +92,42 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
   const regPasswordPolicy = evaluatePasswordPolicy(regPassword);
   const resetPasswordPolicy = evaluatePasswordPolicy(newPassword);
 
-  const handleDemoLoginClick = async (
-    roleKey: 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin'
-  ) => {
-    setErrorMessage(null);
-    setSuccessMessage(null);
-    setDemoRoleLoading(roleKey);
-
-    try {
-      const res = await loginAsDemoRole(roleKey);
-      setDemoRoleLoading(null);
-      if (res.success && res.authorizedWorkspaces) {
-        setSuccessMessage(`Authenticated as ${roleKey} (Public Demo)`);
-        onSuccessLogin?.(res.authorizedWorkspaces);
-      } else {
-        setErrorMessage(res.message || 'Failed to authenticate demo account.');
-      }
-    } catch {
-      setDemoRoleLoading(null);
-      setErrorMessage('Network error during demo authentication.');
-    }
-  };
-
-  // Check URL parameters for OAuth errors or completed callbacks on mount
+  // Restore the server session and detect password-reset tokens from the URL fragment.
   useEffect(() => {
+    let active = true;
+    const checkSession = async () => {
+      try {
+        const data = await api('/api/auth/me');
+        if (active && data.authenticated && data.user) {
+          setCurrentRole(data.user.roleCode === 'COLLEGE_ADMIN' || data.user.roleCode === 'SUPER_ADMIN' ? 'Admin' : data.user.roleCode === 'COORDINATOR' ? 'Coordinator' : data.user.roleCode === 'FACULTY' ? 'Faculty' : data.user.roleCode === 'HOD' ? 'HOD' : 'Student');
+          onSuccessLogin(data.authorizedWorkspaces);
+          return;
+        }
+      } catch {}
+    };
+    void checkSession();
+
     const params = new URLSearchParams(window.location.search);
     const authError = params.get('auth_error');
     if (authError) {
-      setErrorMessage(decodeURIComponent(authError));
-      window.history.replaceState({}, document.title, window.location.pathname);
-      return;
-    }
-
-    const tokenFromUrl = params.get('token');
-    if (tokenFromUrl) {
+      setErrorMessage(authError);
       window.history.replaceState({}, document.title, window.location.pathname);
     }
 
-    // Verify if already authenticated via session cookie or token (e.g. returning from Google OAuth)
-    const checkSession = async () => {
-      try {
-        const headers: Record<string, string> = {};
-        if (tokenFromUrl) {
-          headers['Authorization'] = `Bearer ${tokenFromUrl}`;
-        }
-        const resp = await fetch('/api/auth/me', { headers });
-        if (resp.ok) {
-          const data = await resp.json();
-          if (data.authenticated && data.role) {
-            setCurrentRole(data.role);
-            onSuccessLogin(data.authorizedWorkspaces);
-          }
-        }
-      } catch {
-        // Not authenticated, remain on login
-      }
-    };
-    checkSession();
-
-    // Listen for cross-origin popup postMessage events from OAuth callback
-    const handleAuthMessage = async (event: MessageEvent) => {
-      if (event.data?.type === 'GOOGLE_AUTH_SUCCESS') {
-        setIsGoogleLoading(true);
-        setErrorMessage(null);
-        setSuccessMessage('Google authentication successful! Loading dashboard...');
-        
-        try {
-          const headers: Record<string, string> = {};
-          if (event.data.token) {
-            headers['Authorization'] = `Bearer ${event.data.token}`;
-          }
-          const resp = await fetch('/api/auth/me', { headers });
-          if (resp.ok) {
-            const data = await resp.json();
-            if (data.authenticated && data.role) {
-              setCurrentRole(data.role);
-              setTimeout(() => {
-                onSuccessLogin(data.authorizedWorkspaces);
-              }, 300);
-              return;
-            }
-          }
-          if (event.data.roleKey) {
-            setCurrentRole(event.data.roleKey);
-            setTimeout(() => {
-              onSuccessLogin(event.data.authorizedWorkspaces);
-            }, 300);
-          }
-        } catch {
-          if (event.data.roleKey) {
-            setCurrentRole(event.data.roleKey);
-            onSuccessLogin(event.data.authorizedWorkspaces);
-          }
-        } finally {
-          setIsGoogleLoading(false);
-        }
-      } else if (event.data?.type === 'GOOGLE_AUTH_ERROR') {
-        setIsGoogleLoading(false);
-        setErrorMessage(event.data.message || 'Google sign-in could not be completed. Please try again.');
-      }
-    };
-
-    window.addEventListener('message', handleAuthMessage);
-
-    // Check Supabase recovery link session on mount
-    const checkSupabaseRecovery = async () => {
-      const hash = window.location.hash;
-      const search = window.location.search;
-      const isRecoveryUrl =
-        hash.includes('type=recovery') ||
-        hash.includes('access_token=') ||
-        hash.includes('token_hash=') ||
-        search.includes('type=recovery') ||
-        search.includes('code=');
-
-      if (isRecoveryUrl) {
-        setScreenMode('reset_password');
-      }
-
-      if (supabaseClient) {
-        const { data: { session } } = await supabaseClient.auth.getSession();
-        if (session && isRecoveryUrl) {
-          setScreenMode('reset_password');
-        } else if (isRecoveryUrl && !session) {
-          setTimeout(async () => {
-            const { data } = await supabaseClient?.auth.getSession() || { data: { session: null } };
-            if (!data.session) {
-              setScreenMode('recovery_invalid');
-            }
-          }, 1200);
-        }
-
-        const { data: { subscription } } = supabaseClient.auth.onAuthStateChange((event) => {
-          if (event === 'PASSWORD_RECOVERY' || (event === 'SIGNED_IN' && isRecoveryUrl)) {
-            setScreenMode('reset_password');
-          }
-        });
-
-        return () => {
-          subscription.unsubscribe();
-        };
-      }
-    };
-    checkSupabaseRecovery();
-
-    return () => window.removeEventListener('message', handleAuthMessage);
+    const hash = window.location.hash.replace(/^#/, '');
+    const hashParams = new URLSearchParams(hash);
+    const token = hashParams.get('token');
+    if (token) {
+      setResetToken(token);
+      setScreenMode('reset_password');
+      void api('/api/auth/validate-token?token=' + encodeURIComponent(token)).then(data => {
+        if (!active) return;
+        if (!data.valid) { setResetToken(null); setScreenMode('recovery_invalid'); setErrorMessage(data.message || 'This reset link is invalid or expired.'); }
+      }).catch(() => { if (active) { setResetToken(null); setScreenMode('recovery_invalid'); } });
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+    return () => { active = false; };
   }, [setCurrentRole, onSuccessLogin]);
-
   // Password Requirement Checks
   const reqLength = newPassword.length >= 8;
   const reqUpper = /[A-Z]/.test(newPassword);
@@ -306,62 +194,13 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
     setErrorMessage(null);
     setSuccessMessage(null);
     setIsGoogleLoading(true);
-
     try {
-      const resp = await fetch('/api/auth/google/authorize', {
-        headers: { Accept: 'application/json' },
-      });
-
-      const contentType = resp.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
-        const data = await resp.json();
-
-        if (resp.ok && data.success && data.redirectUrl) {
-          // Calculate centered popup coordinates
-          const width = 520;
-          const height = 650;
-          const left = window.screenX + Math.max(0, (window.outerWidth - width) / 2);
-          const top = window.screenY + Math.max(0, (window.outerHeight - height) / 2);
-
-          const popup = window.open(
-            data.redirectUrl,
-            'google_oauth_popup',
-            `width=${width},height=${height},left=${left},top=${top},status=no,menubar=no,toolbar=no`
-          );
-
-          if (!popup || popup.closed || typeof popup.closed === 'undefined') {
-            // If popup is blocked by browser, fallback to standard top-level navigation
-            window.location.href = data.redirectUrl;
-          }
-          return;
-        } else if (data.message) {
-          setErrorMessage(data.message);
-          setIsGoogleLoading(false);
-          return;
-        }
-      }
-    } catch {
-      // Backend unreachable, proceed with client-side Google authentication fallback
-    }
-
-    // Direct Google authentication client fallback for static/preview hosting
-    try {
-      const googleEmail = 'bhaukaalgaming44@gmail.com';
-      const res = await loginWithGoogle(googleEmail, 'Bhaukaal Gaming');
-      setIsGoogleLoading(false);
-      if (res.success && res.authorizedWorkspaces) {
-        setSuccessMessage('Signed in with Google successfully!');
-        onSuccessLogin?.(res.authorizedWorkspaces);
-      } else {
-        setSuccessMessage('Signed in with Google as Student!');
-        onSuccessLogin?.(['Student']);
-      }
+      await loginWithGoogle('', '');
     } catch {
       setIsGoogleLoading(false);
-      onSuccessLogin?.(['Student']);
+      setErrorMessage('Could not start Google sign-in.');
     }
   };
-
   /**
    * Handle Register Submit (POST /api/auth/register)
    * Enforces 12+ chars, uppercase, lowercase, number, symbol policy
@@ -419,53 +258,19 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
     e.preventDefault();
     setErrorMessage(null);
     setSuccessMessage(null);
-
     const emailTrim = forgotEmail.trim();
-    if (!emailTrim) {
-      setErrorMessage('Please enter your email.');
-      return;
-    }
-
+    if (!emailTrim) { setErrorMessage('Please enter your email.'); return; }
     setIsLoading(true);
-
     try {
-      if (supabaseClient) {
-        console.info('[AUTH RECOVERY] request started');
-        const productionFrontendUrl = 'https://tiet-timetable-six.vercel.app';
-        const redirectToUrl = window.location.origin.includes('localhost') || window.location.origin.includes('run.app')
-          ? window.location.origin
-          : productionFrontendUrl;
-
-        const { data, error } = await supabaseClient.auth.resetPasswordForEmail(emailTrim, {
-          redirectTo: redirectToUrl,
-        });
-
-        if (error) {
-          console.warn('[AUTH RECOVERY] Supabase request failed:', error.message || error);
-        } else {
-          console.info('[AUTH RECOVERY] Supabase request succeeded');
-        }
-      } else {
-        console.info('[AUTH RECOVERY] request started (backend fallback)');
-        await apiFetch('/api/auth/forgot-password', {
-          method: 'POST',
-          body: JSON.stringify({ email: emailTrim }),
-        }).catch(() => {});
-        console.info('[AUTH RECOVERY] backend request succeeded');
-      }
-
+      const res = await requestPasswordReset(emailTrim);
+      if (res.resetToken && import.meta.env.DEV) { setResetToken(res.resetToken); setScreenMode('reset_password'); }
+      else setScreenMode('forgot_success');
+      setSuccessMessage(res.message || "If an account exists for this email, we've sent password-reset instructions.");
+    } catch {
       setSuccessMessage("If an account exists for this email, we've sent password-reset instructions.");
       setScreenMode('forgot_success');
-    } catch (err: any) {
-      console.warn('[AUTH RECOVERY] Supabase request exception:', err?.message || err);
-      // Never reveal account existence
-      setSuccessMessage("If an account exists for this email, we've sent password-reset instructions.");
-      setScreenMode('forgot_success');
-    } finally {
-      setIsLoading(false);
-    }
+    } finally { setIsLoading(false); }
   };
-
   /**
    * Handle Verify OTP (Step 2: Verify 6-digit OTP token)
    */
@@ -499,41 +304,12 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
       }
 
       setSuccessMessage('Verification code confirmed successfully.');
-      setScreenMode('reset_password');
-    } catch (err: any) {
-      setErrorMessage(err?.message || 'Invalid or expired verification code.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  /**
-   * Handle Resend OTP
-   */
+      /** Sends another reset email. */
   const handleResendOtp = async () => {
     if (resendCooldown > 0) return;
-    setErrorMessage(null);
-    setSuccessMessage(null);
     setIsLoading(true);
-
-    try {
-      if (supabaseClient) {
-        await supabaseClient.auth.resetPasswordForEmail(forgotEmail.trim(), {
-          redirectTo: window.location.origin,
-        });
-      }
-      setSuccessMessage('A new verification code has been sent.');
-      setResendCooldown(60);
-      setOtpDigits(['', '', '', '', '', '']);
-    } catch {
-      setSuccessMessage('A new verification code has been sent.');
-      setResendCooldown(60);
-      setOtpDigits(['', '', '', '', '', '']);
-    } finally {
-      setIsLoading(false);
-    }
+    try { await requestPasswordReset(forgotEmail.trim()); } finally { setResendCooldown(60); setIsLoading(false); }
   };
-
   /**
    * Handle Reset Password Submit (Step 3: Update Password)
    */
@@ -547,49 +323,26 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
       return;
     }
     if (newPassword !== confirmNewPassword) {
-      setErrorMessage('New passwords do not match.');
-      return;
-    }
-
+      setError  const handleResetPasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    if (!resetToken) { setScreenMode('recovery_invalid'); setErrorMessage('This reset link is missing or invalid.'); return; }
+    if (!resetPasswordPolicy.isValid) { setErrorMessage(`Please ensure your new password meets all security criteria: ${resetPasswordPolicy.errors.join(', ')}.`); return; }
+    if (newPassword !== confirmNewPassword) { setErrorMessage('New passwords do not match.'); return; }
     setIsLoading(true);
-
     try {
-      if (supabaseClient) {
-        const { data: { session } } = await supabaseClient.auth.getSession();
-        if (!session) {
-          setScreenMode('recovery_invalid');
-          setIsLoading(false);
-          return;
-        }
-
-        const { error } = await supabaseClient.auth.updateUser({
-          password: newPassword,
-        });
-        if (error) throw error;
-      } else {
-        await apiFetch('/api/auth/reset-password', {
-          method: 'POST',
-          body: JSON.stringify({ email: forgotEmail.trim(), password: newPassword }),
-        });
-      }
-
+      const res = await resetPassword(resetToken, newPassword);
+      if (!res.success) throw new Error(res.message || 'Failed to update password.');
       setScreenMode('reset_success');
       setSuccessMessage('Password reset successfully.');
-      setLoginEmail('');
-      setLoginPassword('');
+      setLoginEmail(''); setLoginPassword(''); setResetToken(null);
       window.history.replaceState({}, document.title, window.location.pathname);
-    } catch (err: any) {
-      const msg = err?.message || 'Failed to update password. Please try again.';
-      if (msg.toLowerCase().includes('expired') || msg.toLowerCase().includes('invalid') || msg.toLowerCase().includes('session') || msg.toLowerCase().includes('auth')) {
-        setScreenMode('recovery_invalid');
-      } else {
-        setErrorMessage(msg);
-      }
-    } finally {
-      setIsLoading(false);
-    }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to update password. Please try again.';
+      if (/expired|invalid|token/i.test(msg)) setScreenMode('recovery_invalid'); else setErrorMessage(msg);
+    } finally { setIsLoading(false); }
   };
-
   return (
     <div className="min-h-screen w-full bg-[#F7F6F2] dark:bg-[#0c0c0e] text-stone-900 dark:text-zinc-100 flex flex-col justify-center items-center p-4 sm:p-6 lg:p-8 font-sans relative overflow-x-hidden selection:bg-[#8C1B2E]/20 selection:text-[#8C1B2E]">
       {/* Main Centered Minimal Card */}
@@ -776,116 +529,6 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
                 </>
               )}
             </button>
-
-            {/* Demo access section */}
-            <div className="mt-6 pt-5 border-t border-[#E5E2D9] dark:border-zinc-800/80">
-              <div className="flex items-center justify-between mb-2.5">
-                <div className="flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                  <span className="text-xs font-semibold text-stone-800 dark:text-zinc-200">Demo access</span>
-                  <span className="text-[10px] text-amber-700 dark:text-amber-400 font-mono bg-amber-50 dark:bg-amber-950/40 px-1.5 py-0.5 rounded border border-amber-200 dark:border-amber-900/40">
-                    Public Demo
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setShowDemoModal(true)}
-                  className="text-[11px] text-stone-500 hover:text-stone-800 dark:text-zinc-400 dark:hover:text-zinc-200 underline transition-colors"
-                >
-                  Account details
-                </button>
-              </div>
-              <p className="text-[11px] text-stone-500 dark:text-zinc-400 mb-3 leading-relaxed">
-                Demo account — data is for testing only. Click a role to authenticate immediately:
-              </p>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleDemoLoginClick('Coordinator')}
-                  disabled={Boolean(demoRoleLoading) || isLoading || isGoogleLoading}
-                  className="p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-850 active:bg-stone-100 disabled:opacity-50 text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs"
-                >
-                  <div className="flex items-center justify-between w-full">
-                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white transition-colors">Continue as Coordinator</span>
-                    {demoRoleLoading === 'Coordinator' ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-400" />
-                    ) : (
-                      <ArrowRight className="h-3 w-3 text-stone-400 group-hover:text-[#8C1B2E] transition-colors" />
-                    )}
-                  </div>
-                  <span className="text-[10px] text-stone-500 dark:text-zinc-400">Full solver, rules & publishing</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleDemoLoginClick('Faculty')}
-                  disabled={Boolean(demoRoleLoading) || isLoading || isGoogleLoading}
-                  className="p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-850 active:bg-stone-100 disabled:opacity-50 text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs"
-                >
-                  <div className="flex items-center justify-between w-full">
-                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white transition-colors">Continue as Faculty</span>
-                    {demoRoleLoading === 'Faculty' ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-400" />
-                    ) : (
-                      <ArrowRight className="h-3 w-3 text-stone-400 group-hover:text-[#8C1B2E] transition-colors" />
-                    )}
-                  </div>
-                  <span className="text-[10px] text-stone-500 dark:text-zinc-400">Teaching routine & room schedule</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleDemoLoginClick('Student')}
-                  disabled={Boolean(demoRoleLoading) || isLoading || isGoogleLoading}
-                  className="p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-850 active:bg-stone-100 disabled:opacity-50 text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs"
-                >
-                  <div className="flex items-center justify-between w-full">
-                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white transition-colors">Continue as Student</span>
-                    {demoRoleLoading === 'Student' ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-400" />
-                    ) : (
-                      <ArrowRight className="h-3 w-3 text-stone-400 group-hover:text-[#8C1B2E] transition-colors" />
-                    )}
-                  </div>
-                  <span className="text-[10px] text-stone-500 dark:text-zinc-400">Weekly classes & course details</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleDemoLoginClick('Admin')}
-                  disabled={Boolean(demoRoleLoading) || isLoading || isGoogleLoading}
-                  className="p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-850 active:bg-stone-100 disabled:opacity-50 text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs"
-                >
-                  <div className="flex items-center justify-between w-full">
-                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white transition-colors">Continue as Admin</span>
-                    {demoRoleLoading === 'Admin' ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-400" />
-                    ) : (
-                      <ArrowRight className="h-3 w-3 text-stone-400 group-hover:text-[#8C1B2E] transition-colors" />
-                    )}
-                  </div>
-                  <span className="text-[10px] text-stone-500 dark:text-zinc-400">Dean office & master approvals</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleDemoLoginClick('HOD')}
-                  disabled={Boolean(demoRoleLoading) || isLoading || isGoogleLoading}
-                  className="sm:col-span-2 p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-850 active:bg-stone-100 disabled:opacity-50 text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs"
-                >
-                  <div className="flex items-center justify-between w-full">
-                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white transition-colors">Continue as HOD</span>
-                    {demoRoleLoading === 'HOD' ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-400" />
-                    ) : (
-                      <ArrowRight className="h-3 w-3 text-stone-400 group-hover:text-[#8C1B2E] transition-colors" />
-                    )}
-                  </div>
-                  <span className="text-[10px] text-stone-500 dark:text-zinc-400">Department load balance & syllabus tracking</span>
-                </button>
-              </div>
-            </div>
 
             {/* Bottom Register Switcher Link */}
             <div className="mt-6 pt-5 border-t border-[#E5E2D9] dark:border-zinc-800/80 text-center text-xs text-stone-500 dark:text-zinc-400">
@@ -1484,7 +1127,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
 
       {/* Production Footer Note */}
       <div className="mt-6 text-center text-xs text-stone-500 dark:text-zinc-500">
-        Thapar Institute of Engineering & Technology · Unofficial demo
+        Thapar Institute of Engineering & Technology
       </div>
 
       {/* Demo Information Modal */}
