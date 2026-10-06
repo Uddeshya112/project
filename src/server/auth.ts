@@ -231,7 +231,8 @@ export function createAuth(opts: AuthOptions) {
   /** First start: load the sample accounts; optionally ensure a bootstrap admin. */
   async function seedUsers() {
     const [{ n }] = await db.query<{ n: number }>(`select count(*)::int as n from ${T}.users`);
-    if (n === 0 && process.env.SEED_SAMPLE_USERS !== 'false') {
+    const seedSamples = process.env.SEED_SAMPLE_USERS === 'true' || (process.env.NODE_ENV !== 'production' && process.env.SEED_SAMPLE_USERS !== 'false');
+    if (n === 0 && seedSamples) {
       const roleById: Record<string, RoleCode> = {
         'role-superadmin': 'SUPER_ADMIN',
         'role-admin': 'COLLEGE_ADMIN',
