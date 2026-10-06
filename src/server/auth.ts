@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import type { Db } from './db';
-import { evaluatePasswordPolicy, MAX_PASSWORD_LENGTH } from '../lib/passwordUtils';
+import { evaluatePasswordPolicy, MAX_PASSWORD_LENGTH, verifyPassword } from '../lib/passwordUtils';
 import { USERS as SAMPLE_USERS, INITIAL_MEMBERSHIPS } from '../lib/authData';
 
 export type RoleCode =
@@ -214,7 +214,7 @@ export function createAuth(opts: AuthOptions) {
       new Date(Date.now() + ttlMs),
     ]);
     await db.query(`update ${T}.users set last_login_at = now() where id = $1`, [user.id]);
-    res.cookie(SESSION_COOKIE, token, { httpOnly: true, secure: req.secure, sameSite: 'lax', path: '/', maxAge: ttlMs });
+    res.cookie(SESSION_COOKIE, token, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', path: '/', maxAge: ttlMs });
   }
 
   async function revokeSessions(userId: string) {
@@ -322,8 +322,8 @@ export function createAuth(opts: AuthOptions) {
     const user = await userByEmail(email);
     // Compare against a dummy hash when there is no usable password so timing does not reveal accounts.
     dummyHash ??= await hashPassword(crypto.randomUUID());
-    const ok = await bcrypt.compare(password, user?.password_hash ?? dummyHash);
-    if (!user || !user.password_hash || !ok) {
+    const verification = await verifyPassword(password, user?.password_hash ?? dummyHash);
+    if (!user || !user.password_hash || !verification.isValid) {
       return res.status(401).json({ success: false, message: 'Invalid email or password.' });
     }
     if (user.status === 'LOCKED') {
@@ -332,6 +332,11 @@ export function createAuth(opts: AuthOptions) {
     if (user.is_demo && !opts.demoMode) {
       return res.status(403).json({ success: false, message: 'Demo accounts are disabled on this server.' });
     }
+    if (verification.needsRehash) {
+      await db.query(`update ${T}.users set password_hash = $2 where id = $1`, [user.id, await hashPassword(password)]);
+      user.password_hash = await hashPassword(password);
+    }
+    await db.query(`update ${T}.users set last_login_at = now() where id = $1`, [user.id]);
     await startSession(req, res, user);
     return res.json({ success: true, user: publicUser(user) });
   });
@@ -357,7 +362,7 @@ export function createAuth(opts: AuthOptions) {
   router.post('/api/auth/logout', async (req, res) => {
     const token = readCookie(req, SESSION_COOKIE);
     if (token) await db.query(`delete from ${T}.auth_sessions where token_hash = $1`, [sha256(token)]);
-    res.clearCookie(SESSION_COOKIE, { path: '/' });
+    res.clearCookie(SESSION_COOKIE, { path: '/', httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax' });
     return res.json({ success: true });
   });
 
