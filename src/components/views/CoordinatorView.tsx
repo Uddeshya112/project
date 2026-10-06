@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useTimetable } from '../../context/TimetableContext';
 import { useAuth } from '../../context/AuthContext';
-import { supabaseClient, getSupabaseAccessToken } from '../../lib/supabaseClient';
 import { getResolvedApiBaseUrl, apiUrl } from '../../lib/apiConfig';
 import {
   CheckCircle2,
@@ -77,29 +76,25 @@ export function CoordinatorView() {
       let role = 'UNKNOWN';
       let backendStatus: 'AUTHENTICATED' | '401' | '403' | 'UNREACHABLE' = '401';
 
-      if (supabaseClient) {
-        try {
-          const { data: { session } } = await supabaseClient.auth.getSession();
-          if (session) {
-            sessionFound = true;
-            tokenPresent = Boolean(session.access_token);
-            if (session.user) {
-              userFound = true;
-              const { data: prof } = await supabaseClient
-                .from('profiles')
-                .select('*')
-                .eq('id', session.user.id)
-                .maybeSingle();
-              if (prof) {
-                profileFound = true;
-                role = prof.role_code || 'OTHER';
-              }
-            }
-          }
-        } catch {}
-      }
-
       try {
+        const meRes = await fetch(apiUrl('/api/auth/me'), { credentials: 'include', headers: { Accept: 'application/json' } });
+        if (meRes.status === 200) {
+          const meData = await meRes.json();
+          if (meData.authenticated) {
+            backendStatus = 'AUTHENTICATED';
+            role = meData.roleCode || 'UNKNOWN';
+            profileFound = true;
+            sessionFound = true;
+            userFound = Boolean(meData.user?.id);
+          }
+        } else if (meRes.status === 403) {
+          backendStatus = '403';
+        } else if (meRes.status === 401) {
+          backendStatus = '401';
+        }
+      } catch {
+        backendStatus = 'UNREACHABLE';
+      }
         const token = await getSupabaseAccessToken();
         const headers: Record<string, string> = {};
         if (token) headers['Authorization'] = `Bearer ${token}`;
