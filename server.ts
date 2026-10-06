@@ -97,6 +97,17 @@ function findStudentByEmail(email: string) {
   return supabaseStore.queryStudents(1, 1, email, '').students?.[0] ?? null;
 }
 
+function mapRoleCodeToDashboard(roleCode: RoleCode): 'Admin' | 'Coordinator' | 'HOD' | 'Faculty' | 'Student' {
+  switch (roleCode) {
+    case 'SUPER_ADMIN':
+    case 'COLLEGE_ADMIN': return 'Admin';
+    case 'COORDINATOR': return 'Coordinator';
+    case 'HOD': return 'HOD';
+    case 'FACULTY': return 'Faculty';
+    default: return 'Student';
+  }
+}
+
 app.get('/api/health/live', (_req: Request, res: Response) => res.status(200).json({ status:'LIVE', service:'intellischedule-core' }));
 app.get('/api/health/ready', (_req: Request, res: Response) => {
   if (!authService || !db) return res.status(503).json({ status:'NOT_READY', message:authInitError?.message || 'Database/authentication subsystem is not ready.' });
