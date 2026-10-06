@@ -24,7 +24,12 @@ async function isServerReady(): Promise<boolean> {
 async function waitForServer(timeoutMs = 30000): Promise<void> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
-    if (await isServerReady()) return;
+    if (await isServerReady()) {
+      try {
+        const ready = await fetch(BASE_URL + '/api/health/ready');
+        if (ready.ok) return;
+      } catch {}
+    }
     await new Promise(resolve => setTimeout(resolve, 250));
   }
   throw new Error('Timed out waiting for the local test server on port 3000.');
