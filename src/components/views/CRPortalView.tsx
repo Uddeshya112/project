@@ -88,17 +88,17 @@ export function CRPortalView() {
   const teachingSlots = timeSlots.filter(t => !isBreakSlot(t));
   const courseOf = (id: string) => courses.find(c => c.id === id);
 
-  const sectionSessions = sessions.filter(s => s.sectionId === currentSection.id);
+  const sectionSessions = sessions.filter(s => s.sectionId === activeSection.id);
   const daySessions = sectionSessions.filter(s => s.day === selectedDay);
   const sectionCourses = courses.filter(
-    c => sectionSessions.some(s => s.courseId === c.id) || allocations.some(a => a.sectionId === currentSection.id && a.courseId === c.id),
+    c => sectionSessions.some(s => s.courseId === c.id) || allocations.some(a => a.sectionId === activeSection.id && a.courseId === c.id),
   );
   const cancelledSessions = sectionSessions.filter(s => s.status === 'Cancelled');
   const defaultCourseId = cancelledSessions[0]?.courseId ?? sectionCourses[0]?.id ?? '';
   const reqCourseId = requestCourseId || defaultCourseId;
-  const pendingTasks = makeupTasks.filter(t => t.sectionId === currentSection.id && t.status !== 'Scheduled' && t.status !== 'Dismissed');
+  const pendingTasks = makeupTasks.filter(t => t.sectionId === activeSection.id && t.status !== 'Scheduled' && t.status !== 'Dismissed');
   const pendingCodes = [...new Set(pendingTasks.map(t => courseOf(t.courseId)?.code ?? t.courseId))].join(', ');
-  const sectionPolls = polls.filter(p => p.sectionId === currentSection.id && p.isActive);
+  const sectionPolls = polls.filter(p => p.sectionId === activeSection.id && p.isActive);
 
   const handleRequest = async () => {
     if (!reqCourseId) return;
