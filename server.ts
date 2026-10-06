@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import type { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import path from 'path';
@@ -15,6 +16,7 @@ import {
   hashPasswordLegacy,
   evaluatePasswordPolicy,
   BCRYPT_SALT_ROUNDS,
+  MAX_PASSWORD_LENGTH,
 } from './src/lib/passwordUtils';
 import { executeOptimizationEngine, compileSchedulingProblem } from './src/lib/optimizationEngine';
 import {
@@ -76,31 +78,30 @@ app.use((_req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-const allowedOrigins = [
-  'https://tiet-timetable-six.vercel.app',
-  'http://localhost:3000',
-  'http://localhost:5173',
-  'http://127.0.0.1:3000',
-  'http://127.0.0.1:5173',
-];
+const allowedOrigins = new Set(
+  (process.env.ALLOWED_ORIGINS ||
+    [
+      'https://tiet-timetable-six.vercel.app',
+      'http://localhost:3000',
+      'http://localhost:5173',
+      'http://127.0.0.1:3000',
+      'http://127.0.0.1:5173',
+    ].join(','))
+    .split(',')
+    .map(origin => origin.trim())
+    .filter(Boolean)
+);
 
 const corsOptions: cors.CorsOptions = {
   origin: (origin, callback) => {
-    if (!origin) return callback(null, true);
-    if (
-      allowedOrigins.includes(origin) ||
-      origin.endsWith('.vercel.app') ||
-      origin.endsWith('.run.app')
-    ) {
-      return callback(null, true);
-    }
-    return callback(null, true);
+    callback(null, origin === undefined || allowedOrigins.has(origin));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Authorization', 'Content-Type', 'Accept', 'X-Requested-With'],
 };
 
+app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
 app.use(express.json());
@@ -192,7 +193,6 @@ const SEED_USER_PASSWORD =
   (() => {
     const generated = crypto.randomBytes(16).toString('hex') + 'T1!';
     if (process.env.NODE_ENV !== 'production') {
-      console.info(`[SECURITY SEED] Ephemeral seed user password generated at startup: ${generated}`);
     }
     return generated;
   })();
@@ -598,6 +598,12 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
       message: 'Both institutional email and password are required.',
     });
   }
+  if (typeof password !== 'string' || password.length > MAX_PASSWORD_LENGTH) {
+    return res.status(400).json({
+      success: false,
+      message: `Password must be ${MAX_PASSWORD_LENGTH} characters or fewer.`,
+    });
+  }
 
   const normalizedEmail = String(email).trim().toLowerCase();
 
@@ -779,12 +785,17 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
     });
   }
 
-  const { isValid } = await verifyPassword(String(password), user.passwordHash);
-  if (!isValid) {
+  const passwordVerification = await verifyPassword(String(password), user.passwordHash);
+  if (!passwordVerification.isValid) {
     return res.status(401).json({
       success: false,
       message: 'Invalid institutional credentials. Please check your email and password.',
     });
+  }
+
+  if (passwordVerification.needsRehash) {
+    user.passwordHash = hashPasswordBcryptSync(String(password));
+    usersDatabase.set(normalizedEmail, user);
   }
 
   const sessionToken = 'jwt_live_' + crypto.randomBytes(32).toString('hex');
@@ -1227,6 +1238,13 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
     });
   }
 
+  if (typeof password !== 'string' || password.length > MAX_PASSWORD_LENGTH) {
+    return res.status(400).json({
+      success: false,
+      message: `Password must be ${MAX_PASSWORD_LENGTH} characters or fewer.`,
+    });
+  }
+
   // Require allowed email domain
   const allowedDomains = (process.env.ALLOWED_EMAIL_DOMAINS || 'thapar.edu')
     .split(',')
@@ -1402,57 +1420,6 @@ app.get('/api/auth/google/status', (_req: Request, res: Response) => {
       ? 'Google OAuth 2.0 is active.'
       : 'Google OAuth 2.0 is currently unconfigured (REQUIRES HUMAN ACTION: Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in environment variables). Institutional email and password authentication is active.',
   });
-});
-
-// Diagnostic Route: GET /api/auth/google/debug
-app.get('/api/auth/google/debug', (req: Request, res: Response) => {
-  const clientId = process.env.GOOGLE_CLIENT_ID || '';
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET || '';
-  const redirectUri = getGoogleRedirectUri(req);
-  
-  const proto = (req.headers['x-forwarded-proto'] as string)?.split(',')[0].trim() || req.protocol || 'http';
-  const host = (req.headers['x-forwarded-host'] as string)?.split(',')[0].trim() || req.get('host') || 'localhost:3000';
-  const detectedOrigin = `${proto}://${host}`;
-
-  const secretMasked = clientSecret
-    ? `${clientSecret.substring(0, 8)}...${clientSecret.substring(Math.max(0, clientSecret.length - 4))}`
-    : 'NOT CONFIGURED';
-
-  const sampleState = 'SAMPLE_CSRF_STATE_DEBUG_ONLY';
-  const sampleAuthUrl = clientId
-    ? `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=openid%20email%20profile&state=${sampleState}&prompt=select_account`
-    : 'CANNOT_GENERATE_WITHOUT_CLIENT_ID';
-
-  const diagnosticReport = {
-    timestamp: new Date().toISOString(),
-    status: 'ACTIVE_DIAGNOSTIC_REPORT',
-    environment: {
-      GOOGLE_CLIENT_ID: clientId || 'MISSING',
-      GOOGLE_CLIENT_SECRET_CONFIGURED: Boolean(clientSecret),
-      GOOGLE_CLIENT_SECRET_REDACTED: secretMasked,
-      GOOGLE_REDIRECT_URI_ENV: process.env.GOOGLE_REDIRECT_URI || 'NOT_SET (USING AUTO-DISCOVERY)',
-      APP_URL_ENV: process.env.APP_URL || 'NOT_SET',
-      RESOLVED_REDIRECT_URI: redirectUri,
-      DETECTED_INCOMING_ORIGIN: detectedOrigin,
-    },
-    oauthParameters: {
-      authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
-      responseType: 'code',
-      requestedScopes: ['openid', 'email', 'profile'],
-      prompt: 'select_account',
-      stateEntropy: '256-bit cryptographic hex',
-    },
-    generatedAuthorizationUrl: sampleAuthUrl,
-    googleCloudConsoleRequirements: {
-      requiredAuthorizedJavascriptOrigin: detectedOrigin,
-      requiredAuthorizedRedirectUri: redirectUri,
-      expectedScopeClassification: 'Non-sensitive / Basic Identity only (No restricted scopes)',
-      publishedStatusRecommended: 'In production (removes testing user limits for basic identity scopes)',
-    },
-  };
-
-  console.log('[AUTH DEBUG DIAGNOSTIC]', JSON.stringify(diagnosticReport, null, 2));
-  return res.json(diagnosticReport);
 });
 
 function getGoogleRedirectUri(req?: Request): string {
@@ -2087,7 +2054,7 @@ export function requireRole(allowedRoles: RoleCode[]) {
 // -------------------------------------------------------------
 
 // Master Bootstrap State (Database-backed read for complete academic workspace)
-app.get('/api/academic/bootstrap', (req: Request, res: Response) => {
+app.get('/api/academic/bootstrap', requireAuth, (req: Request, res: Response) => {
   const state = supabaseStore.getBootstrapState();
   return res.json({
     success: true,
@@ -2097,7 +2064,7 @@ app.get('/api/academic/bootstrap', (req: Request, res: Response) => {
 });
 
 // Paginated Students Query Endpoint
-app.get('/api/students', (req: Request, res: Response) => {
+app.get('/api/students', requireAuth, (req: Request, res: Response) => {
   const page = parseInt(req.query.page as string) || 1;
   const limit = parseInt(req.query.limit as string) || 20;
   const search = (req.query.search as string) || '';
@@ -2111,7 +2078,7 @@ app.get('/api/students', (req: Request, res: Response) => {
 });
 
 // 1. Departments CRUD
-app.get('/api/academic/departments', (_req: Request, res: Response) => {
+app.get('/api/academic/departments', requireAuth, (_req: Request, res: Response) => {
   const state = supabaseStore.getBootstrapState();
   return res.json({ success: true, departments: state.departments });
 });
@@ -2159,7 +2126,7 @@ app.delete('/api/academic/departments/:id', requireAuth, requireRole(['COORDINAT
 });
 
 // 2. Programs CRUD
-app.get('/api/academic/programs', (_req: Request, res: Response) => {
+app.get('/api/academic/programs', requireAuth, (_req: Request, res: Response) => {
   const state = supabaseStore.getBootstrapState();
   return res.json({ success: true, programs: state.programs });
 });
@@ -2208,7 +2175,7 @@ app.delete('/api/academic/programs/:id', requireAuth, requireRole(['COORDINATOR'
 });
 
 // 3. Courses CRUD
-app.get('/api/academic/courses', (_req: Request, res: Response) => {
+app.get('/api/academic/courses', requireAuth, (_req: Request, res: Response) => {
   const state = supabaseStore.getBootstrapState();
   return res.json({ success: true, courses: state.courses });
 });
@@ -2286,7 +2253,7 @@ app.delete('/api/academic/courses/:id', requireAuth, requireRole(['COORDINATOR',
 });
 
 // 4. Faculty CRUD
-app.get('/api/academic/faculty', (_req: Request, res: Response) => {
+app.get('/api/academic/faculty', requireAuth, (_req: Request, res: Response) => {
   const state = supabaseStore.getBootstrapState();
   return res.json({ success: true, facultyMembers: state.facultyMembers });
 });
@@ -2345,7 +2312,7 @@ app.delete('/api/academic/faculty/:id', requireAuth, requireRole(['COORDINATOR',
 });
 
 // 5. Rooms CRUD
-app.get('/api/academic/rooms', (_req: Request, res: Response) => {
+app.get('/api/academic/rooms', requireAuth, (_req: Request, res: Response) => {
   const state = supabaseStore.getBootstrapState();
   return res.json({ success: true, rooms: state.rooms });
 });
@@ -2400,7 +2367,7 @@ app.delete('/api/academic/rooms/:id', requireAuth, requireRole(['COORDINATOR', '
 });
 
 // 6. Groups & Subgroups (Cohorts) CRUD
-app.get('/api/academic/groups', (_req: Request, res: Response) => {
+app.get('/api/academic/groups', requireAuth, (_req: Request, res: Response) => {
   const state = supabaseStore.getBootstrapState();
   return res.json({ success: true, sections: state.sections });
 });
@@ -2508,7 +2475,7 @@ app.delete('/api/academic/subgroups/:groupId/:subgroupId', requireAuth, requireR
 });
 
 // 7. Course Allocations CRUD
-app.get('/api/academic/allocations', (_req: Request, res: Response) => {
+app.get('/api/academic/allocations', requireAuth, (_req: Request, res: Response) {
   const state = supabaseStore.getBootstrapState();
   return res.json({ success: true, allocations: state.allocations });
 });
@@ -2773,7 +2740,7 @@ app.post('/api/timetable/publish', requireAuth, requireRole(['COLLEGE_ADMIN']), 
 app.post('/api/timetables/publish', requireAuth, requireRole(['COLLEGE_ADMIN']), handlePublishTimetable);
 
 // Timetable Versions List & Restore
-app.get('/api/timetable/versions', (_req: Request, res: Response) => {
+app.get('/api/timetable/versions', requireAuth, (_req: Request, res: Response) => {
   const state = supabaseStore.getBootstrapState();
   return res.json({ success: true, versions: state.versions });
 });
@@ -2788,7 +2755,7 @@ app.post('/api/timetable/versions/:versionNumber/restore', requireAuth, requireR
 });
 
 // Timetable Benchmark Endpoint
-app.get('/api/timetable/benchmark', (req: Request, res: Response) => {
+app.get('/api/timetable/benchmark', requireAuth, (req: Request, res: Response) => {
   const resultFast = executeOptimizationEngine(
     INITIAL_ACADEMIC_YEAR,
     INITIAL_ALLOCATIONS,
