@@ -2417,6 +2417,8 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
+}
+
 export function useTimetable() {
   const context = useContext(TimetableContext);
   if (!context) {
