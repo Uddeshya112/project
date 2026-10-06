@@ -57,7 +57,9 @@ try {
         if (token) headers.set('X-CSRF-Token', token);
         init = { ...init, headers };
       }
-      return originalFetch(url, { ...init, credentials: init?.credentials || 'include' });
+      const response = await originalFetch(url, { ...init, credentials: init?.credentials || 'include' });
+      if (isApi && isAuthExempt) csrfToken = null;
+      return response;
     };
   }
 } catch {}
