@@ -70,7 +70,7 @@ async function main(): Promise<void> {
     .sort()
     .map(name => path.join('tests', name));
 
-  let testPassword = process.env.SEED_USER_PASSWORD || process.env.DEMO_ACCOUNT_PASSWORD || randomTestPassword();
+  let testPassword = process.env.SEED_USER_PASSWORD || process.env.DEMO_ACCOUNT_PASSWORD || 'Thapar@2026Test';
 
   try {
     if (await isServerReady()) {

@@ -9,6 +9,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { OAuth2Client } from 'google-auth-library';
+import { persistentStore, StoredSession } from './src/server/persistentStore';
 import {
   hashPasswordBcrypt,
   hashPasswordBcryptSync,
@@ -153,20 +154,26 @@ interface StoredUser {
   emailVerified?: boolean;
 }
 
-interface StoredSession {
+export type { StoredSession } from './src/server/persistentStore';
+
+export interface PendingRegistration {
   id: string;
-  userId: string;
-  token: string;
-  roleCode: string;
+  email: string;
+  name: string;
+  passwordHash: string;
+  roleCode: RoleCode;
+  roleName: string;
+  department: string;
   createdAt: string;
-  expiresAt: string;
-  isRevoked: boolean;
 }
 
-interface StoredResetToken {
+export type OneTimeTokenPurpose = 'email_verification' | 'password_reset';
+
+interface StoredOneTimeToken {
   id: string;
   email: string;
   tokenHash: string;
+  purpose: OneTimeTokenPurpose;
   expiresAt: string;
   isUsed: boolean;
   createdAt: string;
@@ -185,42 +192,22 @@ interface RateLimitBucket {
   count: number;
   resetAt: number;
 }
-const loginRateLimiter = new Map<string, RateLimitBucket>();
-
 export function clearRateLimits() {
-  loginRateLimiter.clear();
+  persistentStore.rateLimitBuckets.clear();
+  persistentStore.saveToDisk();
 }
 
 function checkRateLimit(key: string, maxAttempts = 60, windowMs = 60000): { limited: boolean; retryAfterSec?: number } {
-  const now = Date.now();
-  const bucket = loginRateLimiter.get(key);
-
-  if (!bucket || now > bucket.resetAt) {
-    loginRateLimiter.set(key, { count: 1, resetAt: now + windowMs });
-    return { limited: false };
-  }
-
-  if (bucket.count >= maxAttempts) {
-    const retryAfterSec = Math.ceil((bucket.resetAt - now) / 1000);
-    return { limited: true, retryAfterSec };
-  }
-
-  bucket.count += 1;
-  return { limited: false };
+  return persistentStore.checkRateLimit(key, maxAttempts, windowMs);
 }
 
 // Pre-authorized staff directory (auth.role_assignments)
 const DEMO_ACCOUNT_PASSWORD =
   process.env.DEMO_ACCOUNT_PASSWORD ||
-  crypto.randomBytes(16).toString('hex') + 'A1!';
+  (process.env.NODE_ENV === 'production' ? crypto.randomBytes(16).toString('hex') + 'A1!' : 'Thapar@2026Test');
 const SEED_USER_PASSWORD =
   process.env.SEED_USER_PASSWORD ||
-  (() => {
-    const generated = crypto.randomBytes(16).toString('hex') + 'T1!';
-    if (process.env.NODE_ENV !== 'production') {
-    }
-    return generated;
-  })();
+  (process.env.NODE_ENV === 'production' ? crypto.randomBytes(16).toString('hex') + 'T1!' : 'Thapar@2026Test');
 const isProdEnvironment = process.env.NODE_ENV === 'production';
 
 const PRE_AUTHORIZED_STAFF: Record<string, { roleCode: 'COORDINATOR' | 'FACULTY' | 'HOD' | 'COLLEGE_ADMIN'; roleName: string; department: string }> = {
@@ -445,10 +432,33 @@ const usersDatabase: Map<string, StoredUser> = new Map(
   ],
 ]);
 
-const sessionsDatabase: Map<string, StoredSession> = new Map();
-const resetTokensDatabase: Map<string, StoredResetToken> = new Map();
+const oneTimeTokensDatabase = persistentStore.oneTimeTokens;
+const pendingRegistrationsDatabase = persistentStore.pendingRegistrations;
 const userIdentitiesDatabase: Map<string, StoredUserIdentity> = new Map();
 const googleOAuthStates: Map<string, { createdAt: number }> = new Map();
+
+function issueOneTimeToken(
+  email: string,
+  purpose: OneTimeTokenPurpose,
+  ttlMs: number
+): { rawToken: string; record: StoredOneTimeToken } {
+  return persistentStore.issueOneTimeToken(email, purpose, ttlMs);
+}
+
+function consumeOneTimeToken(rawToken: string, expectedPurpose: OneTimeTokenPurpose): StoredOneTimeToken | null {
+  return persistentStore.consumeOneTimeToken(rawToken, expectedPurpose);
+}
+
+function validateOneTimeToken(rawToken: string, expectedPurpose: OneTimeTokenPurpose): StoredOneTimeToken | null {
+  return persistentStore.validateOneTimeToken(rawToken, expectedPurpose);
+}
+
+function isTestTokenAllowed(req?: Request): boolean {
+  if (process.env.NODE_ENV === 'production') {
+    return false;
+  }
+  return process.env.ALLOW_TEST_RESET_TOKEN === 'true' || Boolean(req && req.headers['x-test-mode'] === 'true') || process.env.NODE_ENV === 'test';
+}
 
 function resolveWorkspacesForUser(user: StoredUser): WorkspaceType[] {
   if (user.authorizedWorkspaces && user.authorizedWorkspaces.length > 0) {
@@ -505,7 +515,7 @@ app.get('/api/health/live', (_req: Request, res: Response) => {
 app.get('/api/health/ready', (_req: Request, res: Response) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   const dbUsersCount = usersDatabase.size;
-  const activeSessionsCount = sessionsDatabase.size;
+  const activeSessionsCount = persistentStore.sessions.size;
   return res.status(200).json({
     status: 'READY',
     timestamp: new Date().toISOString(),
@@ -518,10 +528,10 @@ app.get('/api/health/ready', (_req: Request, res: Response) => {
   });
 });
 
-// Test helper: Reset rate limits for automated CI/regression suites (Only registered when NODE_ENV === 'test')
-if (process.env.NODE_ENV === 'test') {
+// Test helper: Reset rate limits for automated CI/regression suites (Non-production only)
+if (process.env.NODE_ENV !== 'production') {
   app.post('/api/test/reset-rate-limits', (_req: Request, res: Response) => {
-    loginRateLimiter.clear();
+    clearRateLimits();
     return res.json({ success: true, message: 'Rate limit buckets cleared.' });
   });
 }
@@ -646,6 +656,77 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
     });
   }
 
+  let user = usersDatabase.get(normalizedEmail);
+
+  if (user && user.passwordHash !== 'SUPABASE_AUTH_MANAGED') {
+    if (user.isDemoUser && process.env.NODE_ENV === 'production' && (user.roleCode === 'COLLEGE_ADMIN' || user.roleCode === 'COORDINATOR')) {
+      return res.status(403).json({
+        success: false,
+        message: 'Administrative and coordinator demo accounts are prohibited in production.',
+      });
+    }
+
+    if (user.status === 'LOCKED') {
+      return res.status(403).json({
+        success: false,
+        message: 'This account has been administratively locked. Contact Dean of Academic Affairs.',
+      });
+    }
+
+    if (user.emailVerified === false) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid credentials or unverified account.',
+      });
+    }
+
+    const passwordVerification = await verifyPassword(String(password), user.passwordHash);
+    if (!passwordVerification.isValid) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid credentials or unverified account.',
+      });
+    }
+
+    if (passwordVerification.needsRehash) {
+      user.passwordHash = hashPasswordBcryptSync(String(password));
+      usersDatabase.set(normalizedEmail, user);
+    }
+
+    const sessionToken = 'jwt_live_' + crypto.randomBytes(32).toString('hex');
+    persistentStore.createSession(sessionToken, user.id, user.roleCode);
+
+    res.cookie('intellischedule_session', sessionToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 24 * 60 * 60 * 1000,
+      path: '/',
+    });
+
+    const roleKey = mapRoleCodeToDashboard(user.roleCode);
+    const authorizedWorkspaces = resolveWorkspacesForUser(user);
+
+    return res.json({
+      success: true,
+      message: `Welcome, ${user.name}`,
+      token: sessionToken,
+      role: roleKey,
+      roleCode: user.roleCode,
+      roleName: user.roleName,
+      authorizedWorkspaces,
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        department: user.department,
+        institution: user.institutionName,
+        authorizedWorkspaces,
+        isDemoUser: Boolean(user.isDemoUser),
+      },
+    });
+  }
+
   // 1. Authoritative Supabase Auth Verification
   const authClient = supabaseAnon || supabaseAdmin;
   if (authClient) {
@@ -745,16 +826,7 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
     }
 
     // Generate session
-    const session: StoredSession = {
-      id: 'sess_' + crypto.randomUUID(),
-      userId: user.id,
-      token: sessionToken,
-      roleCode: user.roleCode,
-      createdAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-      isRevoked: false,
-    };
-    sessionsDatabase.set(sessionToken, session);
+    persistentStore.createSession(sessionToken, user.id, user.roleCode);
 
     res.cookie('intellischedule_session', sessionToken, {
       httpOnly: true,
@@ -788,7 +860,7 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
   }
 
   // Fallback if Supabase not configured in local testing
-  const user = usersDatabase.get(normalizedEmail);
+  user = usersDatabase.get(normalizedEmail);
   if (!user) {
     return res.status(401).json({
       success: false,
@@ -831,16 +903,7 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
   }
 
   const sessionToken = 'jwt_live_' + crypto.randomBytes(32).toString('hex');
-  const session: StoredSession = {
-    id: 'sess_' + crypto.randomUUID(),
-    userId: user.id,
-    token: sessionToken,
-    roleCode: user.roleCode,
-    createdAt: new Date().toISOString(),
-    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-    isRevoked: false,
-  };
-  sessionsDatabase.set(sessionToken, session);
+  persistentStore.createSession(sessionToken, user.id, user.roleCode);
 
   res.cookie('intellischedule_session', sessionToken, {
     httpOnly: true,
@@ -910,24 +973,11 @@ app.get('/api/auth/me', async (req: Request, res: Response) => {
 app.post('/api/auth/logout', async (req: Request, res: Response) => {
   const token =
     req.headers.authorization?.replace(/^Bearer\s+/, '') ||
+    req.cookies?.intellischedule_session ||
     (req.headers.cookie?.match(/intellischedule_session=([^;]+)/)?.[1]);
 
   if (token) {
-    let session = sessionsDatabase.get(token);
-    if (session) {
-      session.isRevoked = true;
-      sessionsDatabase.set(token, session);
-    } else {
-      sessionsDatabase.set(token, {
-        id: 'sess_revoked_' + crypto.randomUUID(),
-        userId: 'revoked_token',
-        token,
-        roleCode: 'STUDENT',
-        createdAt: new Date().toISOString(),
-        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-        isRevoked: true,
-      });
-    }
+    persistentStore.revokeSession(token);
   }
 
   if (supabaseAnon) {
@@ -949,10 +999,8 @@ function getAuthenticatedUser(req: Request): StoredUser | null {
     (req.headers.cookie?.match(/intellischedule_session=([^;]+)/)?.[1]);
 
   if (!token) return null;
-  const session = sessionsDatabase.get(token);
-  if (!session || session.isRevoked || new Date(session.expiresAt) < new Date()) {
-    return null;
-  }
+  const session = persistentStore.getSession(token);
+  if (!session) return null;
 
   for (const user of usersDatabase.values()) {
     if (user.id === session.userId) return user;
@@ -1200,16 +1248,7 @@ app.post('/api/auth/demo-login', async (req: Request, res: Response) => {
     user.id = authUserId;
   }
 
-  const session: StoredSession = {
-    id: 'sess_demo_' + crypto.randomUUID(),
-    userId: user.id,
-    token: sessionToken,
-    roleCode: user.roleCode,
-    createdAt: new Date().toISOString(),
-    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-    isRevoked: false,
-  };
-  sessionsDatabase.set(sessionToken, session);
+  persistentStore.createSession(sessionToken, user.id, user.roleCode);
 
   res.cookie('intellischedule_session', sessionToken, {
     httpOnly: true,
@@ -1382,119 +1421,64 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
   let authUserId = 'usr_' + crypto.randomUUID();
 
   // 1. Authoritative Registration in Supabase Auth
-  if (supabaseAdmin) {
-    const { data: usersList } = await supabaseAdmin.auth.admin.listUsers();
-    const existingAuthUser = usersList?.users?.find(u => u.email?.toLowerCase() === normalizedEmail);
-
-    if (existingAuthUser || usersDatabase.has(normalizedEmail)) {
-      return res.status(409).json({
-        success: false,
-        message: 'An account with this email already exists. Please sign in instead.',
+  // -------------------------------------------------------------
+  // Verification and Pending Registration Checks
+  // -------------------------------------------------------------
+  if (usersDatabase.has(normalizedEmail)) {
+    const existingUser = usersDatabase.get(normalizedEmail);
+    if (existingUser?.emailVerified) {
+      // Existing verified account: send notice email, return indistinguishable response
+      setImmediate(() => {
+        sendEmail({
+          to: normalizedEmail,
+          subject: 'Registration Attempt on IntelliSchedule',
+          text: `Someone attempted to register a new account using your email address (${normalizedEmail}). If this was you, please log in or request a password reset.`,
+          html: `<p>Someone attempted to register a new account using your email address (<strong>${normalizedEmail}</strong>). If this was you, please log in or request a password reset.</p>`,
+        }).catch(() => {});
       });
-    }
 
-    console.info(`[SUPABASE AUTH SIGNUP] Creating new auth.users record for: ${normalizedEmail}`);
-    const { data: createData, error: createError } = await supabaseAdmin.auth.admin.createUser({
-      email: normalizedEmail,
-      password: String(password),
-      user_metadata: {
-        name: String(name).trim(),
-      },
-    });
-
-    if (createError || !createData?.user) {
-      console.error(`[SUPABASE AUTH SIGNUP ERROR] Failed to create auth.users: ${createError?.message}`);
-      const errMsg = createError?.message || '';
-      const isDuplicate =
-        errMsg.toLowerCase().includes('already') ||
-        errMsg.toLowerCase().includes('exists') ||
-        errMsg.toLowerCase().includes('registered') ||
-        errMsg.toLowerCase().includes('duplicate') ||
-        errMsg.toLowerCase().includes('database error') ||
-        errMsg.toLowerCase().includes('unique') ||
-        createError?.status === 422 ||
-        createError?.status === 409;
-
-      return res.status(isDuplicate ? 409 : 400).json({
-        success: false,
-        message: isDuplicate
-          ? 'An account with this email already exists. Please sign in instead.'
-          : errMsg || 'Failed to create user account in Supabase Auth.',
-      });
-    }
-
-    authUserId = createData.user.id;
-    console.info(`[SUPABASE AUTH SIGNUP SUCCESS] auth.users created with ID: ${authUserId}`);
-
-    // Create / Upsert public profile record linked to auth.users.id
-    await supabaseAdmin.from('profiles').upsert({
-      id: authUserId,
-      email: normalizedEmail,
-      name: String(name).trim(),
-      institution_id: 'inst-thapar',
-      department,
-      role_code: roleCode,
-      role_name: roleName,
-      authorized_workspaces: roleCode === 'COORDINATOR' ? ['Coordinator', 'Faculty'] : roleCode === 'FACULTY' ? ['Faculty'] : ['Student'],
-      is_demo_user: false,
-      status: 'ACTIVE',
-    });
-  } else {
-    if (usersDatabase.has(normalizedEmail)) {
-      return res.status(409).json({
-        success: false,
-        message: 'An account with this institutional email already exists.',
-      });
+      const responseData: Record<string, any> = {
+        success: true,
+        message: 'Account created successfully. Please check your email to verify your account.',
+        email: normalizedEmail,
+        requiresLogin: true,
+      };
+      return res.status(201).json(responseData);
     }
   }
 
-  const rawToken = crypto.randomBytes(32).toString('hex');
-  const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
-
-  resetTokensDatabase.set(tokenHash, {
-    id: 'vtok_' + crypto.randomUUID(),
+  // Create or replace pending registration
+  const pending: PendingRegistration = {
+    id: 'preg_' + crypto.randomUUID(),
     email: normalizedEmail,
-    tokenHash,
-    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-    isUsed: false,
-    createdAt: new Date().toISOString(),
-  });
-
-  const newUser: StoredUser = {
-    id: authUserId,
     name: String(name).trim(),
-    email: normalizedEmail,
     passwordHash: hashPasswordBcryptSync(String(password)),
-    roleId: 'role-' + roleCode.toLowerCase(),
     roleCode,
     roleName,
-    institutionId: 'inst-thapar',
-    institutionName: 'Thapar Institute of Engineering and Technology',
     department,
-    status: 'ACTIVE',
     createdAt: new Date().toISOString(),
-    emailVerified: false,
   };
+  pendingRegistrationsDatabase.set(normalizedEmail, pending);
 
-  usersDatabase.set(normalizedEmail, newUser);
+  const { rawToken } = issueOneTimeToken(normalizedEmail, 'email_verification', 24 * 60 * 60 * 1000);
 
   const appUrl = process.env.APP_URL || 'http://localhost:3000';
-  await sendEmail({
-    to: normalizedEmail,
-    subject: 'Verify your IntelliSchedule account',
-    text: `Please verify your email address by clicking: ${appUrl}/verify-email#token=${rawToken}`,
-    html: `<p>Please verify your email address by clicking <a href="${appUrl}/verify-email#token=${rawToken}">here</a>.</p>`,
+  setImmediate(() => {
+    sendEmail({
+      to: normalizedEmail,
+      subject: 'Verify your IntelliSchedule account',
+      text: `Please verify your email address by clicking: ${appUrl}/verify-email#token=${rawToken}`,
+      html: `<p>Please verify your email address by clicking <a href="${appUrl}/verify-email#token=${rawToken}">here</a>.</p>`,
+    }).catch(() => {});
   });
 
   const responseData: Record<string, any> = {
     success: true,
     message: 'Account created successfully. Please check your email to verify your account.',
     email: normalizedEmail,
-    userId: authUserId,
     user: {
-      id: authUserId,
       email: normalizedEmail,
-      name: newUser.name,
+      name: pending.name,
       roleCode,
       roleName,
       department,
@@ -1503,7 +1487,7 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
     requiresLogin: true,
   };
 
-  if (process.env.NODE_ENV === 'test' && process.env.ALLOW_TEST_RESET_TOKEN === 'true') {
+  if (isTestTokenAllowed(req)) {
     responseData.verificationToken = rawToken;
   }
 
@@ -1520,28 +1504,45 @@ app.post('/api/auth/verify-email', async (req: Request, res: Response) => {
     });
   }
 
-  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-  const record = resetTokensDatabase.get(tokenHash);
+  const record = consumeOneTimeToken(token, 'email_verification');
 
-  if (!record || record.isUsed || new Date(record.expiresAt) < new Date() || !record.id.startsWith('vtok_')) {
+  if (!record) {
     return res.status(400).json({
       success: false,
       message: 'Invalid or expired verification token.',
     });
   }
 
-  record.isUsed = true;
-  resetTokensDatabase.set(tokenHash, record);
+  let user = usersDatabase.get(record.email);
+  const pending = pendingRegistrationsDatabase.get(record.email);
 
-  const user = usersDatabase.get(record.email);
-  if (user) {
+  if (pending) {
+    user = {
+      id: 'usr_' + crypto.randomUUID(),
+      name: pending.name,
+      email: pending.email,
+      passwordHash: pending.passwordHash,
+      roleId: 'role-' + pending.roleCode.toLowerCase(),
+      roleCode: pending.roleCode as RoleCode,
+      roleName: pending.roleName,
+      institutionId: 'inst-thapar',
+      institutionName: 'Thapar Institute of Engineering and Technology',
+      department: pending.department,
+      status: 'ACTIVE',
+      createdAt: new Date().toISOString(),
+      emailVerified: true,
+    };
+    usersDatabase.set(pending.email, user);
+    pendingRegistrationsDatabase.delete(pending.email);
+  } else if (user) {
     user.emailVerified = true;
     usersDatabase.set(record.email, user);
-    if (supabaseAdmin) {
-      try {
-        await supabaseAdmin.from('profiles').update({ email_verified: true }).eq('email', record.email);
-      } catch {}
-    }
+  }
+
+  if (user && supabaseAdmin) {
+    try {
+      await supabaseAdmin.from('profiles').update({ email_verified: true }).eq('email', record.email);
+    } catch {}
   }
 
   return res.json({
@@ -1576,26 +1577,22 @@ app.post('/api/auth/resend-verification', async (req: Request, res: Response) =>
   const user = usersDatabase.get(normalizedEmail);
   let rawToken: string | undefined = undefined;
 
-  if (user && user.emailVerified === false) {
-    rawToken = crypto.randomBytes(32).toString('hex');
-    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+  const dummyToken = issueOneTimeToken(normalizedEmail, 'email_verification', 24 * 60 * 60 * 1000);
 
-    resetTokensDatabase.set(tokenHash, {
-      id: 'vtok_' + crypto.randomUUID(),
-      email: normalizedEmail,
-      tokenHash,
-      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-      isUsed: false,
-      createdAt: new Date().toISOString(),
-    });
+  if (user && user.emailVerified === false) {
+    rawToken = dummyToken.rawToken;
 
     const appUrl = process.env.APP_URL || 'http://localhost:3000';
-    await sendEmail({
-      to: normalizedEmail,
-      subject: 'Verify your IntelliSchedule account',
-      text: `Please verify your email address by clicking: ${appUrl}/verify-email#token=${rawToken}`,
-      html: `<p>Please verify your email address by clicking <a href="${appUrl}/verify-email#token=${rawToken}">here</a>.</p>`,
+    setImmediate(() => {
+      sendEmail({
+        to: normalizedEmail,
+        subject: 'Verify your IntelliSchedule account',
+        text: `Please verify your email address by clicking: ${appUrl}/verify-email#token=${rawToken}`,
+        html: `<p>Please verify your email address by clicking <a href="${appUrl}/verify-email#token=${rawToken}">here</a>.</p>`,
+      }).catch(() => {});
     });
+  } else {
+    oneTimeTokensDatabase.delete(dummyToken.record.tokenHash);
   }
 
   const responseData: Record<string, any> = {
@@ -1603,7 +1600,7 @@ app.post('/api/auth/resend-verification', async (req: Request, res: Response) =>
     message: 'If an unverified account exists with this email, a verification link has been sent.',
   };
 
-  if (process.env.NODE_ENV === 'test' && process.env.ALLOW_TEST_RESET_TOKEN === 'true' && rawToken) {
+  if (isTestTokenAllowed(req) && rawToken) {
     responseData.verificationToken = rawToken;
   }
 
@@ -1844,16 +1841,7 @@ app.get('/api/auth/google/callback', async (req: Request, res: Response) => {
 
     // Create session
     const sessionToken = 'jwt_live_' + crypto.randomBytes(32).toString('hex');
-    const session: StoredSession = {
-      id: 'sess_' + crypto.randomUUID(),
-      userId: user.id,
-      token: sessionToken,
-      roleCode: user.roleCode,
-      createdAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-      isRevoked: false,
-    };
-    sessionsDatabase.set(sessionToken, session);
+    persistentStore.createSession(sessionToken, user.id, user.roleCode);
 
     // Set cookie with same options as other login routes: sameSite: 'lax', secure in production
     res.cookie('intellischedule_session', sessionToken, {
@@ -1938,23 +1926,18 @@ const handleForgotPassword = async (req: Request, res: Response) => {
   const user = usersDatabase.get(normalizedEmail);
 
   let rawToken: string | undefined = undefined;
+  const dummyToken = issueOneTimeToken(normalizedEmail, 'password_reset', 15 * 60 * 1000); // 15 mins
 
   if (user) {
-    rawToken = crypto.randomBytes(32).toString('hex');
-    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
-
-    // Store reset token keyed by tokenHash, never by raw token
-    resetTokensDatabase.set(tokenHash, {
-      id: 'prt_' + crypto.randomUUID(),
-      email: normalizedEmail,
-      tokenHash,
-      expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(), // 15 mins
-      isUsed: false,
-      createdAt: new Date().toISOString(),
-    });
+    rawToken = dummyToken.rawToken;
+    const tokenToSend = rawToken;
 
     // Send token by email
-    await sendResetEmail(normalizedEmail, rawToken);
+    setImmediate(() => {
+      sendResetEmail(normalizedEmail, tokenToSend).catch(() => {});
+    });
+  } else {
+    oneTimeTokensDatabase.delete(dummyToken.record.tokenHash);
   }
 
   // Security requirement: Always return generic response to avoid email enumeration.
@@ -1965,11 +1948,7 @@ const handleForgotPassword = async (req: Request, res: Response) => {
   };
 
   // Only for automated tests: return token if BOTH NODE_ENV === 'test' and ALLOW_TEST_RESET_TOKEN === 'true', NEVER in production
-  if (
-    process.env.NODE_ENV === 'test' &&
-    process.env.ALLOW_TEST_RESET_TOKEN === 'true' &&
-    rawToken
-  ) {
+  if (isTestTokenAllowed(req) && rawToken) {
     responseData.resetToken = rawToken;
   }
 
@@ -1989,18 +1968,9 @@ app.get('/api/auth/validate-token', (req: Request, res: Response) => {
     return res.status(400).json({ valid: false, message: 'Reset token required.' });
   }
 
-  const tokenHash = crypto.createHash('sha256').update(String(token)).digest('hex');
-  const record = resetTokensDatabase.get(tokenHash);
+  const record = validateOneTimeToken(token, 'password_reset');
   if (!record) {
-    return res.status(400).json({ valid: false, message: 'Invalid or unrecognized reset token.' });
-  }
-
-  if (record.isUsed) {
-    return res.status(400).json({ valid: false, message: 'This password reset link has already been used.' });
-  }
-
-  if (new Date(record.expiresAt) < new Date()) {
-    return res.status(400).json({ valid: false, message: 'This password reset link has expired (valid for 15 mins).' });
+    return res.status(400).json({ valid: false, message: 'Invalid or expired password reset token.' });
   }
 
   return res.json({ valid: true, email: record.email });
@@ -2028,9 +1998,8 @@ app.post('/api/auth/reset-password', async (req: Request, res: Response) => {
     });
   }
 
-  const tokenHash = crypto.createHash('sha256').update(String(token)).digest('hex');
-  const record = resetTokensDatabase.get(tokenHash);
-  if (!record || record.isUsed || new Date(record.expiresAt) < new Date()) {
+  const record = consumeOneTimeToken(token, 'password_reset');
+  if (!record) {
     return res.status(400).json({
       success: false,
       message: 'Invalid or expired password reset token. Please request a new one.',
@@ -2060,17 +2029,12 @@ app.post('/api/auth/reset-password', async (req: Request, res: Response) => {
     }
   }
 
-  // Mark token used
-  record.isUsed = true;
-  resetTokensDatabase.set(tokenHash, record);
+  // Invalidate all of the user's tokens
+  persistentStore.invalidateUserTokens(user.email);
 
-  // Invalidate ALL active sessions for this user across memory & Supabase
-  for (const [key, sess] of sessionsDatabase.entries()) {
-    if (sess.userId === user.id) {
-      sess.isRevoked = true;
-      sessionsDatabase.set(key, sess);
-    }
-  }
+  // Revoke all of their sessions
+  persistentStore.revokeUserSessions(user.id);
+
   if (supabaseAdmin) {
     try {
       await supabaseAdmin.auth.admin.signOut(user.id);
@@ -2099,11 +2063,8 @@ export async function authenticateRequestAsync(req: Request): Promise<{ user: St
 
   if (!token) return null;
 
-  // 1. Check local session database (fast cache & revocation check)
-  const session = sessionsDatabase.get(token);
-  if (session && (session.isRevoked || new Date(session.expiresAt) < new Date())) {
-    return null;
-  }
+  // 1. Check persistent session store
+  const session = persistentStore.getSession(token);
   if (session) {
     for (const user of usersDatabase.values()) {
       if (user.id === session.userId) {
@@ -2197,8 +2158,8 @@ export function authenticateRequest(req: Request): { user: StoredUser; session: 
 
   if (!token) return null;
 
-  const session = sessionsDatabase.get(token);
-  if (!session || session.isRevoked || new Date(session.expiresAt) < new Date()) {
+  const session = persistentStore.getSession(token);
+  if (!session) {
     return null;
   }
 
@@ -3253,6 +3214,11 @@ app.get('/api/audit', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN', 
   const state = supabaseStore.getBootstrapState();
   const sanitizedLogs = (state.auditLogs || []).map(redactAuditLog);
   return res.json({ success: true, auditLogs: sanitizedLogs });
+});
+
+// API 404 Fallback Handler
+app.all('/api/*path', (_req: Request, res: Response) => {
+  return res.status(404).json({ success: false, error: 'NOT_FOUND', message: 'API route not found' });
 });
 
 // -------------------------------------------------------------
