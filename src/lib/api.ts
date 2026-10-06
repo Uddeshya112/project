@@ -17,7 +17,7 @@ export async function api<T = any>(path: string, options: { method?: string; bod
   try {
     res = await fetch(path, {
       method: options.method ?? (options.body === undefined ? 'GET' : 'POST'),
-      credentials: 'same-origin',
+      credentials: 'include',
       headers: options.body === undefined ? undefined : { 'Content-Type': 'application/json' },
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
     });
