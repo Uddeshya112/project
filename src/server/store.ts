@@ -1104,6 +1104,7 @@ export class TimetableStore {
           hardViolations: report.hardViolationsCount,
           makeActive: false,
         });
+        if (idx === 0) firstGeneratedVersion = version;
         sessions = clone(version.sessions);
         report = validateTimetableIndependently(sessions, ctx);
       }
@@ -1146,11 +1147,9 @@ export class TimetableStore {
       });
     }
 
-    const firstGenerated = out.find((r) => r.versionNumber != null);
-    if (firstGenerated?.versionNumber != null) {
-      const firstVersion = this.getVersion(firstGenerated.versionNumber);
-      this.activeSessions = clone(firstVersion.sessions);
-      this.activeVersionNumber = firstVersion.versionNumber;
+    if (firstGeneratedVersion) {
+      this.activeSessions = clone(firstGeneratedVersion.sessions);
+      this.activeVersionNumber = firstGeneratedVersion.versionNumber;
       this.academicYear.publishStatus = 'Draft';
     }
 
