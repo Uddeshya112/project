@@ -795,7 +795,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         changeSummary: `Generated timetable from ${allocations.length} academic allocations across ${sections.length} sections.`,
         reason: 'Automated Schedule Generation Run',
         isPublished: false,
-        healthScore: calculateHealthScore(updatedSessions, rooms, facultyMembers, sections, courses).overallScore,
+        healthScore: calculateHealthScore(result.sessions, rooms, facultyMembers, sections, courses).overallScore,
         sessions: result.sessions,
       };
 
