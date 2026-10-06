@@ -18,8 +18,7 @@
     "benchmark": "tsx scripts/run_password_benchmarks.ts",
     "start": "tsx server.ts",
     "preview": "vite preview --port 3000 --host 0.0.0.0",
-    "typecheck": "tsc --noEmit",
-    "build:server": "tsup"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
