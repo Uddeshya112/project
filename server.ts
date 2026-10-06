@@ -10,6 +10,25 @@ import { store } from './src/server/store';
 import { executeOptimizationEngine } from './src/lib/optimizationEngine';
 import { HttpError } from './src/server/validate';
 
+const WORKSPACES: Record<string, string[]> = {
+  SUPER_ADMIN: ['Admin', 'Coordinator'],
+  COLLEGE_ADMIN: ['Admin', 'Coordinator'],
+  COORDINATOR: ['Coordinator', 'Faculty'],
+  HOD: ['Coordinator', 'Faculty'],
+  FACULTY: ['Faculty'],
+  CLASS_REPRESENTATIVE: ['Student', 'CR'],
+  STUDENT: ['Student'],
+};
+const ROLE_KEYS: Record<string, string> = {
+  SUPER_ADMIN: 'Admin',
+  COLLEGE_ADMIN: 'Admin',
+  COORDINATOR: 'Coordinator',
+  HOD: 'HOD',
+  FACULTY: 'Faculty',
+  CLASS_REPRESENTATIVE: 'Student',
+  STUDENT: 'Student',
+};
+
 const DEFAULT_ALLOWED_ORIGINS = [
   'https://tiet-timetable-six.vercel.app',
   'http://localhost:3000',
@@ -121,6 +140,9 @@ export async function createApp(db: import('./src/server/db').Db) {
   app.get('/api/me', requireAuth, (req, res) => {
     const viewer = toViewer(req);
     const state = store.getBootstrapState(viewer);
+    const roleCode = req.user!.role_code;
+    const authorizedWorkspaces = WORKSPACES[roleCode] ?? ['Student'];
+    const role = ROLE_KEYS[roleCode] ?? 'Student';
     res.json({
       success: true,
       user: {
@@ -128,15 +150,17 @@ export async function createApp(db: import('./src/server/db').Db) {
         name: req.user!.name,
         email: req.user!.email,
         department: req.user!.department,
-        roleCode: req.user!.role_code,
-        roleName: state.roster.roleName ?? undefined,
-        authorizedWorkspaces: state.roster.authorizedWorkspaces,
+        roleCode,
+        roleName: req.user!.role_code.replaceAll('_', ' '),
+        authorizedWorkspaces,
         isDemoUser: req.user!.is_demo,
+        profile: req.user!.profile ?? {},
+        hasPassword: Boolean(req.user!.password_hash),
       },
-      role: state.roster.roleKey,
-      roleCode: req.user!.role_code,
-      roleName: state.roster.roleName,
-      authorizedWorkspaces: state.roster.authorizedWorkspaces,
+      role,
+      roleCode,
+      roleName: req.user!.role_code.replaceAll('_', ' '),
+      authorizedWorkspaces,
       roster: state.roster,
     });
   });
