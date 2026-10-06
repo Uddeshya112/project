@@ -26,6 +26,8 @@ export type ViolationCode =
   | 'DISCONTINUOUS_BLOCK'
   | 'MISSING_REQUIRED_SESSIONS'
   | 'LAB_DURATION_VIOLATION'
+  | 'PINNED_SESSION_VIOLATION'
+  | 'ELECTIVE_GROUP_MISMATCH'
   | 'SAME_COURSE_SAME_DAY'
   | 'SAME_COURSE_CONSECUTIVE'
   | 'EXCESSIVE_STUDENT_GAPS'
@@ -205,7 +207,7 @@ export function validateTimetableIndependently(
       }
     }
 
-    // Check E: Room Type Compliance
+    // Check E: Room Type & Equipment Compliance
     if (room) {
       const isLabSession = session.type === 'Lab' || session.type === 'Practical';
       const isLabRoom = room.type === 'ComputerLab' || room.type === 'HardwareLab';
@@ -222,25 +224,75 @@ export function validateTimetableIndependently(
           recommendation: `Assign a dedicated Computer Lab or Hardware Lab.`
         });
       }
+
+      // Lectures not in labs (unless course explicitly requires lab facilities)
+      if (!isLabSession && isLabRoom && !course?.requiresLab) {
+        violations.push({
+          id: `viol-lecture-in-lab-${session.id}`,
+          code: 'ROOM_TYPE_MISMATCH',
+          severity: 'CRITICAL',
+          sessionIds: [session.id],
+          entityName: room.name,
+          day: session.day,
+          timeSlotId: session.timeSlotId,
+          message: `Lecture session ${course?.code || session.courseId} should not occupy a specialised laboratory (${room.name}).`,
+          recommendation: `Assign a standard lecture hall or tutorial room.`
+        });
+      }
+
+      // Check Equipment Requirements
+      if (course?.requiredEquipment && course.requiredEquipment.length > 0) {
+        const roomEquip = new Set(room.equipment || []);
+        const missingEquip = course.requiredEquipment.filter(eq => !roomEquip.has(eq));
+        if (missingEquip.length > 0) {
+          violations.push({
+            id: `viol-equip-${session.id}`,
+            code: 'ROOM_TYPE_MISMATCH',
+            severity: 'CRITICAL',
+            sessionIds: [session.id],
+            entityName: room.name,
+            day: session.day,
+            timeSlotId: session.timeSlotId,
+            message: `Facility ${room.name} lacks required equipment for ${course.code || course.id}: missing [${missingEquip.join(', ')}].`,
+            recommendation: `Assign a facility equipped with ${missingEquip.join(', ')}.`
+          });
+        }
+      }
     }
 
-    // Check F: Faculty Protected / Unavailable Slots
-    if (faculty?.preferences?.protectedSlots) {
-      const isProtected = faculty.preferences.protectedSlots.some(
-        ps => ps.day === session.day && ps.periodId === session.timeSlotId
-      );
-      if (isProtected) {
+    // Check F: Faculty Protected / Unavailable Slots & Status
+    if (faculty) {
+      if (faculty.status === 'OnLeave' || faculty.status === 'Inactive') {
         violations.push({
-          id: `viol-fac-unavail-${session.id}`,
+          id: `viol-fac-status-${session.id}`,
           code: 'FACULTY_UNAVAILABLE',
           severity: 'CRITICAL',
           sessionIds: [session.id],
           entityName: faculty.name,
           day: session.day,
           timeSlotId: session.timeSlotId,
-          message: `Instructor ${faculty.name} has a designated protected slot on ${session.day} at ${session.timeSlotId}.`,
-          recommendation: `Move session to an open period for ${faculty.name}.`
+          message: `Faculty ${faculty.name} is marked as ${faculty.status} and cannot be assigned teaching sessions.`,
+          recommendation: `Reassign allocations to active faculty.`
         });
+      }
+
+      if (faculty.preferences?.protectedSlots) {
+        const isProtected = faculty.preferences.protectedSlots.some(
+          ps => ps.day === session.day && ps.periodId === session.timeSlotId
+        );
+        if (isProtected) {
+          violations.push({
+            id: `viol-fac-unavail-${session.id}`,
+            code: 'FACULTY_UNAVAILABLE',
+            severity: 'CRITICAL',
+            sessionIds: [session.id],
+            entityName: faculty.name,
+            day: session.day,
+            timeSlotId: session.timeSlotId,
+            message: `Instructor ${faculty.name} has a designated protected slot on ${session.day} at ${session.timeSlotId}.`,
+            recommendation: `Move session to an open period for ${faculty.name}.`
+          });
+        }
       }
     }
 
@@ -454,7 +506,7 @@ export function validateTimetableIndependently(
     }
   });
 
-  // Check Lab Atomicity & Duration Rules
+  // Check Lab Atomicity & Duration Rules (Supports 2-period and 3-period lab blocks)
   labCohortDayMap.forEach((labSessions, labKey) => {
     const [secId, subSecId, courseId, day] = labKey.split('_') as [string, string, string, DayOfWeek];
     const course = courseMap.get(courseId);
@@ -462,7 +514,10 @@ export function validateTimetableIndependently(
     const subObj = section?.subSections?.find(sub => sub.id === subSecId);
     const cohortName = `${section?.name || secId}${subObj ? `/${subObj.name}` : ''}`;
 
-    if (labSessions.length === 1) {
+    // Expected block duration: check session durationPeriods, allocation, or course definition (default 2, or 3)
+    const expectedDuration = labSessions[0]?.durationPeriods || (course?.requiredLabsPerWeek === 3 ? 3 : 2);
+
+    if (labSessions.length < expectedDuration) {
       violations.push({
         id: `viol-lab-dur-${labKey}`,
         code: 'LAB_DURATION_VIOLATION',
@@ -470,80 +525,206 @@ export function validateTimetableIndependently(
         sessionIds: labSessions.map(s => s.id),
         entityName: cohortName,
         day,
-        timeSlotId: labSessions[0].timeSlotId,
-        message: `Laboratory session for ${course?.code || courseId} (${cohortName}) on ${day} is only 1 hour. Labs must occupy exactly 2 consecutive periods.`,
-        recommendation: `Schedule lab as a 2-hour contiguous block.`,
+        timeSlotId: labSessions[0]?.timeSlotId || 'ts-1',
+        message: `Laboratory session for ${course?.code || courseId} (${cohortName}) on ${day} has only ${labSessions.length} hour(s). Labs must occupy exactly ${expectedDuration} consecutive periods.`,
+        recommendation: `Schedule lab as a ${expectedDuration}-hour contiguous block.`,
       });
-    } else if (labSessions.length >= 2) {
+    } else {
       labSessions.sort((a, b) => {
         const pA = parseInt(a.timeSlotId.replace('ts-', ''), 10) || 1;
         const pB = parseInt(b.timeSlotId.replace('ts-', ''), 10) || 1;
         return pA - pB;
       });
 
-      for (let i = 0; i < labSessions.length - 1; i += 2) {
-        const s1 = labSessions[i];
-        const s2 = labSessions[i + 1];
-        if (!s2) {
+      for (let i = 0; i < labSessions.length; i += expectedDuration) {
+        const block = labSessions.slice(i, i + expectedDuration);
+        if (block.length < expectedDuration) {
           violations.push({
-            id: `viol-lab-dur-odd-${labKey}`,
+            id: `viol-lab-dur-rem-${labKey}-${i}`,
             code: 'LAB_DURATION_VIOLATION',
             severity: 'CRITICAL',
-            sessionIds: [s1.id],
+            sessionIds: block.map(s => s.id),
             entityName: cohortName,
             day,
-            timeSlotId: s1.timeSlotId,
-            message: `Laboratory session for ${course?.code || courseId} (${cohortName}) on ${day} has an odd duration (${labSessions.length} hrs).`,
-            recommendation: `Labs must be scheduled in 2-hour contiguous blocks.`,
+            timeSlotId: block[0].timeSlotId,
+            message: `Laboratory session for ${course?.code || courseId} (${cohortName}) on ${day} has incomplete trailing periods (${block.length} of ${expectedDuration} hrs).`,
+            recommendation: `Labs must be scheduled in ${expectedDuration}-hour contiguous blocks.`,
           });
-          break;
+          continue;
         }
 
-        const p1 = parseInt(s1.timeSlotId.replace('ts-', ''), 10) || 1;
-        const p2 = parseInt(s2.timeSlotId.replace('ts-', ''), 10) || 1;
+        const firstRoomId = block[0].roomId;
+        const firstFacultyId = block[0].facultyId;
 
-        if (p2 !== p1 + 1 || p1 === 5 || p2 === 5) {
-          violations.push({
-            id: `viol-lab-cont-${labKey}-${i}`,
-            code: 'LAB_DURATION_VIOLATION',
-            severity: 'CRITICAL',
-            sessionIds: [s1.id, s2.id],
-            entityName: cohortName,
-            day,
-            timeSlotId: s1.timeSlotId,
-            message: `Laboratory session for ${course?.code || courseId} (${cohortName}) on ${day} is not contiguous or crosses lunch (periods ${p1} & ${p2}).`,
-            recommendation: `Labs must be 2 consecutive periods on the same side of lunch.`,
-          });
-        }
+        for (let j = 0; j < block.length; j++) {
+          const sCurr = block[j];
+          const pCurr = parseInt(sCurr.timeSlotId.replace('ts-', ''), 10) || 1;
 
-        if (s1.roomId !== s2.roomId) {
-          violations.push({
-            id: `viol-lab-room-${labKey}-${i}`,
-            code: 'LAB_DURATION_VIOLATION',
-            severity: 'CRITICAL',
-            sessionIds: [s1.id, s2.id],
-            entityName: cohortName,
-            day,
-            timeSlotId: s1.timeSlotId,
-            message: `Laboratory session for ${course?.code || courseId} (${cohortName}) changes rooms between period 1 (${s1.roomId}) and period 2 (${s2.roomId}).`,
-            recommendation: `Both periods of a lab must use the same laboratory room.`,
-          });
-        }
+          if (lunchSlotIds.has(sCurr.timeSlotId) || pCurr === 5) {
+            violations.push({
+              id: `viol-lab-lunch-${labKey}-${i}-${j}`,
+              code: 'LAB_DURATION_VIOLATION',
+              severity: 'CRITICAL',
+              sessionIds: [sCurr.id],
+              entityName: cohortName,
+              day,
+              timeSlotId: sCurr.timeSlotId,
+              message: `Laboratory block for ${course?.code || courseId} (${cohortName}) overlaps with campus lunch break at ${sCurr.timeSlotId}.`,
+              recommendation: `Schedule lab entirely before or after lunch break.`,
+            });
+          }
 
-        if (s1.facultyId !== s2.facultyId) {
-          violations.push({
-            id: `viol-lab-fac-${labKey}-${i}`,
-            code: 'LAB_DURATION_VIOLATION',
-            severity: 'CRITICAL',
-            sessionIds: [s1.id, s2.id],
-            entityName: cohortName,
-            day,
-            timeSlotId: s1.timeSlotId,
-            message: `Laboratory session for ${course?.code || courseId} (${cohortName}) changes faculty between period 1 and period 2.`,
-            recommendation: `Both periods of a lab must be led by the same faculty instructor.`,
-          });
+          if (j > 0) {
+            const sPrev = block[j - 1];
+            const pPrev = parseInt(sPrev.timeSlotId.replace('ts-', ''), 10) || 1;
+            if (pCurr !== pPrev + 1) {
+              violations.push({
+                id: `viol-lab-cont-${labKey}-${i}-${j}`,
+                code: 'LAB_DURATION_VIOLATION',
+                severity: 'CRITICAL',
+                sessionIds: [sPrev.id, sCurr.id],
+                entityName: cohortName,
+                day,
+                timeSlotId: sPrev.timeSlotId,
+                message: `Laboratory session for ${course?.code || courseId} (${cohortName}) on ${day} is discontinuous (period ${pPrev} to ${pCurr}).`,
+                recommendation: `Labs must occupy consecutive periods.`,
+              });
+            }
+          }
+
+          if (sCurr.roomId !== firstRoomId) {
+            violations.push({
+              id: `viol-lab-room-${labKey}-${i}-${j}`,
+              code: 'LAB_DURATION_VIOLATION',
+              severity: 'CRITICAL',
+              sessionIds: [block[0].id, sCurr.id],
+              entityName: cohortName,
+              day,
+              timeSlotId: sCurr.timeSlotId,
+              message: `Laboratory session for ${course?.code || courseId} changes rooms within the block (${firstRoomId} to ${sCurr.roomId}).`,
+              recommendation: `All periods of a lab block must use the same laboratory room.`,
+            });
+          }
+
+          if (sCurr.facultyId !== firstFacultyId) {
+            violations.push({
+              id: `viol-lab-fac-${labKey}-${i}-${j}`,
+              code: 'LAB_DURATION_VIOLATION',
+              severity: 'CRITICAL',
+              sessionIds: [block[0].id, sCurr.id],
+              entityName: cohortName,
+              day,
+              timeSlotId: sCurr.timeSlotId,
+              message: `Laboratory session for ${course?.code || courseId} changes faculty within the block.`,
+              recommendation: `All periods of a lab block must be led by the same faculty instructor.`,
+            });
+          }
         }
       }
+    }
+  });
+
+  // Check Faculty Weekly Teaching Limits
+  const facultyWeeklyHours = new Map<string, number>();
+  activeSessions.forEach(s => {
+    facultyWeeklyHours.set(s.facultyId, (facultyWeeklyHours.get(s.facultyId) || 0) + 1);
+  });
+  facultyWeeklyHours.forEach((hours, facId) => {
+    const fac = facultyMap.get(facId);
+    if (fac) {
+      const maxHours = fac.maxDirectTeachingHours || fac.weeklyHoursLimit || 40;
+      if (hours > maxHours) {
+        violations.push({
+          id: `viol-fac-max-load-${facId}`,
+          code: 'EXCESSIVE_FACULTY_DAILY_LOAD',
+          severity: 'CRITICAL',
+          sessionIds: activeSessions.filter(s => s.facultyId === facId).map(s => s.id),
+          entityName: fac.name,
+          day: 'Monday',
+          timeSlotId: 'N/A',
+          message: `Faculty ${fac.name} is allocated ${hours} hours/week, exceeding the maximum direct teaching limit of ${maxHours} hours.`,
+          recommendation: `Reduce teaching allocations or reassign sections.`
+        });
+      }
+    }
+  });
+
+  // Check Pinned Sessions Compliance
+  allocations.forEach(alloc => {
+    if (alloc.isPinned && alloc.pinnedDay && alloc.pinnedTimeSlotId) {
+      const matchingSession = activeSessions.find(
+        s => (s.allocationId === alloc.id || (s.courseId === alloc.courseId && s.sectionId === alloc.sectionId)) &&
+             s.day === alloc.pinnedDay &&
+             s.timeSlotId === alloc.pinnedTimeSlotId
+      );
+      if (!matchingSession) {
+        violations.push({
+          id: `viol-pinned-${alloc.id}`,
+          code: 'PINNED_SESSION_VIOLATION',
+          severity: 'CRITICAL',
+          sessionIds: [],
+          entityName: `Pinned Session (${alloc.courseId})`,
+          day: alloc.pinnedDay,
+          timeSlotId: alloc.pinnedTimeSlotId,
+          message: `Pinned session for course ${alloc.courseId} was not scheduled at its fixed slot (${alloc.pinnedDay} ${alloc.pinnedTimeSlotId}).`,
+          recommendation: `Ensure pinned session is fixed in place by solver.`
+        });
+      } else if (alloc.pinnedRoomId && matchingSession.roomId !== alloc.pinnedRoomId) {
+        violations.push({
+          id: `viol-pinned-room-${alloc.id}`,
+          code: 'PINNED_SESSION_VIOLATION',
+          severity: 'CRITICAL',
+          sessionIds: [matchingSession.id],
+          entityName: `Pinned Session Room (${alloc.courseId})`,
+          day: alloc.pinnedDay,
+          timeSlotId: alloc.pinnedTimeSlotId,
+          message: `Pinned session for course ${alloc.courseId} was scheduled in ${matchingSession.roomId} instead of pinned room ${alloc.pinnedRoomId}.`,
+          recommendation: `Assign exact pinned room.`
+        });
+      }
+    }
+  });
+
+  // Check Elective Group Synchronous Parallel Slots
+  const electiveGroupMap = new Map<string, CourseAllocation[]>();
+  allocations.forEach(alloc => {
+    if (alloc.electiveGroupId) {
+      if (!electiveGroupMap.has(alloc.electiveGroupId)) electiveGroupMap.set(alloc.electiveGroupId, []);
+      electiveGroupMap.get(alloc.electiveGroupId)!.push(alloc);
+    }
+  });
+
+  electiveGroupMap.forEach((groupAllocs, grpId) => {
+    if (groupAllocs.length > 1) {
+      // For each day and session, verify that allocations in the same elective group are scheduled in the same time slot
+      const allocSessionMap = new Map<string, ClassSession[]>();
+      groupAllocs.forEach(a => {
+        const sess = activeSessions.filter(s => s.allocationId === a.id || (s.courseId === a.courseId && s.sectionId === a.sectionId));
+        allocSessionMap.set(a.id, sess);
+      });
+
+      const firstAllocsSessions = allocSessionMap.get(groupAllocs[0].id) || [];
+      firstAllocsSessions.forEach((baseSess, idx) => {
+        for (let k = 1; k < groupAllocs.length; k++) {
+          const otherAllocsSessions = allocSessionMap.get(groupAllocs[k].id) || [];
+          const matchedSlot = otherAllocsSessions.some(
+            os => os.day === baseSess.day && os.timeSlotId === baseSess.timeSlotId
+          );
+          if (otherAllocsSessions.length > 0 && !matchedSlot) {
+            violations.push({
+              id: `viol-elective-${grpId}-${idx}-${k}`,
+              code: 'ELECTIVE_GROUP_MISMATCH',
+              severity: 'CRITICAL',
+              sessionIds: [baseSess.id],
+              entityName: `Elective Group ${grpId}`,
+              day: baseSess.day,
+              timeSlotId: baseSess.timeSlotId,
+              message: `Elective group ${grpId} sessions must be held in the same time slot across sections for concurrent student selection.`,
+              recommendation: `Align elective course slots concurrently.`
+            });
+          }
+        }
+      });
     }
   });
 

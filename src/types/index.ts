@@ -28,6 +28,7 @@ export interface AcademicYearConfig {
   approvedBy?: string;
   approvedAt?: string;
   publishedAt?: string;
+  buildingTravelMinutes?: Record<string, Record<string, number>>;
 }
 
 export interface Department {
@@ -143,7 +144,13 @@ export interface CourseAllocation {
   subSectionId?: string;
   sessionType: SessionType;
   hoursPerWeek: number;
+  durationPeriods?: number; // 1 for Lecture/Tutorial, 2 or 3 for Lab blocks
   preferredRoomId?: string;
+  electiveGroupId?: string;
+  isPinned?: boolean;
+  pinnedDay?: DayOfWeek;
+  pinnedTimeSlotId?: string;
+  pinnedRoomId?: string;
   status: 'Allocated' | 'Pending' | 'Conflict';
 }
 
@@ -178,6 +185,7 @@ export interface ValidationReport {
 
 export interface ClassSession {
   id: string;
+  allocationId?: string;
   courseId: string;
   facultyId: string;
   sectionId: string;
@@ -185,10 +193,13 @@ export interface ClassSession {
   roomId: string;
   day: DayOfWeek;
   timeSlotId: string;
+  durationPeriods?: number; // Number of periods spanned (default 1)
   type: SessionType;
   status: SessionStatus;
   isLocked?: boolean;
   lockReason?: string;
+  isPinned?: boolean;
+  electiveGroupId?: string;
   cancellationReason?: string;
   cancellationTimestamp?: string;
   originalSessionId?: string; // If this is a rescheduled makeup

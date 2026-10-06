@@ -33,7 +33,7 @@ export const INSTITUTIONS: Institution[] = [
 export const PERMISSIONS: Permission[] = [
   // Timetable
   { id: 'perm-tt-view', code: 'timetable.view', name: 'View Timetables', module: 'TIMETABLE', description: 'Read-only access to published and section timetables' },
-  { id: 'perm-tt-create', code: 'timetable.create', name: 'Generate Timetables', module: 'TIMETABLE', description: 'Execute solvers (CP-SAT / DSATUR) and create drafts' },
+  { id: 'perm-tt-create', code: 'timetable.create', name: 'Generate Timetables', module: 'TIMETABLE', description: 'Execute solvers (Constraint / DSATUR) and create drafts' },
   { id: 'perm-tt-edit', code: 'timetable.edit', name: 'Edit Timetables', module: 'TIMETABLE', description: 'Manually move, reschedule or adjust sessions' },
   { id: 'perm-tt-publish', code: 'timetable.publish', name: 'Publish Master Version', module: 'TIMETABLE', description: 'Commit candidate schedule to official production' },
   { id: 'perm-tt-lock', code: 'timetable.lock', name: 'Lock & Pin Sessions', module: 'TIMETABLE', description: 'Freeze slots, rooms, and faculty to prevent solver moves' },

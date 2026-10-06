@@ -64,7 +64,7 @@ export function WorkspaceSelectionView({
         return {
           title: 'Admin / Operations System',
           subtitle: 'Campus Governance & Planning',
-          description: 'Master schedule governance, CP-SAT optimization solvers, scenario planning, UGC compliance, and access directory.',
+          description: 'Master schedule governance, multi-objective optimization solvers, scenario planning, UGC compliance, and access directory.',
           icon: Shield,
           badge: 'Administration',
         };

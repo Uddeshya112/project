@@ -1,4 +1,5 @@
 import {
+  ClassSession,
   Room,
   Faculty,
   StudentSection,
@@ -6,6 +7,8 @@ import {
   CourseAllocation,
   AcademicConstraint,
   AcademicYearConfig,
+  TimeSlot,
+  DayOfWeek,
   ValidationReport,
   ValidationItem
 } from '../types';
@@ -185,41 +188,56 @@ export function validateAcademicSetup(
     }
   }
 
-  // 7. Check Capacity Compatibility
-  let capacityMismatchCount = 0;
-  const maxCapableRoom = Math.max(...availableRooms.map(r => r.capacity), 0);
+  // 7. Check Room Type, Equipment and Capacity Matching Compatibility
+  let roomMatchingErrors = 0;
   for (const alloc of allocations) {
+    const course = courses.find(c => c.id === alloc.courseId);
     const section = sections.find(s => s.id === alloc.sectionId);
-    if (!section) continue;
-    const requiredCap = alloc.subSectionId
-      ? section.subSections?.find(sub => sub.id === alloc.subSectionId)?.studentCount ?? Math.ceil(section.studentCount / 2)
-      : section.studentCount;
-    if (requiredCap > maxCapableRoom) {
-      capacityMismatchCount++;
+    if (!section || !course) continue;
+
+    const subSec = alloc.subSectionId ? section.subSections?.find(sb => sb.id === alloc.subSectionId) : undefined;
+    const requiredCap = subSec ? subSec.studentCount : (alloc.subSectionId ? Math.ceil(section.studentCount / 2) : section.studentCount);
+    const isLab = alloc.sessionType === 'Lab' || alloc.sessionType === 'Practical';
+
+    const compatibleRooms = availableRooms.filter(r => {
+      const typeOk = isLab
+        ? (r.type === 'ComputerLab' || r.type === 'HardwareLab')
+        : (r.type === 'LectureHall' || r.type === 'SeminarRoom' || r.type === 'TutorialRoom');
+      const capOk = r.capacity >= requiredCap;
+      const equipSet = new Set(r.equipment || []);
+      const equipOk = !course.requiredEquipment || course.requiredEquipment.length === 0 || course.requiredEquipment.every(eq => equipSet.has(eq));
+      return typeOk && capOk && equipOk;
+    });
+
+    if (compatibleRooms.length === 0) {
+      roomMatchingErrors++;
+      const reqEquip = course.requiredEquipment || [];
+      const bestTypeRooms = availableRooms.filter(r => isLab ? (r.type === 'ComputerLab' || r.type === 'HardwareLab') : (r.type !== 'ComputerLab' && r.type !== 'HardwareLab'));
+      const missingEquipDetails = reqEquip.length > 0 ? ` Required equipment: [${reqEquip.join(', ')}].` : '';
+
+      items.push({
+        id: `val-room-match-${alloc.id}`,
+        title: `Room Matching Shortage: ${course.code} (${alloc.sessionType})`,
+        category: 'Rooms & Labs',
+        status: 'Error',
+        message: `No available ${isLab ? 'laboratory' : 'lecture room'} meets capacity (${requiredCap} students) and equipment for ${course.code} (${section.name}${subSec ? `/${subSec.name}` : ''}).${missingEquipDetails}`,
+        fixTab: 'rooms_mgmt',
+      });
     }
   }
 
-  if (capacityMismatchCount > 0) {
+  if (roomMatchingErrors === 0) {
     items.push({
-      id: 'val-cap-error',
-      title: 'Room Capacity Shortage',
-      category: 'Infrastructure',
-      status: 'Error',
-      message: `${capacityMismatchCount} allocation(s) exceed the largest available room capacity.`,
-      fixTab: 'rooms',
-    });
-  } else {
-    items.push({
-      id: 'val-cap-ok',
-      title: 'Room Capacity Compliance',
+      id: 'val-room-match-ok',
+      title: 'Room & Equipment Matching Compliance',
       category: 'Infrastructure',
       status: 'Passed',
-      message: 'All section student counts fit within available physical rooms.',
+      message: 'All allocations have available matching physical rooms with sufficient capacity and required equipment.',
     });
   }
 
   // 8. Check Lab Requirements vs Lab Availability
-  const labAllocations = allocations.filter(a => a.sessionType === 'Lab');
+  const labAllocations = allocations.filter(a => a.sessionType === 'Lab' || a.sessionType === 'Practical');
   if (labAllocations.length > 0 && labs.length === 0) {
     items.push({
       id: 'val-lab-missing',
@@ -227,7 +245,7 @@ export function validateAcademicSetup(
       category: 'Infrastructure',
       status: 'Error',
       message: `${labAllocations.length} lab session(s) required, but 0 Computer/Hardware Labs are configured.`,
-      fixTab: 'rooms',
+      fixTab: 'rooms_mgmt',
     });
   }
 
@@ -252,7 +270,7 @@ export function validateAcademicSetup(
       category: 'Workload',
       status: 'Warning',
       message: `${workloadOverloadedFaculty} faculty member(s) assigned hours exceed their UGC direct teaching limit.`,
-      fixTab: 'faculty',
+      fixTab: 'faculty_mgmt',
     });
   } else {
     items.push({
@@ -274,5 +292,76 @@ export function validateAcademicSetup(
     warningCount,
     errorCount,
     items,
+  };
+}
+
+import { executeOptimizationEngine } from './optimizationEngine';
+import { validateTimetableIndependently } from './independentValidator';
+
+/**
+ * Generates a draft timetable using the high-performance Bitset Constraint Optimization Engine.
+ */
+export function generateTimetableFromConfiguration(
+  academicYear: AcademicYearConfig,
+  allocations: CourseAllocation[],
+  facultyMembers: Faculty[],
+  rooms: Room[],
+  sections: StudentSection[],
+  courses: Course[],
+  constraints: AcademicConstraint[]
+): {
+  sessions: ClassSession[];
+  scheduledHours: number;
+  totalRequestedHours: number;
+  unscheduledAllocations: CourseAllocation[];
+  conflicts: string[];
+} {
+  const engineResult = executeOptimizationEngine(
+    academicYear,
+    allocations,
+    facultyMembers,
+    rooms,
+    sections,
+    courses,
+    constraints,
+    { budgetMode: 'FAST', timeBudgetMs: 100, seed: 1337 }
+  );
+
+  if (engineResult.isFeasible && engineResult.bestCandidate) {
+    const report = validateTimetableIndependently(engineResult.bestCandidate.sessions, {
+      academicYear,
+      allocations,
+      facultyMembers,
+      rooms,
+      sections,
+      courses,
+      constraints,
+    });
+
+    if (report.isValid) {
+      return {
+        sessions: engineResult.bestCandidate.sessions,
+        scheduledHours: engineResult.bestCandidate.scheduledHours,
+        totalRequestedHours: engineResult.bestCandidate.totalRequestedHours,
+        unscheduledAllocations: engineResult.bestCandidate.unscheduledAllocations,
+        conflicts: [],
+      };
+    } else {
+      return {
+        sessions: [],
+        scheduledHours: 0,
+        totalRequestedHours: allocations.reduce((acc, a) => acc + a.hoursPerWeek, 0),
+        unscheduledAllocations: allocations,
+        conflicts: report.violations.map(v => v.message),
+      };
+    }
+  }
+
+  return {
+    sessions: [],
+    scheduledHours: 0,
+    totalRequestedHours: allocations.reduce((acc, a) => acc + a.hoursPerWeek, 0),
+    unscheduledAllocations: allocations,
+    conflicts: engineResult.infeasibilityDiagnostics || [engineResult.statusMessage],
   };
 }
