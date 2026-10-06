@@ -30,7 +30,7 @@ export interface ConflictGraphData {
 }
 
 export interface SolverBenchmarkResult {
-  solverName: 'DSATUR Graph Coloring' | 'CP-SAT Constraint Solver' | 'Fast Greedy Heuristic';
+  solverName: 'DSATUR Graph Coloring' | 'Heuristic Repair Solver' | 'Fast Greedy Heuristic';
   executionTimeMs: number;
   iterations: number;
   hardConstraintViolations: number;
@@ -273,11 +273,13 @@ export function runDSATURSolver(
 }
 
 /**
- * CP-SAT Constraint Optimization Simulator (Section 13, 14, 15)
- * Google OR-Tools CP-SAT integer programming solver:
- * Minimizes soft constraint penalties while strictly guaranteeing hard collisions = 0.
+ * Heuristic Repair Solver (Task 1)
+ *
+ * Honest implementation note: this function does not invoke Google OR-Tools
+ * and does not claim optimality. It performs deterministic repair of cancelled
+ * sessions using the existing hard-constraint feasibility predicate.
  */
-export function runCPSATSolver(
+export function runHeuristicRepairSolver(
   courses: Course[],
   sections: StudentSection[],
   facultyMembers: Faculty[],
@@ -285,49 +287,112 @@ export function runCPSATSolver(
   baselineSessions: ClassSession[]
 ): { sessions: ClassSession[]; benchmark: SolverBenchmarkResult } {
   const startTime = performance.now();
-  const logs: string[] = [];
+  const logs: string[] = [
+    '[HeuristicRepair] Starting deterministic baseline repair pass.',
+  ];
 
-  logs.push('[CP-SAT] Initializing Google OR-Tools CP-SAT Integer Model...');
-  logs.push('[CP-SAT] Defining binary decision variables x[c,t,r,f] in {0,1}...');
-  logs.push('[CP-SAT] Adding constraint: Exactly-one assignment sum(t,r,f) x[c,t,r,f] == 1');
-  logs.push('[CP-SAT] Adding constraint: Faculty conflict sum(c,r) x[c,t,r,f] <= 1');
-  logs.push('[CP-SAT] Adding constraint: Room conflict sum(c,f) x[c,t,r,f] <= 1');
-  logs.push('[CP-SAT] Adding constraint: Student section sum(c,r,f) x[c,t,r,f] <= 1');
-  logs.push('[CP-SAT] Multi-objective: Maximize PreferenceScore + WorkloadBalance - GapPenalty - TravelPenalty');
+  const workingDays: DayOfWeek[] = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+  const activeSlots = TIME_SLOTS.filter(ts => !ts.isLunch && !ts.isBreak);
+  const repairedSessions = baselineSessions.map(session => ({ ...session }));
+  let attempts = 0;
+  let repairedCount = 0;
 
-  // CP-SAT starts from baseline and performs soft constraint relaxation & optimization
-  const optimizedSessions = baselineSessions.map(s => {
-    // If it was cancelled, attempt optimal reassignment
-    if (s.status === 'Cancelled') {
-      return {
-        ...s,
-        status: 'Rescheduled' as const,
-        day: 'Thursday' as DayOfWeek,
-        timeSlotId: 'ts-4',
-        roomId: 'room-204',
-      };
+  for (let i = 0; i < repairedSessions.length; i++) {
+    const session = repairedSessions[i];
+    if (session.status !== 'Cancelled') continue;
+
+    const course = courses.find(c => c.id === session.courseId);
+    const faculty = facultyMembers.find(f => f.id === session.facultyId);
+    const section = sections.find(s => s.id === session.sectionId);
+    if (!course || !faculty || !section) {
+      logs.push(`[HeuristicRepair] Skipped cancelled session ${session.id}: missing course/faculty/section data.`);
+      continue;
     }
-    return s;
-  });
 
-  const endTime = performance.now();
-  const execTime = Math.round((endTime - startTime) * 10) / 10 + 45; // simulate CP-SAT branch-and-bound
+    const occupied = repairedSessions.filter(
+      other => other.id !== session.id && other.status !== 'Cancelled'
+    );
 
-  logs.push('[CP-SAT] Branch-and-bound search complete: Optimal solution found within time budget.');
-  logs.push('[CP-SAT] Hard constraint violations: 0 (Strict Mathematical Proof).');
+    let placement: ClassSession | null = null;
+    for (const day of workingDays) {
+      if (placement) break;
+      for (const slot of activeSlots) {
+        const matchingRooms = rooms
+          .filter(room => {
+            if (!room.isAvailable) return false;
+            if (course.requiresLab && room.type !== 'ComputerLab' && room.type !== 'HardwareLab') return false;
+            if (!course.requiresLab && (room.type === 'ComputerLab' || room.type === 'HardwareLab')) return false;
+            if (room.capacity < section.studentCount) return false;
+            if (!course.requiredEquipment.every(eq => room.equipment.includes(eq))) return false;
+            return true;
+          })
+          .sort((a, b) => a.id.localeCompare(b.id));
 
-  const health = calculateHealthScore(optimizedSessions, rooms, facultyMembers, sections, courses);
+        for (const room of matchingRooms) {
+          attempts++;
+          const check = checkHardConstraints(
+            {
+              day,
+              timeSlotId: slot.id,
+              roomId: room.id,
+              facultyId: faculty.id,
+              sectionId: section.id,
+              courseId: course.id,
+              subSectionId: session.subSectionId,
+            },
+            occupied,
+            rooms,
+            facultyMembers,
+            sections,
+            courses
+          );
+
+          if (!check.isFeasible) continue;
+
+          placement = {
+            ...session,
+            roomId: room.id,
+            day,
+            timeSlotId: slot.id,
+            status: 'Rescheduled',
+          };
+          break;
+        }
+      }
+    }
+
+    if (placement) {
+      repairedSessions[i] = placement;
+      repairedCount++;
+      logs.push(
+        `[HeuristicRepair] Repaired ${session.id} -> ${placement.day} ${placement.timeSlotId} ${placement.roomId}.`
+      );
+    } else {
+      logs.push(`[HeuristicRepair] No feasible repair found for ${session.id}; cancellation retained.`);
+    }
+  }
+
+  const health = calculateHealthScore(repairedSessions, rooms, facultyMembers, sections, courses);
+  const executionTimeMs = Math.round((performance.now() - startTime) * 10) / 10;
+  const hardViolations = health.hardConstraintViolations;
+
+  logs.push(
+    `[HeuristicRepair] Completed ${repairedCount} repairs after ${attempts} placement checks in ${executionTimeMs}ms.`
+  );
+  logs.push(
+    `[HeuristicRepair] Feasibility result: ${hardViolations === 0 ? 'no hard violations reported' : `${hardViolations} hard violation(s) reported`}.`
+  );
 
   return {
-    sessions: optimizedSessions,
+    sessions: repairedSessions,
     benchmark: {
-      solverName: 'CP-SAT Constraint Solver',
-      executionTimeMs: execTime,
-      iterations: 1420,
-      hardConstraintViolations: 0,
-      softScore: 98.6,
+      solverName: 'Heuristic Repair Solver',
+      executionTimeMs,
+      iterations: attempts,
+      hardConstraintViolations: hardViolations,
+      softScore: Math.max(0, Math.min(100, health.overallScore)),
       healthScore: health.overallScore,
-      solutionQuality: 'Globally Optimal / Best Feasible Bound',
+      solutionQuality: hardViolations === 0 ? 'Feasible (Heuristic Repair)' : 'Infeasible / Partial Repair',
       logs,
     },
   };
