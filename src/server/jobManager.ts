@@ -107,7 +107,6 @@ export class TimetableJobManager {
 
     const workerUrl = new URL('./timetableGenerationWorker.ts', import.meta.url);
     const worker = new Worker(workerUrl, {
-      type: 'module',
       workerData: payload,
       execArgv: process.execArgv,
     });
