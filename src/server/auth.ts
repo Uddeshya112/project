@@ -582,32 +582,37 @@ export function createAuth(opts: AuthOptions) {
 
   router.get('/api/auth/google/start', async (req, res) => {
     if (!googleEnabled) return res.redirect(`${appHome(req)}/?auth_error=${encodeURIComponent('Google sign-in is not configured.')}`);
-    if (rateLimit(`oauth:${req.ip}`, IP_LIMIT_PER_MIN, 60_000)) return res.status(429).send('Too many sign-in attempts. Try again shortly.');
+    const wait = await persistentRateLimit(`oauth:${req.ip}`, IP_LIMIT_PER_MIN, 60_000);
+    if (wait) return res.status(429).send('Too many sign-in attempts. Try again shortly.');
     const state = crypto.randomBytes(32).toString('base64url');
-    await db.query(`insert into ${T}.oauth_states (state) values ($1)`, [state]);
+    const codeVerifier = crypto.randomBytes(32).toString('base64url');
+    const codeChallenge = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
+    await db.query(`insert into ${T}.oauth_states (state, code_verifier) values ($1, $2)`, [state, codeVerifier]);
     const params = new URLSearchParams({
       client_id: opts.googleClientId!,
       redirect_uri: redirectUri(req),
       response_type: 'code',
       scope: 'openid email profile',
       state,
+      code_challenge: codeChallenge,
+      code_challenge_method: 'S256',
       prompt: 'select_account',
     });
     if (opts.allowedDomains.length === 1) params.set('hd', opts.allowedDomains[0]);
     return res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
   });
-
   router.get('/api/auth/google/callback', async (req, res) => {
     const fail = (message: string) => res.redirect(`${appHome(req)}/?auth_error=${encodeURIComponent(message)}`);
     const { code, state, error } = req.query;
     if (error) return fail('Google sign-in was cancelled.');
     if (!googleEnabled || typeof code !== 'string' || typeof state !== 'string') return fail('Invalid sign-in response.');
 
-    const consumed = await db.query(
-      `delete from ${T}.oauth_states where state = $1 and created_at > now() - interval '10 minutes' returning state`,
+    const consumed = await db.query<{ code_verifier: string }>(
+      `delete from ${T}.oauth_states where state = $1 and created_at > now() - interval '10 minutes' returning code_verifier`,
       [state],
     );
-    if (!consumed.length) return fail('Your sign-in link expired. Please try again.');
+    const codeVerifier = consumed[0]?.code_verifier;
+    if (!codeVerifier) return fail('Your sign-in link expired. Please try again.');
 
     try {
       const tokenResp = await fetch('https://oauth2.googleapis.com/token', {
@@ -619,51 +624,50 @@ export function createAuth(opts: AuthOptions) {
           client_secret: opts.googleClientSecret!,
           redirect_uri: redirectUri(req),
           grant_type: 'authorization_code',
+          code_verifier: codeVerifier,
         }),
       });
-      const tokens = (await tokenResp.json()) as { access_token?: string };
-      if (!tokenResp.ok || !tokens.access_token) return fail('Google sign-in could not be completed.');
+      const tokens = (await tokenResp.json()) as { access_token?: string; id_token?: string };
+      if (!tokenResp.ok || !tokens.access_token || !tokens.id_token) return fail('Google sign-in could not be completed.');
 
-      const infoResp = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
-        headers: { Authorization: `Bearer ${tokens.access_token}` },
-      });
-      const info = (await infoResp.json()) as { sub?: string; email?: string; email_verified?: boolean; name?: string };
-      if (!infoResp.ok || !info.sub || !info.email || !info.email_verified) return fail('Google did not return a verified email address.');
+      const client = new OAuth2Client(opts.googleClientId, opts.googleClientSecret, redirectUri(req));
+      let payload: any;
+      try {
+        const ticket = await client.verifyIdToken({ idToken: tokens.id_token, audience: opts.googleClientId });
+        payload = ticket.getPayload();
+      } catch {
+        return fail('Google identity verification failed.');
+      }
+      if (!payload?.sub || !payload.email || payload.email_verified !== true) return fail('Google did not return a verified institutional identity.');
 
-      const email = normEmail(info.email);
+      const email = normEmail(payload.email);
       const domain = email.split('@')[1];
-      if (opts.allowedDomains.length && !opts.allowedDomains.includes(domain)) {
-        return fail(`Please use your ${opts.allowedDomains.map((d) => '@' + d).join(' or ')} account.`);
+      if (opts.allowedDomains.length && (!domain || !opts.allowedDomains.includes(domain))) {
+        return fail('Please use your authorized institutional Google account.');
       }
 
-      let user = (await db.query<UserRow>(`select * from ${T}.users where google_sub = $1`, [info.sub]))[0] ?? (await userByEmail(email));
+      let user = (await db.query<UserRow>(`select * from ${T}.users where google_sub = $1`, [payload.sub]))[0] || (await userByEmail(email));
       if (user?.is_demo) return fail('Demo accounts cannot use Google sign-in.');
-      if (user && user.google_sub && user.google_sub !== info.sub) return fail('This email is linked to a different Google account.');
-
-      if (user && !user.google_sub) {
-        [user] = await db.query<UserRow>(`update ${T}.users set google_sub = $2 where id = $1 returning *`, [user.id, info.sub]);
-      }
+      if (user?.google_sub && user.google_sub !== payload.sub) return fail('This email is linked to a different Google account.');
       if (!user) {
         const match = opts.rosterLookup(email);
-        if (!match) {
-          return fail('Your account is not in the institute roster yet. Ask the timetable coordinator to add you.');
-        }
+        if (!match) return fail('Your account is not in the institute roster yet. Ask the timetable coordinator to add you.');
         [user] = await db.query<UserRow>(
-          `insert into ${T}.users (id, email, name, role_code, department, google_sub, profile)
-           values ($1, $2, $3, $4, $5, $6, $7) returning *`,
-          [`usr-${crypto.randomUUID()}`, email, match.name || info.name || email, match.roleCode, match.department, info.sub, match.profile ?? {}],
+          `insert into ${T}.users (id, email, name, role_code, department, google_sub, profile) values ($1,$2,$3,$4,$5,$6,$7) returning *`,
+          [`usr-${crypto.randomUUID()}`, email, match.name || payload.name || email, match.roleCode, match.department, payload.sub, match.profile ?? {}],
         );
+      } else if (!user.google_sub) {
+        [user] = await db.query<UserRow>(`update ${T}.users set google_sub=$2 where id=$1 returning *`, [user.id, payload.sub]);
       }
       if (user.status !== 'ACTIVE') return fail('This account is locked. Contact the timetable administrator.');
-
       await startSession(req, res, user);
+      await db.query(`insert into ${T}.audit_log (id, at, user_name, action, entity_type, entity_id, details) values ($1, now(), $2, 'LOGIN_SUCCESS', 'User', $3, $4)`, [`audit-${crypto.randomUUID()}`, user.name, user.id, 'Google sign-in completed.']);
       return res.redirect(`${appHome(req)}/`);
     } catch (err) {
       console.error('[auth] Google callback failed:', (err as Error).message);
       return fail('Google sign-in could not be completed.');
     }
   });
-
   // ---------------------------------------------------------------------------
   // User administration (College Admin / Super Admin)
   // ---------------------------------------------------------------------------
