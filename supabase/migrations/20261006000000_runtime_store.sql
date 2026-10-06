@@ -93,6 +93,18 @@ create table if not exists intellischedule.audit_log (
 );
 create index if not exists audit_log_at_idx on intellischedule.audit_log(at desc);
 
+-- Deny-by-default through Supabase APIs. The application connects with a dedicated server DB role.
+alter table intellischedule.users enable row level security;
+alter table intellischedule.auth_sessions enable row level security;
+alter table intellischedule.oauth_states enable row level security;
+alter table intellischedule.password_reset_tokens enable row level security;
+alter table intellischedule.rate_limits enable row level security;
+alter table intellischedule.replacement_votes enable row level security;
+alter table intellischedule.jobs enable row level security;
+alter table intellischedule.audit_log enable row level security;
+
+-- No application RLS policies are created here. With RLS enabled, the public/authenticated API roles cannot read or mutate runtime tables.
+
 -- Backfill columns for older deployments of this migration.
 alter table intellischedule.auth_sessions add column if not exists last_seen_at timestamptz not null default now();
 alter table intellischedule.auth_sessions add column if not exists absolute_expires_at timestamptz;
