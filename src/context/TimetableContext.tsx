@@ -117,8 +117,8 @@ interface TimetableContextType {
   setSelectedRoomId: (id: string) => void;
 
   activeVersionNumber?: number;
-  publishedSessions?: ClassSession[];
-  refresh?: () => Promise<any> | any;
+  publishedSessions: ClassSession[];
+  refresh: () => Promise<any> | any;
   isLoading?: boolean;
   loadError?: string | null;
   notice?: { type: 'success' | 'error'; message: string } | null;
@@ -2104,18 +2104,18 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     return { success: true };
   };
 
-  const toggleSessionLock = (sessionId: string, reason = 'Administrative Lock') => {
-    setSessions(prev =>
-      prev.map(s => {
-        if (s.id !== sessionId) return s;
-        const nextLock = !s.isLocked;
-        return {
-          ...s,
-          isLocked: nextLock,
-          lockReason: nextLock ? reason : undefined,
-        };
-      })
-    );
+  const toggleSessionLock = async (sessionId: string, reason = 'Administrative Lock'): Promise<void> => {
+    try {
+      const res = await fetch(apiUrl(`/api/timetable/sessions/${encodeURIComponent(sessionId)}/lock`), {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ reason }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success || !data.session) return;
+      setSessions(prev => prev.map(s => s.id === sessionId ? data.session : s));
+    } catch {}
   };
 
   const setFacultyProtectedSlot = async (
@@ -2242,7 +2242,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     return { success: true };
   };
 
-  const requestSubstituteCover = (
+  const requestSubstituteCover = async (
     substituteFacultyId: string,
     courseId: string,
     sectionId: string,
@@ -2267,22 +2267,19 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
   };
 
   const requestStudentMakeup = async (courseId: string, sectionId: string): Promise<{ success: boolean }> => {
-    const course = courses.find(c => c.id === courseId);
-    const section = sections.find(s => s.id === sectionId);
-    setNotifications(prev => [
-      {
-        id: `notif-${Date.now()}`,
-        type: 'makeup_request',
-        title: `Student Demand: Makeup Request (${course?.code || courseId})`,
-        message: `${section?.name} Class Representative launched makeup petition. 47/52 students signed availability.`,
-        timestamp: 'Just now',
-        read: false,
-        category: 'Info',
-        actionable: true,
-      },
-      ...prev,
-    ]);
-    return { success: true };
+    const message = `Student makeup request for ${courseId} / ${sectionId}`;
+    try {
+      const res = await fetch(apiUrl('/api/recovery/request-makeup'), {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ message }),
+      });
+      const data = await res.json().catch(() => ({}));
+      return { success: Boolean(res.ok && data.success) };
+    } catch {
+      return { success: false };
+    }
   };
 
   const addSession = async (sessionData: Omit<ClassSession, 'id' | 'version'>): Promise<{ isSuccess: boolean; error?: string }> => {
@@ -2425,4 +2422,3 @@ export function useTimetable() {
     throw new Error('useTimetable must be used within a TimetableProvider');
   }
   return context;
-}
