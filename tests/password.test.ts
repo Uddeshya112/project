@@ -52,3 +52,20 @@ test('Password hashing and verification with legacy SHA-256', async () => {
   const resWrong = await verifyPassword('WrongPassword123!', hash);
   assert.strictEqual(resWrong.isValid, false);
 });
+
+test('Password verification rejects malformed hashes without throwing', async () => {
+  const malformedScrypt = 'scrypt:deadbeef:00';
+  const malformedSha = 'sha256:deadbeef:00';
+  const scryptRes = await verifyPassword('StrongPassword123!', malformedScrypt);
+  const shaRes = await verifyPassword('StrongPassword123!', malformedSha);
+  assert.strictEqual(scryptRes.isValid, false);
+  assert.strictEqual(shaRes.isValid, false);
+});
+
+test('Password length is capped at 128 characters', async () => {
+  const tooLong = 'A'.repeat(129);
+  await assert.rejects(() => hashPasswordBcrypt(tooLong));
+  const validHash = await hashPasswordBcrypt('StrongPassword123!');
+  const verifyRes = await verifyPassword(tooLong, validHash);
+  assert.strictEqual(verifyRes.isValid, false);
+});
