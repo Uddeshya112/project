@@ -70,3 +70,12 @@ alter table intellischedule.oauth_states       enable row level security;
 alter table intellischedule.app_state          enable row level security;
 alter table intellischedule.timetable_versions enable row level security;
 alter table intellischedule.audit_log          enable row level security;
+
+create table if not exists intellischedule.password_reset_tokens (
+  token_hash  text primary key,
+  user_id     text not null references intellischedule.users(id) on delete cascade,
+  expires_at  timestamptz not null,
+  used_at     timestamptz,
+  created_at  timestamptz not null default now()
+);
+create index if not exists password_reset_tokens_expiry_idx on intellischedule.password_reset_tokens(expires_at);
