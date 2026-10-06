@@ -216,7 +216,7 @@ interface TimetableContextType {
   requestStudentMakeup: (courseId: string, sectionId: string) => Promise<{ success: boolean }>;
   declineOpportunity: (opportunityId: string) => Promise<{ success: boolean }>;
   claimMarketplaceSlot: (courseId: string, sectionId: string, day: DayOfWeek, timeSlotId: string, roomId: string, type: string) => Promise<{ success: boolean }>;
-  requestSubstituteCover: (substituteFacultyId: string, courseId: string, sectionId: string, day: DayOfWeek, timeSlotId: string) => void;
+  requestSubstituteCover: (substituteFacultyId: string, courseId: string, sectionId: string, day: DayOfWeek, timeSlotId: string) => Promise<{ success: boolean }>;
   addSession: (sessionData: Omit<ClassSession, 'id' | 'version'>) => Promise<{ isSuccess: boolean; error?: string }>;
 
   // Independent Validation & Controlled Machine Editing
