@@ -1,28 +1,31 @@
-# Security Threat Model & Risk Analysis — IntelliSchedule
+# Threat model
 
-**Target Institution**: Thapar Institute of Engineering and Technology  
-**Standard**: OWASP Top 10 / Application & Network Security Layer
+Scope: the single Node.js service (`server.ts`, `src/server/*`) and its Supabase database. Tests named below are in `tests/api.test.ts`.
 
----
+## Assets
 
-## 1. Threat Matrix & Mitigations
+Accounts and roles; the published timetable (what students and faculty act on); academic master data; the student roster (names, emails, roll numbers); the audit trail; database and Google credentials.
 
-| Threat Vector | Potential Impact | Implemented Mitigation | Verification Status |
-| :--- | :--- | :--- | :--- |
-| **Account Enumeration** | Attacker probes email list to identify active faculty/student accounts | Login & password reset return generic non-enumerating responses. | **VERIFIED** (Automated Test 1.3, 1.10) |
-| **Credential Brute Force / DDoS** | Automated bot attempts password spraying against user endpoints | In-memory token bucket rate limiter (10 attempts/min per IP, 5 attempts/min per account). Returns HTTP 429 with `Retry-After`. | **VERIFIED** (`checkRateLimit`) |
-| **OAuth CSRF & State Replay** | Attacker intercepts or replays OAuth callback requests | 256-bit cryptographic `state` generated per authorization request, stored with 10-minute expiry, and strictly deleted upon first consumption (single-use token). | **VERIFIED** (`googleOAuthStates`) |
-| **Cross-Tenant / Unauthorized Workspace Access** | Student attempts to access Coordinator or Admin tools | Server-authoritative role resolution in `server.ts`. Client-side route guard renders only authorized workspaces. | **VERIFIED** (`resolveWorkspacesForUser`) |
-| **Session Hijacking** | XSS steals session credentials from browser storage | Session tokens stored with `HttpOnly`, `SameSite=Lax`, `Secure` cookie flags. | **VERIFIED** (`res.cookie`) |
-| **Privilege Escalation via Email Domain** | User registers with institutional email expecting elevated staff role | Email domain never implies role. Roles are resolved strictly against authoritative staff directory (`PRE_AUTHORIZED_STAFF`). | **VERIFIED** (Automated Test 1.8) |
-| **Double-Booking & Resource Contention** | Room or faculty assigned to multiple classes simultaneously | Hard constraint engine (`checkHardConstraints`) rejects any simultaneous assignment. | **VERIFIED** (Automated Test 3.1, 3.2, 3.3) |
+## Threats and controls
 
----
+| Threat | Controls in the code | Remaining risk |
+| --- | --- | --- |
+| **Demo mode left on** | `DEMO_MODE=false` disables one-click demo sign-in (403); a warning is logged at production start while it is on. | Default is on. Anyone can act as the demo College Admin until it is turned off; with it off, demo accounts are refused even with their password and their sessions stop working. Sample accounts have published passwords and must be changed or locked. See [DEMO_ACCOUNTS.md](../DEMO_ACCOUNTS.md). |
+| **Password guessing** | bcrypt (cost 12); 10 attempts per email per 15 min; per-IP limit (default 300/min, high because of campus NAT); password policy 12+ chars with upper, lower, digit, symbol for new and changed passwords. Test: "login is rate limited per account". | Counters are in memory, per process, reset on restart. Seeded passwords are only as strong as `SAMPLE_ACCOUNTS_PASSWORD` / `DEMO_ACCOUNTS_PASSWORD`. |
+| **Account enumeration** | Same 401 message for unknown email and wrong password; a dummy bcrypt compare when there is no password hash; forgot-password gives the same reply for every address. | A locked account answers 403 after a correct password. |
+| **Session theft** | Random 256-bit token in an httpOnly, SameSite=Lax cookie, `Secure` when the request is HTTPS (needs correct `TRUST_PROXY`); only its SHA-256 is stored; 7-day default lifetime; logout deletes it; role change, lock and password reset revoke all of a user's sessions; locked users' sessions stop working at once. Test: cookie flags, revoke on role change. | No idle timeout. A stolen cookie works until it expires or is revoked. |
+| **Cross-site request forgery** | SameSite=Lax cookie; non-GET `/api` requests with a foreign `Origin` are rejected (403). GET endpoints do not change state. Test: "cross-site state-changing requests are rejected". | Requests without an `Origin` header are allowed (non-browser clients). |
+| **XSS / clickjacking** | React escapes output; in production a CSP with `script-src 'self'`, `frame-ancestors 'none'`; `X-Frame-Options: DENY`; `nosniff`; HSTS. | `style-src` allows `'unsafe-inline'`. CSP and HSTS are only sent when `NODE_ENV=production`. |
+| **Google sign-in abuse** | Authorization-code flow with a single-use `state` stored in the database (10 min); verified email required; domain allowlist (`ALLOWED_EMAIL_DOMAINS`, `hd` hint); new users only if their email is in the imported roster, role taken from the roster; an email already linked to another Google account is refused; demo accounts cannot use Google. | No PKCE or nonce (confidential server-side client). Anyone added to the roster by a coordinator gets an account on first Google sign-in. |
+| **Privilege escalation** | Role read from the database on every request; route guards per endpoint ([permissions.md](../permissions.md)); faculty limited to own classes and CRs to own section in `store.ts`; users can edit only non-identity profile fields; admins cannot change their own role or delete themselves. Tests: "students see only what they should", "faculty can only cancel their own classes", profile test. | Admin and Super Admin have identical rights. |
+| **Data exposure to signed-in users** | Student roster, audit log and version details are staff-only. | `GET /api/academic/bootstrap` sends every signed-in user the full academic dataset, including faculty emails and all sections' sessions; the UI filters it. |
+| **Direct database access** | Tables in the `intellischedule` schema (not exposed by Supabase's REST API); RLS enabled with no policies; the browser never gets database credentials; TLS to the database, verified when `DATABASE_SSL_CA` is set. | Without `DATABASE_SSL_CA` the certificate is not verified. Anyone with `DATABASE_URL` has full access. |
+| **Lost or overwritten updates** | Each save is one transaction; documents carry a version and a stale writer fails with 409 instead of overwriting. Test: "concurrent writers cannot silently overwrite each other". | Correct only with one instance serving traffic. |
+| **Invalid timetables** | Hard constraints checked on the server for generate, select, move, swap, add, approve and publish; deletes of records in use refused. | Restoring a version is allowed even with violations; publish then refuses it. |
+| **Denial of service** | Body limit 10 MB; import lists capped at 50,000 rows each; solver budget capped at 3 s per routine and generation limited to coordinators/admins; benchmark staff-only, once per 10 s per user; notifications 10/min per user. | The solver blocks the event loop while it runs, so a coordinator can stall all requests for several seconds. No general per-IP limit on other endpoints. |
+| **Tampering with history** | `audit_log` and `timetable_versions` are append-only in the app (versions: only the published flag changes). | Anyone with database credentials can change them. The audit log records the actor's display name, not the user id. |
+| **Secrets in the repo or logs** | `.env` and key files are git-ignored and excluded from the Docker build; secrets come from environment / Secret Manager; request bodies are not logged. | Error logs include stack traces of unexpected errors. |
 
-## 2. Security Headers
+## Not covered
 
-The application injects modern security headers across all HTTP responses:
-- `X-Content-Type-Options: nosniff`
-- `X-Frame-Options: SAMEORIGIN`
-- `Referrer-Policy: strict-origin-when-cross-origin`
-- `Permissions-Policy: camera=(), microphone=(), geolocation=()`
+No WAF, no malware scanning of uploads (the Excel file is parsed in the browser; only JSON rows reach the server), no MFA, no email verification for password accounts created by admins.

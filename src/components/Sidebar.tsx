@@ -371,6 +371,18 @@ export function Sidebar({
               <Layers className="h-4 w-4 shrink-0" />
               <span>Master Approvals</span>
             </button>
+
+            <button
+              onClick={() => handleSelect('auth_gov')}
+              className={`w-full text-left px-3 py-2 rounded-lg transition-all font-medium flex items-center gap-2 ${
+                activeView === 'auth_gov'
+                  ? 'bg-[#8C1B2E] text-white font-semibold shadow-xs'
+                  : 'hover:bg-stone-100 dark:hover:bg-zinc-800 text-stone-800 dark:text-zinc-200'
+              }`}
+            >
+              <Shield className="h-4 w-4 shrink-0" />
+              <span>Users & Roles</span>
+            </button>
           </div>
         )}
       </div>
@@ -404,12 +416,10 @@ export function Sidebar({
           </div>
 
           <button
-            onClick={() => {
-              logout();
-              if (onShowLoginPage) onShowLoginPage();
-            }}
+            onClick={() => (onShowLoginPage ? onShowLoginPage() : logout())}
             className="p-1 text-stone-400 hover:text-[#8C1B2E] dark:text-zinc-400 dark:hover:text-red-400 rounded transition-colors"
             title="Sign out"
+            aria-label="Sign out"
           >
             <LogOut className="h-3.5 w-3.5" />
           </button>
@@ -429,6 +439,7 @@ export function Sidebar({
           <div
             className="fixed inset-0 bg-slate-900/40 dark:bg-black/70 backdrop-blur-xs transition-opacity"
             onClick={onClose}
+            aria-hidden="true"
           />
           <div className="relative z-10 h-full w-[80%] max-w-[280px]">
             {navContent}

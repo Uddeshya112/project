@@ -5,8 +5,8 @@ dist-server
 .env
 .env.*
 !.env.example
-.env.local
-*.pem
-*.key
+.git
 *.log
-*.sqlite
+*.xlsx
+docs
+tests

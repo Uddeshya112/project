@@ -1,47 +1,40 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { useTimetable } from '../../context/TimetableContext';
-import {
-  Shield,
-  Activity,
-  Calendar,
-  Layers,
-  FlaskConical,
-  Cpu,
-  History,
-  KeyRound,
-  CheckCircle2,
-  AlertTriangle,
-  ArrowRight,
-  Zap,
-  Building,
-  Users
-} from 'lucide-react';
+import { Shield, ArrowRight } from 'lucide-react';
 
 import { TimetableGridView } from './TimetableGridView';
-import { RecoveryEngineView } from './RecoveryEngineView';
-import { WhatIfSimulatorView } from './WhatIfSimulatorView';
-import { SolverBenchmarkView } from './SolverBenchmarkView';
 import { GovernanceView } from './GovernanceView';
 import { AuthGovernanceView } from './AuthGovernanceView';
 
 export function AdminPortalView() {
   const {
     health,
-    makeupTasks,
     sessions,
     versions,
+    activeVersionNumber,
     rooms,
     facultyMembers,
-    sections,
     courses,
+    activeView,
     setActiveView,
   } = useTimetable();
 
-  const [activeWorkflow, setActiveWorkflow] = useState<'operations' | 'planning' | 'governance' | 'system'>('operations');
-  const [subView, setSubView] = useState<'overview' | 'grid' | 'recovery' | 'whatif' | 'solvers' | 'audit' | 'rbac'>('overview');
+  // The admin workspace renders its screens from the shared activeView, so the sidebar and these tabs agree.
+  const subView =
+    activeView === 'grid' ? 'grid' : activeView === 'governance' ? 'audit' : activeView === 'auth_gov' ? 'users' : 'overview';
 
-  const pendingMakeups = makeupTasks.filter(m => m.status !== 'Scheduled');
-  const cancelledSessions = sessions.filter(s => s.status === 'Cancelled');
+  const activeFaculty = facultyMembers.filter(f => f.status !== 'Inactive').length;
+  const activeCourses = courses.filter(c => c.status !== 'Archived').length;
+  const buildings = [...new Set(rooms.map(r => r.building).filter(Boolean))];
+  // Hard violations of the working draft as measured by the server's validator when the version was saved.
+  const draftConflicts =
+    versions.find(v => v.versionNumber === activeVersionNumber)?.hardViolationsCount ?? health.hardConstraintViolations;
+
+  const tabs = [
+    { view: 'overview', label: 'Overview', target: 'overview' },
+    { view: 'audit', label: 'Approvals', target: 'governance' },
+    { view: 'users', label: 'Users', target: 'auth_gov' },
+  ] as const;
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
@@ -62,32 +55,19 @@ export function AdminPortalView() {
 
         {/* Workflow Switcher Tabs */}
         <div className="flex bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 p-1 rounded-xl text-xs font-medium">
-          <button
-            onClick={() => {
-              setActiveWorkflow('operations');
-              setSubView('overview');
-            }}
-            className={`px-3 py-1.5 rounded-lg transition-colors ${
-              activeWorkflow === 'operations'
-                ? 'bg-[#8C1B2E] text-white font-semibold shadow-xs'
-                : 'text-stone-700 dark:text-zinc-400 hover:text-stone-900 dark:hover:text-zinc-200'
-            }`}
-          >
-            Overview
-          </button>
-          <button
-            onClick={() => {
-              setActiveWorkflow('governance');
-              setSubView('audit');
-            }}
-            className={`px-3 py-1.5 rounded-lg transition-colors ${
-              activeWorkflow === 'governance'
-                ? 'bg-[#8C1B2E] text-white font-semibold shadow-xs'
-                : 'text-stone-700 dark:text-zinc-400 hover:text-stone-900 dark:hover:text-zinc-200'
-            }`}
-          >
-            Approvals
-          </button>
+          {tabs.map(tab => (
+            <button
+              key={tab.view}
+              onClick={() => setActiveView(tab.target)}
+              className={`px-3 py-1.5 rounded-lg transition-colors ${
+                subView === tab.view
+                  ? 'bg-[#8C1B2E] text-white font-semibold shadow-xs'
+                  : 'text-stone-700 dark:text-zinc-400 hover:text-stone-900 dark:hover:text-zinc-200'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -99,61 +79,72 @@ export function AdminPortalView() {
             <div className="p-4 bg-[#FAF9F5] dark:bg-zinc-900/50 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl space-y-1 shadow-xs">
               <span className="text-xs text-stone-500 dark:text-zinc-400 font-medium">Total Faculty</span>
               <div className="text-2xl font-bold font-serif text-stone-900 dark:text-zinc-100">{facultyMembers.length}</div>
-              <span className="text-[11px] text-stone-500 dark:text-zinc-400">Active Teachers</span>
+              <span className="text-[11px] text-stone-500 dark:text-zinc-400">{activeFaculty} active</span>
             </div>
 
             <div className="p-4 bg-[#FAF9F5] dark:bg-zinc-900/50 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl space-y-1 shadow-xs">
               <span className="text-xs text-stone-500 dark:text-zinc-400 font-medium">Total Courses</span>
               <div className="text-2xl font-bold font-serif text-stone-900 dark:text-zinc-100">{courses.length}</div>
-              <span className="text-[11px] text-stone-500 dark:text-zinc-400">Active Offerings</span>
+              <span className="text-[11px] text-stone-500 dark:text-zinc-400">{activeCourses} active offerings</span>
             </div>
 
             <div className="p-4 bg-[#FAF9F5] dark:bg-zinc-900/50 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl space-y-1 shadow-xs">
               <span className="text-xs text-stone-500 dark:text-zinc-400 font-medium">Classrooms & Labs</span>
               <div className="text-2xl font-bold font-serif text-stone-900 dark:text-zinc-100">{rooms.length}</div>
-              <span className="text-[11px] text-stone-500 dark:text-zinc-400">Turing & Academic Blocks</span>
+              <span className="text-[11px] text-stone-500 dark:text-zinc-400 line-clamp-1" title={buildings.join(', ')}>
+                {buildings.length ? buildings.join(', ') : 'No rooms yet'}
+              </span>
             </div>
 
             <div className="p-4 bg-[#FAF9F5] dark:bg-zinc-900/50 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl space-y-1 shadow-xs">
               <span className="text-xs text-stone-500 dark:text-zinc-400 font-medium">Timetable Health</span>
-              <div className="text-2xl font-bold font-serif text-emerald-700 dark:text-emerald-400">{health.overallScore}%</div>
-              <span className="text-[11px] text-emerald-700 dark:text-emerald-400 font-medium">No Clashes</span>
+              <div className="text-2xl font-bold font-serif text-stone-900 dark:text-zinc-100">
+                {sessions.length ? `${health.overallScore}%` : '—'}
+              </div>
+              {sessions.length === 0 ? (
+                <span className="text-[11px] text-stone-500 dark:text-zinc-400">No timetable yet</span>
+              ) : draftConflicts === 0 ? (
+                <span className="text-[11px] text-emerald-700 dark:text-emerald-400 font-medium">No clashes</span>
+              ) : (
+                <span className="text-[11px] text-rose-700 dark:text-rose-400 font-medium">{draftConflicts} hard clashes</span>
+              )}
             </div>
           </div>
 
           {/* Quick Action Navigation */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div
+            <button
               onClick={() => setActiveView('grid')}
-              className="p-4 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl cursor-pointer hover:border-[#8C1B2E] transition-all shadow-xs space-y-2 group"
+              className="text-left p-4 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl cursor-pointer hover:border-[#8C1B2E] transition-all shadow-xs space-y-2 group"
             >
               <div className="flex items-center justify-between">
                 <span className="font-bold text-stone-900 dark:text-zinc-100 text-sm group-hover:text-[#8C1B2E] transition-colors">View Full Master Timetable</span>
                 <ArrowRight className="h-4 w-4 text-stone-400 group-hover:text-[#8C1B2E] transition-colors" />
               </div>
               <p className="text-xs text-stone-600 dark:text-zinc-400">
-                Inspect weekly class schedules across all sections, teachers, and rooms.
+                Inspect weekly class schedules across all sections, teachers, and rooms, and publish the working draft.
               </p>
-            </div>
+            </button>
 
-            <div
+            <button
               onClick={() => setActiveView('governance')}
-              className="p-4 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl cursor-pointer hover:border-[#8C1B2E] transition-all shadow-xs space-y-2 group"
+              className="text-left p-4 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl cursor-pointer hover:border-[#8C1B2E] transition-all shadow-xs space-y-2 group"
             >
               <div className="flex items-center justify-between">
                 <span className="font-bold text-stone-900 dark:text-zinc-100 text-sm group-hover:text-[#8C1B2E] transition-colors">Approvals & Timetable Status</span>
                 <ArrowRight className="h-4 w-4 text-stone-400 group-hover:text-[#8C1B2E] transition-colors" />
               </div>
               <p className="text-xs text-stone-600 dark:text-zinc-400">
-                Review timetable drafts, check approval status, and publish schedules.
+                Review timetable versions, locks, and the audit trail.
               </p>
-            </div>
+            </button>
           </div>
         </div>
       )}
 
       {subView === 'grid' && <TimetableGridView />}
       {subView === 'audit' && <GovernanceView />}
+      {subView === 'users' && <AuthGovernanceView />}
     </div>
   );
 }

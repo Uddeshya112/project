@@ -23,10 +23,34 @@ import {
   Database,
   ArrowRight,
   Info,
-  Check
+  Check,
+  GraduationCap as StudentIcon
 } from 'lucide-react';
 
-export function MasterExcelHub({ onNavigateToTab }: { onNavigateToTab?: (tab: string) => void }) {
+const EMPTY_PARSED: ExcelImportPreview['parsedData'] = {
+  departments: [],
+  programs: [],
+  courses: [],
+  faculty: [],
+  rooms: [],
+  groups: [],
+  subgroups: [],
+  allocations: [],
+  students: []
+};
+
+const failedPreview = (message: string): ExcelImportPreview => ({
+  sheetCounts: { departments: 0, programs: 0, courses: 0, faculty: 0, rooms: 0, groups: 0, subgroups: 0, allocations: 0, students: 0 },
+  totalRows: 0,
+  validRows: 0,
+  warningCount: 0,
+  errorCount: 1,
+  warnings: [],
+  errors: [message],
+  parsedData: EMPTY_PARSED
+});
+
+export function MasterExcelHub({ onNavigateToTab, canEdit = true }: { onNavigateToTab?: (tab: string) => void; canEdit?: boolean }) {
   const {
     departments,
     programs,
@@ -35,8 +59,7 @@ export function MasterExcelHub({ onNavigateToTab }: { onNavigateToTab?: (tab: st
     rooms,
     sections,
     allocations,
-    commitMasterImport,
-    runValidation
+    commitMasterImport
   } = useTimetable();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -51,6 +74,9 @@ export function MasterExcelHub({ onNavigateToTab }: { onNavigateToTab?: (tab: st
   } | null>(null);
   const [activeErrorFilter, setActiveErrorFilter] = useState<'all' | 'errors' | 'warnings'>('all');
   const [isDragging, setIsDragging] = useState(false);
+  const [isCommitting, setIsCommitting] = useState(false);
+  const rowCount = preview ? Object.values(preview.parsedData).reduce((n, rows) => n + rows.length, 0) : 0;
+  const canImport = Boolean(preview && preview.errorCount === 0 && rowCount > 0);
 
   // Helper for initiating browser download of an XLSX Blob
   const triggerDownload = (blob: Blob, filename: string) => {
@@ -89,8 +115,12 @@ export function MasterExcelHub({ onNavigateToTab }: { onNavigateToTab?: (tab: st
   // 2. Handle File Selection and Parsing
   const processFile = async (file: File) => {
     setSelectedFile(file);
-    setIsParsing(true);
     setCommitResult(null);
+    if (!/\.(xlsx|xls)$/i.test(file.name)) {
+      setPreview(failedPreview('Only Excel workbooks (.xlsx or .xls) are supported. Download the template and fill it in.'));
+      return;
+    }
+    setIsParsing(true);
 
     try {
       const parsedPreview = await parseMasterExcelWorkbook(file, {
@@ -103,36 +133,7 @@ export function MasterExcelHub({ onNavigateToTab }: { onNavigateToTab?: (tab: st
       });
       setPreview(parsedPreview);
     } catch (err: any) {
-      setPreview({
-        sheetCounts: {
-          departments: 0,
-          programs: 0,
-          courses: 0,
-          faculty: 0,
-          rooms: 0,
-          groups: 0,
-          subgroups: 0,
-          allocations: 0,
-          students: 0
-        },
-        totalRows: 0,
-        validRows: 0,
-        warningCount: 0,
-        errorCount: 1,
-        warnings: [],
-        errors: [`Could not parse Excel file: ${err?.message || 'Invalid format'}`],
-        parsedData: {
-          departments: [],
-          programs: [],
-          courses: [],
-          faculty: [],
-          rooms: [],
-          groups: [],
-          subgroups: [],
-          allocations: [],
-          students: []
-        }
-      });
+      setPreview(failedPreview(`Could not parse Excel file: ${err?.message || 'Invalid format'}`));
     } finally {
       setIsParsing(false);
     }
@@ -140,6 +141,7 @@ export function MasterExcelHub({ onNavigateToTab }: { onNavigateToTab?: (tab: st
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-selecting the same file after fixing it
     if (file) {
       processFile(file);
     }
@@ -155,11 +157,17 @@ export function MasterExcelHub({ onNavigateToTab }: { onNavigateToTab?: (tab: st
   };
 
   // 3. Commit Master Data
-  const handleCommit = () => {
-    if (!preview || preview.errorCount > 0) return;
-    const result = commitMasterImport(preview.parsedData, importMode);
-    setCommitResult(result);
-    runValidation();
+  const handleCommit = async () => {
+    if (!preview || !canImport || isCommitting) return;
+    if (
+      importMode === 'replace' &&
+      !window.confirm('Clean Replace deletes all existing faculty, rooms, courses, groups, allocations and students before importing this workbook. Continue?')
+    ) {
+      return;
+    }
+    setIsCommitting(true);
+    setCommitResult(await commitMasterImport(preview.parsedData, importMode));
+    setIsCommitting(false);
   };
 
   return (
@@ -193,6 +201,7 @@ export function MasterExcelHub({ onNavigateToTab }: { onNavigateToTab?: (tab: st
 
             <button
               onClick={() => handleDownloadTemplate(true)}
+              title="Exports departments, programs, courses, faculty, rooms, groups and allocations (not the student roster)"
               className="flex items-center gap-2 px-3.5 py-2 bg-[#8C1B2E] hover:bg-[#731625] text-white rounded-lg text-xs font-semibold shadow-xs transition-colors"
             >
               <Download className="h-3.5 w-3.5" />
@@ -215,6 +224,15 @@ export function MasterExcelHub({ onNavigateToTab }: { onNavigateToTab?: (tab: st
             </div>
 
             <div
+              role="button"
+              tabIndex={0}
+              aria-label="Select an Excel workbook to import"
+              onKeyDown={e => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  fileInputRef.current?.click();
+                }
+              }}
               onDragOver={e => {
                 e.preventDefault();
                 setIsDragging(true);
@@ -231,7 +249,7 @@ export function MasterExcelHub({ onNavigateToTab }: { onNavigateToTab?: (tab: st
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".xlsx,.xls,.csv"
+                accept=".xlsx,.xls"
                 onChange={handleFileChange}
                 className="hidden"
               />
@@ -283,13 +301,17 @@ export function MasterExcelHub({ onNavigateToTab }: { onNavigateToTab?: (tab: st
 
               {preview && (
                 <div className="flex items-center gap-2">
-                  {preview.errorCount === 0 ? (
+                  {canImport ? (
                     <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20">
                       <CheckCircle2 className="h-3.5 w-3.5" /> Ready for Import
                     </span>
-                  ) : (
+                  ) : preview.errorCount > 0 ? (
                     <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded bg-rose-50 text-rose-800 border border-rose-200 dark:bg-red-500/10 dark:text-red-400 dark:border-red-500/20">
                       <XCircle className="h-3.5 w-3.5" /> {preview.errorCount} Blocking Error{preview.errorCount > 1 ? 's' : ''}
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded bg-amber-50 text-amber-800 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20">
+                      <AlertTriangle className="h-3.5 w-3.5" /> No rows found
                     </span>
                   )}
                   {preview.warningCount > 0 && (
@@ -309,7 +331,7 @@ export function MasterExcelHub({ onNavigateToTab }: { onNavigateToTab?: (tab: st
             ) : preview ? (
               <div className="space-y-4">
                 {/* 8 Metric Badges for Detected Worksheets */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs">
                   <div className="p-2.5 bg-white dark:bg-zinc-950/60 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 flex items-center justify-between">
                     <span className="text-stone-500 flex items-center gap-1.5">
                       <Building2 className="h-3.5 w-3.5 text-stone-400" /> Depts
@@ -365,6 +387,13 @@ export function MasterExcelHub({ onNavigateToTab }: { onNavigateToTab?: (tab: st
                     </span>
                     <strong className="font-mono text-emerald-700 dark:text-emerald-400">{preview.sheetCounts.allocations}</strong>
                   </div>
+
+                  <div className="p-2.5 bg-white dark:bg-zinc-950/60 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 flex items-center justify-between">
+                    <span className="text-stone-500 flex items-center gap-1.5">
+                      <StudentIcon className="h-3.5 w-3.5 text-stone-400" /> Students
+                    </span>
+                    <strong className="font-mono text-stone-900 dark:text-zinc-100">{preview.sheetCounts.students}</strong>
+                  </div>
                 </div>
 
                 {/* Audit Logs (Errors & Warnings) */}
@@ -417,6 +446,7 @@ export function MasterExcelHub({ onNavigateToTab }: { onNavigateToTab?: (tab: st
                 )}
 
                 {/* Step 4: Mode selector and Commit Execution */}
+                {canEdit ? (
                 <div className="pt-2 border-t border-[#E5E2D9] dark:border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="flex items-center gap-4 text-xs">
                     <span className="font-semibold text-stone-700 dark:text-zinc-300">Synchronization Mode:</span>
@@ -444,17 +474,22 @@ export function MasterExcelHub({ onNavigateToTab }: { onNavigateToTab?: (tab: st
 
                   <button
                     onClick={handleCommit}
-                    disabled={preview.errorCount > 0}
+                    disabled={!canImport || isCommitting}
                     className={`flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg text-xs font-semibold shadow-xs transition-all ${
-                      preview.errorCount === 0
+                      canImport && !isCommitting
                         ? 'bg-[#8C1B2E] hover:bg-[#731625] text-white cursor-pointer'
                         : 'bg-stone-200 text-stone-400 dark:bg-zinc-800 dark:text-zinc-500 cursor-not-allowed'
                     }`}
                   >
-                    <Database className="h-4 w-4" />
-                    <span>Apply & Synchronize Master Data</span>
+                    {isCommitting ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />}
+                    <span>{isCommitting ? 'Importing…' : 'Apply & Synchronize Master Data'}</span>
                   </button>
                 </div>
+                ) : (
+                  <p className="pt-2 border-t border-[#E5E2D9] dark:border-zinc-800 text-[11px] text-stone-500 dark:text-zinc-400">
+                    Only coordinators and admins can import master data.
+                  </p>
+                )}
               </div>
             ) : (
               <div className="p-8 text-center text-xs text-stone-400 dark:text-zinc-500 border border-dashed border-[#E5E2D9] dark:border-zinc-800 rounded-xl">
@@ -471,17 +506,23 @@ export function MasterExcelHub({ onNavigateToTab }: { onNavigateToTab?: (tab: st
                     : 'bg-rose-50 border-rose-200 text-rose-900 dark:bg-red-950/20 dark:border-red-800/40 dark:text-red-300'
                 }`}
               >
-                <div className="flex items-start gap-2.5">
-                  <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
+                <div className="flex items-start gap-2.5" role={commitResult.success ? 'status' : 'alert'}>
+                  {commitResult.success ? (
+                    <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
+                  ) : (
+                    <XCircle className="h-4 w-4 text-rose-600 dark:text-red-400 mt-0.5 shrink-0" />
+                  )}
                   <div>
-                    <div className="font-bold">{commitResult.message}</div>
+                    <div className="font-bold whitespace-pre-line max-h-60 overflow-y-auto">{commitResult.message || (commitResult.success ? 'Import complete.' : 'Import failed.')}</div>
                     <p className="text-[11px] text-stone-600 dark:text-zinc-400 mt-0.5">
-                      All cross-references and cohort groups are now stored in memory. You can inspect Groups & Subgroups or run the generator.
+                      {commitResult.success
+                        ? 'The data is saved on the server. You can inspect Groups & Subgroups or run the generator.'
+                        : 'Nothing was changed. Fix the rows listed above in the workbook and upload it again.'}
                     </p>
                   </div>
                 </div>
 
-                {onNavigateToTab && (
+                {commitResult.success && onNavigateToTab && (
                   <button
                     onClick={() => onNavigateToTab('generator')}
                     className="flex items-center gap-1 px-3 py-1.5 bg-[#8C1B2E] text-white rounded-lg text-xs font-medium shrink-0 hover:bg-[#731625] transition-colors"

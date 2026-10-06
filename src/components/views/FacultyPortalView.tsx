@@ -1,30 +1,44 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useTimetable } from '../../context/TimetableContext';
 import { useAuth } from '../../context/AuthContext';
-import { TIME_SLOTS } from '../../lib/initialData';
-import { DayOfWeek } from '../../types';
+import type { DayOfWeek, TimeSlot } from '../../types';
 import {
   Calendar,
   Clock,
   CheckCircle2,
-  XCircle,
-  AlertCircle,
   ShieldCheck,
   BookOpen,
-  Plus,
-  Check,
-  MessageSquare,
   MapPin
 } from 'lucide-react';
 
+/** Length of a period in hours from its "HH:MM" start/end (1 if unparseable). */
+const slotHours = (slot?: TimeSlot) => {
+  if (!slot) return 0;
+  const mins = (t: string) => {
+    const [h, m] = t.split(':').map(Number);
+    return h * 60 + m;
+  };
+  const h = (mins(slot.endTime) - mins(slot.startTime)) / 60;
+  return Number.isFinite(h) && h > 0 ? h : 1;
+};
+const fmtHrs = (h: number) => `${Math.round(h * 10) / 10} hr${h === 1 ? '' : 's'}`;
+const MAX_TAKE_OVER_OPTIONS = 3;
+
 export function FacultyPortalView() {
-  const { currentUser } = useAuth();
+  const { currentUser, roster } = useAuth();
   const {
+    academicYear,
+    departments,
     facultyMembers,
     sessions,
     courses,
     sections,
     rooms,
+    makeupTasks,
+    recoveryOpportunities,
+    selectedFacultyId,
+    setSelectedFacultyId,
+    isLoading,
     scheduleMakeup,
     declineOpportunity,
     claimMarketplaceSlot,
@@ -32,96 +46,174 @@ export function FacultyPortalView() {
     cancelSession,
   } = useTimetable();
 
-  // Resolve logged-in faculty member - showing only their own data
-  const currentFaculty = facultyMembers.find(
-    f => f.email?.toLowerCase() === currentUser?.email?.toLowerCase() ||
-         f.name?.toLowerCase().includes(currentUser?.name?.split(' ')[0].toLowerCase() || '')
-  ) || facultyMembers[0];
+  const roleCode = currentUser?.roleCode ?? '';
+  // Teachers always see their own record; coordinators/admins pick a faculty member.
+  const isTeacher = roleCode === 'FACULTY' || roleCode === 'HOD';
+  // The server assigns an extra class to the signed-in teacher, so only FACULTY accounts can claim one.
+  const canClaim = roleCode === 'FACULTY';
+  const facultyId = isTeacher ? roster?.facultyId ?? '' : selectedFacultyId;
+  const currentFaculty = facultyMembers.find(f => f.id === facultyId);
 
-  const [selectedDay, setSelectedDay] = useState<DayOfWeek>('Monday');
-  
-  // Modals & Toast State
-  const [showCancelModal, setShowCancelModal] = useState<boolean>(false);
+  const { workingDays, timeSlots, lunchPeriodId } = academicYear;
+  const slotById = useMemo(() => new Map(timeSlots.map(t => [t.id, t])), [timeSlots]);
+  const slotLabel = (id: string) => slotById.get(id)?.label ?? id;
+  const isBreakSlot = (t: TimeSlot) => Boolean(t.isBreak || t.isLunch || t.id === lunchPeriodId);
+
+  const [pickedDay, setSelectedDay] = useState<DayOfWeek | ''>('');
+  const selectedDay: DayOfWeek | undefined = pickedDay && workingDays.includes(pickedDay) ? pickedDay : workingDays[0];
+
+  const [busy, setBusy] = useState<string | null>(null);
   const [sessionToCancel, setSessionToCancel] = useState<string | null>(null);
   const [cancellationReason, setCancellationReason] = useState<string>('');
+  const [oppToDecline, setOppToDecline] = useState<string | null>(null);
 
-  const [showDeclineModal, setShowDeclineModal] = useState<boolean>(false);
-  const [declineReason, setDeclineReason] = useState<string>('');
+  // Free periods where this teacher, one of their groups and a suitable room are all free.
+  const takeOverOptions = useMemo(() => {
+    if (!canClaim || !currentFaculty) return [];
+    const taken = new Set<string>();
+    const pairs = new Map<string, { courseId: string; sectionId: string }>();
+    for (const s of sessions) {
+      if (s.status === 'Cancelled') continue;
+      const k = `${s.day}|${s.timeSlotId}`;
+      taken.add(`${k}|f:${s.facultyId}`);
+      taken.add(`${k}|s:${s.sectionId}`);
+      taken.add(`${k}|r:${s.roomId}`);
+      if (s.facultyId === currentFaculty.id) pairs.set(`${s.courseId}|${s.sectionId}`, s);
+    }
+    const teachingSlots = timeSlots.filter(t => !(t.isBreak || t.isLunch || t.id === lunchPeriodId));
+    const isProtected = (day: DayOfWeek, slotId: string) =>
+      currentFaculty.preferences.protectedSlots.some(p => p.day === day && p.periodId === slotId);
+    const options = [];
+    for (const [key, { courseId, sectionId }] of pairs) {
+      const course = courses.find(c => c.id === courseId);
+      const section = sections.find(s => s.id === sectionId);
+      if (!course || !section) continue;
+      search: for (const day of workingDays) {
+        for (const slot of teachingSlots) {
+          const k = `${day}|${slot.id}`;
+          if (isProtected(day, slot.id) || taken.has(`${k}|f:${currentFaculty.id}`) || taken.has(`${k}|s:${section.id}`)) continue;
+          const room = rooms.find(r =>
+            r.isAvailable &&
+            r.capacity >= section.studentCount &&
+            (!course.requiresLab || r.type === 'ComputerLab' || r.type === 'HardwareLab') &&
+            !taken.has(`${k}|r:${r.id}`)
+          );
+          if (!room) continue;
+          options.push({ key: `${key}|${k}`, course, section, day, slot, room });
+          break search;
+        }
+      }
+      if (options.length >= MAX_TAKE_OVER_OPTIONS) break;
+    }
+    return options;
+  }, [canClaim, currentFaculty, sessions, timeSlots, lunchPeriodId, workingDays, courses, sections, rooms]);
 
-  const [replacementStatus, setReplacementStatus] = useState<'pending' | 'confirmed' | 'declined'>('pending');
-  const [claimedSlots, setClaimedSlots] = useState<Record<string, boolean>>({});
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  /** Runs a server action with a busy flag; resolves to whether it succeeded (the context shows the toast). */
+  const runBusy = async (key: string, action: () => Promise<{ success: boolean }>) => {
+    setBusy(key);
+    try {
+      return (await action()).success;
+    } finally {
+      setBusy(null);
+    }
+  };
 
-  // Daily class schedule for logged-in teacher on selected day
-  const dailySessions = sessions.filter(
-    s => s.facultyId === currentFaculty.id && s.day === selectedDay
+  const facultyPicker = !isTeacher && facultyMembers.length > 0 && (
+    <div className="flex items-center gap-2">
+      <label htmlFor="faculty-portal-picker" className="text-xs text-stone-500 dark:text-zinc-400 font-medium">
+        Faculty
+      </label>
+      <select
+        id="faculty-portal-picker"
+        value={selectedFacultyId}
+        onChange={e => setSelectedFacultyId(e.target.value)}
+        className="bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 text-xs rounded-lg px-2.5 py-1.5 text-stone-800 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
+      >
+        {facultyMembers.map(f => (
+          <option key={f.id} value={f.id}>{f.name}</option>
+        ))}
+      </select>
+    </div>
   );
 
-  const days: DayOfWeek[] = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+  if (!currentFaculty) {
+    return (
+      <div className="max-w-6xl mx-auto space-y-4">
+        {facultyPicker}
+        <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl p-6 text-sm text-stone-600 dark:text-zinc-400">
+          {isLoading
+            ? 'Loading…'
+            : isTeacher
+            ? "Your account isn't linked to a faculty record yet — ask the coordinator."
+            : 'No faculty members have been added yet.'}
+        </div>
+      </div>
+    );
+  }
 
-  const showToast = (msg: string) => {
-    setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3500);
-  };
+  const mySessions = sessions.filter(s => s.facultyId === currentFaculty.id);
+  const dailySessions = mySessions.filter(s => s.day === selectedDay);
+  const activeHours = (match: (type: string) => boolean) =>
+    mySessions
+      .filter(s => s.status !== 'Cancelled' && match(s.type))
+      .reduce((n, s) => n + slotHours(slotById.get(s.timeSlotId)), 0);
+  const totalHours = activeHours(() => true);
+  const withinLimit = totalHours <= currentFaculty.maxDirectTeachingHours;
+  const workloadCards = [
+    { label: 'Lectures', value: fmtHrs(activeHours(t => t === 'Lecture')), note: 'Scheduled' },
+    { label: 'Tutorials', value: fmtHrs(activeHours(t => t === 'Tutorial')), note: 'Scheduled' },
+    { label: 'Laboratory', value: fmtHrs(activeHours(t => t === 'Lab' || t === 'Practical')), note: 'Lab & practical' },
+    { label: 'Make-up & other', value: fmtHrs(activeHours(t => !['Lecture', 'Tutorial', 'Lab', 'Practical'].includes(t))), note: 'Make-up, seminar, elective' },
+    {
+      label: 'Reserved Periods',
+      value: fmtHrs(currentFaculty.preferences.protectedSlots.reduce((n, p) => n + slotHours(slotById.get(p.periodId)), 0)),
+      note: 'Kept free',
+    },
+  ];
+  const cancelledCount = mySessions.filter(s => s.status === 'Cancelled').length;
+  const departmentName = departments.find(d => d.id === currentFaculty.departmentId)?.name;
 
-  const handleProtectedToggle = (periodId: string) => {
-    setFacultyProtectedSlot(currentFaculty.id, selectedDay, periodId, 'Research');
-    showToast(`Period status updated for ${selectedDay}.`);
-  };
+  const pendingMakeups = makeupTasks
+    .filter(t => t.facultyId === currentFaculty.id && t.status !== 'Scheduled' && t.status !== 'Dismissed')
+    .map(task => ({
+      task,
+      option: recoveryOpportunities
+        .filter(o => o.makeupTaskId === task.id && o.status === 'Proposed')
+        .sort((a, b) => b.matchScore - a.matchScore)[0],
+    }));
 
-  const handleExecuteCancel = () => {
+  const handleExecuteCancel = async () => {
     if (!sessionToCancel) return;
-    cancelSession(sessionToCancel, cancellationReason || 'Medical leave');
-    setShowCancelModal(false);
-    setSessionToCancel(null);
-    setCancellationReason('');
-    showToast('Class cancelled. Students have been notified and a replacement class will be suggested.');
+    if (await runBusy('cancel', () => cancelSession(sessionToCancel, cancellationReason.trim()))) {
+      setSessionToCancel(null);
+      setCancellationReason('');
+    }
   };
 
-  const handleAcceptReplacement = () => {
-    scheduleMakeup('rec-opp-01');
-    setReplacementStatus('confirmed');
-    showToast('Replacement class confirmed! Added to your timetable and students notified.');
-  };
-
-  const handleConfirmDecline = () => {
-    declineOpportunity('rec-opp-01');
-    setReplacementStatus('declined');
-    setShowDeclineModal(false);
-    setDeclineReason('');
-    showToast('Class suggestion declined.');
-  };
-
-  const handleClaimSlot = (slotKey: string, courseCode: string, sectionName: string, day: DayOfWeek, slotId: string, roomName: string) => {
-    claimMarketplaceSlot(courseCode, sectionName, day, slotId, roomName, 'Tutorial');
-    setClaimedSlots(prev => ({ ...prev, [slotKey]: true }));
-    showToast(`Class added to your timetable! ${courseCode} (${sectionName}) on ${day}.`);
+  const handleConfirmDecline = async () => {
+    if (!oppToDecline) return;
+    if (await runBusy('decline', () => declineOpportunity(oppToDecline))) setOppToDecline(null);
   };
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
-      {/* Toast Banner */}
-      {toastMessage && (
-        <div className="fixed top-16 right-4 z-50 bg-slate-900 text-white dark:bg-zinc-100 dark:text-zinc-900 px-4 py-3 rounded-xl shadow-xl border border-slate-700 dark:border-zinc-300 text-xs font-semibold flex items-center gap-2 animate-in fade-in slide-in-from-top-2">
-          <CheckCircle2 className="h-4 w-4 text-emerald-400 dark:text-emerald-600 shrink-0" />
-          <span>{toastMessage}</span>
-        </div>
-      )}
-
       {/* Header - Teacher Name & Department */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#E5E2D9] dark:border-zinc-800 pb-4">
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold font-serif text-stone-900 dark:text-zinc-100 tracking-tight">
-            {currentUser?.name || currentFaculty.name}
+            {currentFaculty.name}
           </h1>
           <p className="text-xs sm:text-sm text-stone-500 dark:text-zinc-400 mt-1">
-            {currentFaculty.designation} · Department of Computer Science & Engineering
+            {currentFaculty.designation}{departmentName ? ` · ${departmentName}` : ''}
           </p>
         </div>
 
-        <div className="flex items-center gap-2 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 px-3 py-1.5 rounded-lg text-xs text-stone-700 dark:text-zinc-300 font-medium shadow-2xs">
-          <BookOpen className="h-4 w-4 text-[#8C1B2E] dark:text-red-400" />
-          <span>Faculty Portal</span>
+        <div className="flex flex-wrap items-center gap-2">
+          {facultyPicker}
+          <div className="flex items-center gap-2 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 px-3 py-1.5 rounded-lg text-xs text-stone-700 dark:text-zinc-300 font-medium shadow-2xs">
+            <BookOpen className="h-4 w-4 text-[#8C1B2E] dark:text-red-400" />
+            <span>Faculty Portal</span>
+          </div>
         </div>
       </div>
 
@@ -139,46 +231,27 @@ export function FacultyPortalView() {
           </span>
         </div>
         <p className="text-[11px] text-stone-500 dark:text-zinc-400 leading-relaxed">
-          Overview of your weekly teaching hours, laboratory sessions, office consultation, and research time.
+          Computed from the scheduled classes in this timetable (cancelled classes excluded).
+          {cancelledCount > 0 && ` ${cancelledCount} class${cancelledCount === 1 ? ' is' : 'es are'} currently cancelled.`}
         </p>
 
         {/* Workload Breakdown Grid */}
         <div className="grid grid-cols-2 sm:grid-cols-6 gap-2.5 text-center text-xs">
           <div className="p-3 bg-white dark:bg-zinc-950/60 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 shadow-2xs">
             <span className="text-stone-500 dark:text-zinc-400 block text-[11px]">Direct Teaching</span>
-            <span className="text-base font-bold text-stone-900 dark:text-zinc-100 mt-0.5 block font-serif">14 hrs</span>
-            <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-medium">Within Limit</span>
+            <span className="text-base font-bold text-stone-900 dark:text-zinc-100 mt-0.5 block font-serif">{fmtHrs(totalHours)}</span>
+            <span className={`text-[10px] font-medium ${withinLimit ? 'text-emerald-700 dark:text-emerald-400' : 'text-[#8C1B2E] dark:text-red-400'}`}>
+              {withinLimit ? 'Within Limit' : 'Over Limit'}
+            </span>
           </div>
 
-          <div className="p-3 bg-white dark:bg-zinc-950/60 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 shadow-2xs">
-            <span className="text-stone-500 dark:text-zinc-400 block text-[11px]">Tutorials</span>
-            <span className="text-base font-bold text-stone-900 dark:text-zinc-100 mt-0.5 block font-serif">2 hrs</span>
-            <span className="text-[10px] text-stone-500">Scheduled</span>
-          </div>
-
-          <div className="p-3 bg-white dark:bg-zinc-950/60 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 shadow-2xs">
-            <span className="text-stone-500 dark:text-zinc-400 block text-[11px]">Laboratory</span>
-            <span className="text-base font-bold text-stone-900 dark:text-zinc-100 mt-0.5 block font-serif">2 hrs</span>
-            <span className="text-[10px] text-stone-500">Lab 301</span>
-          </div>
-
-          <div className="p-3 bg-white dark:bg-zinc-950/60 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 shadow-2xs">
-            <span className="text-stone-500 dark:text-zinc-400 block text-[11px]">Consultation</span>
-            <span className="text-base font-bold text-stone-900 dark:text-zinc-100 mt-0.5 block font-serif">2 hrs</span>
-            <span className="text-[10px] text-stone-500">Office Hours</span>
-          </div>
-
-          <div className="p-3 bg-white dark:bg-zinc-950/60 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 shadow-2xs">
-            <span className="text-stone-500 dark:text-zinc-400 block text-[11px]">Research Time</span>
-            <span className="text-base font-bold text-stone-900 dark:text-zinc-100 mt-0.5 block font-serif">6 hrs</span>
-            <span className="text-[10px] text-[#8C1B2E] dark:text-red-400 font-medium">Free Period</span>
-          </div>
-
-          <div className="p-3 bg-white dark:bg-zinc-950/60 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 shadow-2xs">
-            <span className="text-stone-500 dark:text-zinc-400 block text-[11px]">Department Work</span>
-            <span className="text-base font-bold text-stone-900 dark:text-zinc-100 mt-0.5 block font-serif">1 hr</span>
-            <span className="text-[10px] text-stone-500">Committee</span>
-          </div>
+          {workloadCards.map(card => (
+            <div key={card.label} className="p-3 bg-white dark:bg-zinc-950/60 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 shadow-2xs">
+              <span className="text-stone-500 dark:text-zinc-400 block text-[11px]">{card.label}</span>
+              <span className="text-base font-bold text-stone-900 dark:text-zinc-100 mt-0.5 block font-serif">{card.value}</span>
+              <span className="text-[10px] text-stone-500">{card.note}</span>
+            </div>
+          ))}
         </div>
       </div>
 
@@ -191,14 +264,15 @@ export function FacultyPortalView() {
             <div className="p-3.5 border-b border-[#E5E2D9] dark:border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-[#F4F2EC] dark:bg-zinc-950/50">
               <div className="text-xs font-bold font-serif text-stone-900 dark:text-zinc-100 flex items-center gap-2">
                 <Calendar className="h-4 w-4 text-[#8C1B2E] dark:text-red-400" />
-                <span>Class Schedule for {selectedDay}</span>
+                <span>Class Schedule for {selectedDay ?? '—'}</span>
               </div>
 
               <div className="flex bg-[#E5E2D9]/60 dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 p-0.5 rounded-lg text-xs">
-                {days.map(d => (
+                {workingDays.map(d => (
                   <button
                     key={d}
                     onClick={() => setSelectedDay(d)}
+                    aria-pressed={selectedDay === d}
                     className={`px-2.5 py-1 rounded-md transition-colors font-medium ${
                       selectedDay === d
                         ? 'bg-[#8C1B2E] text-white font-semibold shadow-2xs'
@@ -211,25 +285,31 @@ export function FacultyPortalView() {
               </div>
             </div>
 
+            {(sessions.length === 0 || mySessions.length === 0) && (
+              <div className="px-3.5 py-2.5 text-[11px] text-stone-500 dark:text-zinc-400 border-b border-[#E5E2D9] dark:border-zinc-800">
+                {sessions.length === 0 ? 'No timetable published yet.' : 'No classes are assigned to this faculty member yet.'}
+              </div>
+            )}
+
             {/* List of Periods */}
             <div className="divide-y divide-[#E5E2D9] dark:divide-zinc-800/80">
-              {TIME_SLOTS.map(slot => {
-                const isLunch = slot.id === 'ts-5';
+              {selectedDay && timeSlots.map(slot => {
                 const session = dailySessions.find(s => s.timeSlotId === slot.id);
                 const protectedBlock = currentFaculty.preferences.protectedSlots.find(
                   ps => ps.day === selectedDay && ps.periodId === slot.id
                 );
 
-                if (isLunch) {
+                if (isBreakSlot(slot)) {
                   return (
                     <div key={slot.id} className="p-3 bg-[#F4F2EC] dark:bg-zinc-950/40 flex items-center justify-between text-xs text-stone-500 dark:text-zinc-500">
                       <span className="font-mono text-[11px]">{slot.startTime} – {slot.endTime}</span>
-                      <span className="font-medium text-stone-700 dark:text-zinc-300">Lunch Break</span>
+                      <span className="font-medium text-stone-700 dark:text-zinc-300">{slot.isLunch || slot.id === lunchPeriodId ? 'Lunch Break' : 'Break'}</span>
                       <span className="text-[11px] text-stone-400">No classes scheduled</span>
                     </div>
                   );
                 }
 
+                const course = session && courses.find(c => c.id === session.courseId);
                 return (
                   <div
                     key={slot.id}
@@ -251,10 +331,13 @@ export function FacultyPortalView() {
                         <div className="flex items-center justify-between gap-3">
                           <div>
                             <div className="font-bold text-stone-900 dark:text-zinc-100 flex items-center gap-2">
-                              <span className="font-mono text-[#8C1B2E] dark:text-red-400">{courses.find(c => c.id === session.courseId)?.code}</span>
-                              <span className="text-stone-800 dark:text-zinc-200">({courses.find(c => c.id === session.courseId)?.name})</span>
+                              <span className="font-mono text-[#8C1B2E] dark:text-red-400">{course?.code ?? session.courseId}</span>
+                              {course && <span className="text-stone-800 dark:text-zinc-200">({course.name})</span>}
                               <span className="text-stone-400">·</span>
-                              <span className="text-stone-600 dark:text-zinc-400">{sections.find(s => s.id === session.sectionId)?.name}</span>
+                              <span className="text-stone-600 dark:text-zinc-400">{sections.find(s => s.id === session.sectionId)?.name ?? session.sectionId}</span>
+                              {session.type !== 'Lecture' && (
+                                <span className="text-[10px] text-stone-500 dark:text-zinc-400">{session.type}</span>
+                              )}
                               {session.status === 'Cancelled' && (
                                 <span className="text-[10px] px-2 py-0.5 rounded bg-rose-100 dark:bg-rose-950 text-rose-800 dark:text-rose-300 border border-rose-200 dark:border-rose-800/60 font-semibold">
                                   Cancelled
@@ -263,17 +346,15 @@ export function FacultyPortalView() {
                             </div>
                             <div className="text-[11px] text-stone-500 dark:text-zinc-400 mt-0.5 flex items-center gap-1.5">
                               <MapPin className="h-3 w-3 text-stone-400" />
-                              <span>Room: {rooms.find(r => r.id === session.roomId)?.name || 'LT101'}</span>
+                              <span>Room: {rooms.find(r => r.id === session.roomId)?.name ?? '—'}</span>
                             </div>
                           </div>
 
                           {session.status !== 'Cancelled' && (
                             <button
-                              onClick={() => {
-                                setSessionToCancel(session.id);
-                                setShowCancelModal(true);
-                              }}
-                              className="px-3 py-1.5 bg-white dark:bg-zinc-800 hover:bg-rose-50 hover:text-rose-800 dark:hover:bg-rose-950/60 dark:hover:text-rose-300 text-stone-700 dark:text-zinc-300 border border-[#E5E2D9] dark:border-zinc-700 rounded-lg text-xs font-semibold transition-colors shrink-0 shadow-2xs"
+                              onClick={() => setSessionToCancel(session.id)}
+                              disabled={busy !== null}
+                              className="px-3 py-1.5 bg-white dark:bg-zinc-800 hover:bg-rose-50 hover:text-rose-800 dark:hover:bg-rose-950/60 dark:hover:text-rose-300 text-stone-700 dark:text-zinc-300 border border-[#E5E2D9] dark:border-zinc-700 rounded-lg text-xs font-semibold transition-colors shrink-0 shadow-2xs disabled:opacity-50"
                             >
                               Cancel this class
                             </button>
@@ -285,20 +366,22 @@ export function FacultyPortalView() {
                             Free period (Reserved)
                           </span>
                           <button
-                            onClick={() => handleProtectedToggle(slot.id)}
-                            className="text-xs text-stone-500 dark:text-zinc-400 hover:text-stone-900 dark:hover:text-zinc-200 underline"
+                            onClick={() => runBusy(`slot:${slot.id}`, () => setFacultyProtectedSlot(currentFaculty.id, selectedDay, slot.id, 'Research'))}
+                            disabled={busy !== null}
+                            className="text-xs text-stone-500 dark:text-zinc-400 hover:text-stone-900 dark:hover:text-zinc-200 underline disabled:opacity-50"
                           >
-                            Release
+                            {busy === `slot:${slot.id}` ? 'Saving…' : 'Release'}
                           </button>
                         </div>
                       ) : (
                         <div className="flex items-center justify-between">
                           <span className="text-stone-400 dark:text-zinc-500 italic">Free period</span>
                           <button
-                            onClick={() => handleProtectedToggle(slot.id)}
-                            className="px-2.5 py-1 bg-white dark:bg-zinc-800 hover:bg-stone-50 dark:hover:bg-zinc-700 text-stone-700 dark:text-zinc-300 rounded-lg text-xs font-medium border border-[#E5E2D9] dark:border-zinc-700 transition-colors shadow-2xs"
+                            onClick={() => runBusy(`slot:${slot.id}`, () => setFacultyProtectedSlot(currentFaculty.id, selectedDay, slot.id, 'Research'))}
+                            disabled={busy !== null}
+                            className="px-2.5 py-1 bg-white dark:bg-zinc-800 hover:bg-stone-50 dark:hover:bg-zinc-700 text-stone-700 dark:text-zinc-300 rounded-lg text-xs font-medium border border-[#E5E2D9] dark:border-zinc-700 transition-colors shadow-2xs disabled:opacity-50"
                           >
-                            Keep this period free
+                            {busy === `slot:${slot.id}` ? 'Saving…' : 'Keep this period free'}
                           </button>
                         </div>
                       )}
@@ -310,168 +393,133 @@ export function FacultyPortalView() {
           </div>
         </div>
 
-        {/* Right Column: Replacement Class Suggestions & Class Exchange */}
+        {/* Right Column: Replacement Class Suggestions & Extra Classes */}
         <div className="space-y-4">
-          {/* Replacement Class Suggestion Card */}
-          {replacementStatus !== 'declined' && (
-            <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl p-4 space-y-3 shadow-xs">
-              <div className="flex items-center justify-between border-b border-[#E5E2D9] dark:border-zinc-800 pb-2.5">
-                <span className="text-xs font-bold font-serif text-stone-900 dark:text-zinc-100">
-                  Replacement class suggested
-                </span>
-                {replacementStatus === 'confirmed' ? (
-                  <span className="px-2 py-0.5 text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 rounded border border-emerald-300 dark:border-emerald-800">
-                    Confirmed
+          {/* Replacement Class Suggestion Cards (one per cancelled class awaiting a make-up) */}
+          {pendingMakeups.map(({ task, option }) => {
+            const course = courses.find(c => c.id === task.courseId);
+            const section = sections.find(s => s.id === task.sectionId);
+            return (
+              <div key={task.id} className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl p-4 space-y-3 shadow-xs">
+                <div className="flex items-center justify-between border-b border-[#E5E2D9] dark:border-zinc-800 pb-2.5">
+                  <span className="text-xs font-bold font-serif text-stone-900 dark:text-zinc-100">
+                    Replacement class suggested
                   </span>
-                ) : (
-                  <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse" title="Active suggestion" />
-                )}
-              </div>
+                  {option && <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse" aria-hidden="true" />}
+                </div>
 
-              {replacementStatus === 'confirmed' ? (
-                <div className="p-3 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/50 rounded-lg space-y-1 text-xs">
-                  <div className="font-bold text-emerald-900 dark:text-emerald-200 flex items-center gap-1.5">
-                    <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                    <span>Class confirmed and added to timetable!</span>
-                  </div>
-                  <p className="text-stone-600 dark:text-zinc-400 leading-relaxed text-[11px] pt-1">
-                    Thursday 11:00 AM – 12:00 PM (Room 204) has been scheduled. All 52 students have received an email notification.
+                <div>
+                  <h4 className="font-bold font-serif text-sm text-stone-900 dark:text-zinc-100">
+                    Replacement for {course?.name ?? task.courseId} class ({section?.name ?? task.sectionId})
+                  </h4>
+                  <p className="text-xs text-stone-600 dark:text-zinc-400 mt-1 leading-relaxed">
+                    The {task.cancelledDay} {slotLabel(task.cancelledTimeSlot)} class was cancelled.
                   </p>
                 </div>
-              ) : (
-                <>
-                  <div>
-                    <h4 className="font-bold font-serif text-sm text-stone-900 dark:text-zinc-100">
-                      Replacement for DBMS class (CSE-A)
-                    </h4>
-                    <p className="text-xs text-stone-600 dark:text-zinc-400 mt-1 leading-relaxed">
-                      Your Monday class was cancelled. 47 of 52 students are free at the time below.
-                    </p>
-                  </div>
 
-                  <div className="bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-3 space-y-1.5 text-xs shadow-2xs">
-                    <div className="flex items-center justify-between">
-                      <span className="text-stone-500 dark:text-zinc-400 font-medium">Suggested time:</span>
-                      <span className="font-semibold text-emerald-700 dark:text-emerald-400">Best time for students</span>
+                {option ? (
+                  <>
+                    <div className="bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-3 space-y-1.5 text-xs shadow-2xs">
+                      <div className="flex items-center justify-between">
+                        <span className="text-stone-500 dark:text-zinc-400 font-medium">Suggested time:</span>
+                        <span className="font-semibold text-emerald-700 dark:text-emerald-400">{option.matchScore}% match</span>
+                      </div>
+                      <div className="font-bold text-stone-900 dark:text-zinc-100">
+                        {option.targetDay} {slotLabel(option.timeSlotId)} ({rooms.find(r => r.id === option.roomId)?.name ?? option.roomId})
+                      </div>
+                      <p className="text-[11px] text-stone-500 dark:text-zinc-400 leading-relaxed">{option.rationale}</p>
                     </div>
-                    <div className="font-bold text-stone-900 dark:text-zinc-100">
-                      Thursday 11:00 AM – 12:00 PM (Room 204)
+
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        onClick={() => runBusy(`accept:${option.id}`, () => scheduleMakeup(option.id))}
+                        disabled={busy !== null}
+                        className="flex-1 py-2 bg-[#8C1B2E] hover:bg-[#721525] active:bg-[#5a111e] text-white rounded-lg text-xs font-semibold transition-colors flex items-center justify-center gap-1.5 shadow-2xs disabled:opacity-50"
+                      >
+                        <CheckCircle2 className="h-4 w-4" />
+                        <span>{busy === `accept:${option.id}` ? 'Confirming…' : 'Confirm this time'}</span>
+                      </button>
+
+                      <button
+                        onClick={() => setOppToDecline(option.id)}
+                        disabled={busy !== null}
+                        className="px-3.5 py-2 bg-white dark:bg-zinc-800 hover:bg-stone-50 dark:hover:bg-zinc-700 text-stone-700 dark:text-zinc-300 rounded-lg text-xs font-medium border border-[#E5E2D9] dark:border-zinc-700 transition-colors shadow-2xs disabled:opacity-50"
+                      >
+                        Decline
+                      </button>
                     </div>
-                  </div>
+                  </>
+                ) : (
+                  <p className="text-xs text-stone-600 dark:text-zinc-400 leading-relaxed">
+                    No suggested times are left for this class. Ask the coordinator to schedule the make-up.
+                  </p>
+                )}
+              </div>
+            );
+          })}
 
-                  <div className="flex items-center gap-2 pt-1">
-                    <button
-                      onClick={handleAcceptReplacement}
-                      className="flex-1 py-2 bg-[#8C1B2E] hover:bg-[#721525] active:bg-[#5a111e] text-white rounded-lg text-xs font-semibold transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
-                    >
-                      <CheckCircle2 className="h-4 w-4" />
-                      <span>Confirm this time</span>
-                    </button>
+          {/* Extra classes the teacher can add for themselves */}
+          {canClaim && (
+            <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl p-4 space-y-3 text-xs shadow-xs">
+              <div className="border-b border-[#E5E2D9] dark:border-zinc-800 pb-2">
+                <h4 className="font-bold font-serif text-stone-900 dark:text-zinc-100 text-xs">
+                  Extra classes you can add (optional)
+                </h4>
+                <p className="text-[11px] text-stone-500 dark:text-zinc-400 mt-0.5">
+                  Free periods where you, your group and a room are all available.
+                </p>
+              </div>
+
+              <div className="space-y-2.5">
+                {takeOverOptions.length === 0 && (
+                  <p className="text-[11px] text-stone-500 dark:text-zinc-400">No free periods found for your groups.</p>
+                )}
+                {takeOverOptions.map(o => (
+                  <div key={o.key} className="p-3 bg-white dark:bg-zinc-950/60 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg flex items-center justify-between gap-2 shadow-2xs">
+                    <div>
+                      <div className="font-bold text-stone-900 dark:text-zinc-100">{o.course.code} Tutorial ({o.section.name})</div>
+                      <div className="text-[11px] text-stone-500 dark:text-zinc-400 mt-0.5">{o.day} {o.slot.label} · {o.room.name}</div>
+                    </div>
 
                     <button
-                      onClick={() => setShowDeclineModal(true)}
-                      className="px-3.5 py-2 bg-white dark:bg-zinc-800 hover:bg-stone-50 dark:hover:bg-zinc-700 text-stone-700 dark:text-zinc-300 rounded-lg text-xs font-medium border border-[#E5E2D9] dark:border-zinc-700 transition-colors shadow-2xs"
+                      onClick={() => runBusy(`claim:${o.key}`, () => claimMarketplaceSlot(o.course.id, o.section.id, o.day, o.slot.id, o.room.id, 'Tutorial'))}
+                      disabled={busy !== null}
+                      className="px-3 py-1.5 bg-[#8C1B2E] hover:bg-[#721525] text-white rounded-lg text-xs font-semibold transition-colors shrink-0 shadow-2xs disabled:opacity-50"
                     >
-                      Decline
+                      {busy === `claim:${o.key}` ? 'Adding…' : 'Take this class'}
                     </button>
                   </div>
-                </>
-              )}
+                ))}
+              </div>
             </div>
           )}
-
-          {/* Classes You Can Take Over Card */}
-          <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl p-4 space-y-3 text-xs shadow-xs">
-            <div className="border-b border-[#E5E2D9] dark:border-zinc-800 pb-2">
-              <h4 className="font-bold font-serif text-stone-900 dark:text-zinc-100 text-xs">
-                Classes you can take over (optional)
-              </h4>
-              <p className="text-[11px] text-stone-500 dark:text-zinc-400 mt-0.5">
-                Extra tutorial classes available if you wish to take them.
-              </p>
-            </div>
-
-            <div className="space-y-2.5">
-              {/* Item 1 */}
-              <div className="p-3 bg-white dark:bg-zinc-950/60 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg flex items-center justify-between gap-2 shadow-2xs">
-                <div>
-                  <div className="font-bold text-stone-900 dark:text-zinc-100">CS501 Tutorial (CSE-B)</div>
-                  <div className="text-[11px] text-stone-500 dark:text-zinc-400 mt-0.5">Friday 10:00 AM – 11:00 AM · Room 104</div>
-                </div>
-
-                {claimedSlots['slot1'] ? (
-                  <span className="px-2.5 py-1 bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 rounded text-xs font-bold border border-emerald-200 dark:border-emerald-800 flex items-center gap-1">
-                    <Check className="h-3 w-3" /> Class Added
-                  </span>
-                ) : (
-                  <button
-                    onClick={() => handleClaimSlot('slot1', 'CS501', 'CSE-B', 'Friday', 'ts-3', 'Room 104')}
-                    className="px-3 py-1.5 bg-[#8C1B2E] hover:bg-[#721525] text-white rounded-lg text-xs font-semibold transition-colors shrink-0 shadow-2xs"
-                  >
-                    Take this class
-                  </button>
-                )}
-              </div>
-
-              {/* Item 2 */}
-              <div className="p-3 bg-white dark:bg-zinc-950/60 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg flex items-center justify-between gap-2 shadow-2xs">
-                <div>
-                  <div className="font-bold text-stone-900 dark:text-zinc-100">Project Practical (CSE-C)</div>
-                  <div className="text-[11px] text-stone-500 dark:text-zinc-400 mt-0.5">Wednesday 3:00 PM – 4:00 PM · Lab 301</div>
-                </div>
-
-                {claimedSlots['slot2'] ? (
-                  <span className="px-2.5 py-1 bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 rounded text-xs font-bold border border-emerald-200 dark:border-emerald-800 flex items-center gap-1">
-                    <Check className="h-3 w-3" /> Class Added
-                  </span>
-                ) : (
-                  <button
-                    onClick={() => handleClaimSlot('slot2', 'CS501', 'CSE-C', 'Wednesday', 'ts-8', 'Lab 301')}
-                    className="px-3 py-1.5 bg-[#8C1B2E] hover:bg-[#721525] text-white rounded-lg text-xs font-semibold transition-colors shrink-0 shadow-2xs"
-                  >
-                    Take this class
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
         </div>
       </div>
 
-      {/* Decline Suggestion Reason Modal */}
-      {showDeclineModal && (
+      {/* Decline Suggestion Modal */}
+      {oppToDecline && (
         <div className="fixed inset-0 bg-slate-900/60 dark:bg-black/70 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl max-w-md w-full p-5 space-y-4 shadow-2xl">
-            <h4 className="text-base font-bold text-slate-900 dark:text-zinc-100">
-              Why are you declining this suggested class time?
+          <div role="dialog" aria-modal="true" aria-labelledby="decline-dialog-title" className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl max-w-md w-full p-5 space-y-4 shadow-2xl">
+            <h4 id="decline-dialog-title" className="text-base font-bold text-slate-900 dark:text-zinc-100">
+              Decline this suggested class time?
             </h4>
             <p className="text-xs text-slate-600 dark:text-zinc-400 leading-relaxed">
-              Please provide a short reason so we can suggest a better time for your replacement class.
+              The next-best suggested time, if any, will be shown instead.
             </p>
-
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-slate-700 dark:text-zinc-300">Reason</label>
-              <input
-                type="text"
-                placeholder="e.g. Schedule conflict, Lab busy, Personal appointment"
-                value={declineReason}
-                onChange={e => setDeclineReason(e.target.value)}
-                className="w-full bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 rounded-xl p-2.5 text-xs text-slate-900 dark:text-white outline-none focus:border-red-600"
-              />
-            </div>
 
             <div className="flex items-center justify-end gap-2.5 pt-2">
               <button
-                onClick={() => setShowDeclineModal(false)}
+                onClick={() => setOppToDecline(null)}
                 className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white"
               >
                 Go back
               </button>
               <button
                 onClick={handleConfirmDecline}
-                className="px-4 py-2 bg-red-700 hover:bg-red-800 text-white rounded-xl text-xs font-bold transition-colors"
+                disabled={busy !== null}
+                className="px-4 py-2 bg-red-700 hover:bg-red-800 text-white rounded-xl text-xs font-bold transition-colors disabled:opacity-50"
               >
-                Decline suggestion
+                {busy === 'decline' ? 'Declining…' : 'Decline suggestion'}
               </button>
             </div>
           </div>
@@ -479,19 +527,20 @@ export function FacultyPortalView() {
       )}
 
       {/* Cancel Class Modal */}
-      {showCancelModal && (
+      {sessionToCancel && (
         <div className="fixed inset-0 bg-slate-900/60 dark:bg-black/70 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl max-w-md w-full p-5 space-y-4 shadow-2xl">
-            <h4 className="text-base font-bold text-slate-900 dark:text-zinc-100">
+          <div role="dialog" aria-modal="true" aria-labelledby="cancel-dialog-title" className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl max-w-md w-full p-5 space-y-4 shadow-2xl">
+            <h4 id="cancel-dialog-title" className="text-base font-bold text-slate-900 dark:text-zinc-100">
               Cancel this class
             </h4>
             <p className="text-xs text-slate-600 dark:text-zinc-400 leading-relaxed">
-              Students will be notified, and we will suggest a replacement class time.
+              Students will be notified, and replacement class times will be suggested.
             </p>
 
             <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-slate-700 dark:text-zinc-300">Why are you cancelling?</label>
+              <label htmlFor="cancel-reason" className="text-xs font-semibold text-slate-700 dark:text-zinc-300">Why are you cancelling?</label>
               <input
+                id="cancel-reason"
                 type="text"
                 placeholder="e.g. Medical leave, Official meeting"
                 value={cancellationReason}
@@ -502,16 +551,17 @@ export function FacultyPortalView() {
 
             <div className="flex items-center justify-end gap-2.5 pt-2">
               <button
-                onClick={() => setShowCancelModal(false)}
+                onClick={() => setSessionToCancel(null)}
                 className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white"
               >
                 Go back
               </button>
               <button
                 onClick={handleExecuteCancel}
-                className="px-4 py-2 bg-red-700 hover:bg-red-800 text-white rounded-xl text-xs font-bold transition-colors"
+                disabled={busy !== null}
+                className="px-4 py-2 bg-red-700 hover:bg-red-800 text-white rounded-xl text-xs font-bold transition-colors disabled:opacity-50"
               >
-                Yes, cancel class
+                {busy === 'cancel' ? 'Cancelling…' : 'Yes, cancel class'}
               </button>
             </div>
           </div>

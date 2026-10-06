@@ -20,35 +20,37 @@ export function SettingsView() {
   const { theme, toggleTheme } = useTheme();
 
   const [activeTab, setActiveTab] = useState<'profile' | 'notifications' | 'appearance'>('profile');
-  const [saveFeedback, setSaveFeedback] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
+  const [saving, setSaving] = useState(false);
 
   // Profile Edit State
   const [isEditing, setIsEditing] = useState(false);
-  const [phone, setPhone] = useState(currentUser?.phone || '+91 98123 45678');
-  const [officeLocation, setOfficeLocation] = useState(currentUser?.officeLocation || 'Academic Block C, Room 204');
+  const [phone, setPhone] = useState(currentUser?.phone ?? '');
+  const [officeLocation, setOfficeLocation] = useState(currentUser?.officeLocation ?? '');
 
-  // Notifications State
-  const [notifyTimetable, setNotifyTimetable] = useState(true);
-  const [notifyRequests, setNotifyRequests] = useState(true);
-  const [notifyConflicts, setNotifyConflicts] = useState(true);
+  // Notification preferences are stored on the user profile.
+  const prefs = currentUser?.notificationPreferences ?? {};
+  const [notifyTimetable, setNotifyTimetable] = useState(prefs.timetable ?? true);
+  const [notifyRequests, setNotifyRequests] = useState(prefs.requests ?? true);
+  const [notifyConflicts, setNotifyConflicts] = useState(prefs.conflicts ?? true);
 
-  const handleSaveProfile = (e: React.FormEvent) => {
+  const save = async (updates: Parameters<typeof updateUserProfile>[0], okText: string) => {
+    setSaving(true);
+    const r = await updateUserProfile(updates);
+    setSaving(false);
+    setFeedback({ ok: r.success, text: r.success ? okText : r.message ?? 'Could not save.' });
+    setTimeout(() => setFeedback(null), 3000);
+    return r.success;
+  };
+
+  const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (currentUser) {
-      updateUserProfile(currentUser.id, {
-        phone: phone.trim(),
-        officeLocation: officeLocation.trim(),
-      });
-    }
-    setIsEditing(false);
-    setSaveFeedback('Profile updated successfully.');
-    setTimeout(() => setSaveFeedback(null), 2500);
+    if (await save({ phone: phone.trim(), officeLocation: officeLocation.trim() }, 'Profile updated.')) setIsEditing(false);
   };
 
   const handleSaveSettings = (e: React.FormEvent) => {
     e.preventDefault();
-    setSaveFeedback('Notification preferences saved.');
-    setTimeout(() => setSaveFeedback(null), 2500);
+    save({ notificationPreferences: { timetable: notifyTimetable, requests: notifyRequests, conflicts: notifyConflicts } }, 'Notification preferences saved.');
   };
 
   return (
@@ -102,10 +104,13 @@ export function SettingsView() {
         </button>
       </div>
 
-      {saveFeedback && (
-        <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-xl text-emerald-800 dark:text-emerald-300 text-xs flex items-center gap-2">
-          <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-          <span>{saveFeedback}</span>
+      {feedback && (
+        <div
+          role={feedback.ok ? 'status' : 'alert'}
+          className={`p-3 rounded-xl text-xs flex items-center gap-2 border ${feedback.ok ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300' : 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-300'}`}
+        >
+          <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+          <span>{feedback.text}</span>
         </div>
       )}
 
@@ -115,14 +120,14 @@ export function SettingsView() {
           <div className="flex items-center justify-between border-b border-[#E5E2D9] dark:border-zinc-800 pb-3">
             <div className="flex items-center gap-3">
               <div className="w-12 h-12 rounded-full bg-[#8C1B2E]/10 text-[#8C1B2E] font-bold text-lg flex items-center justify-center border border-[#8C1B2E]/30 shrink-0">
-                {currentUser?.name?.charAt(0) || 'C'}
+                {currentUser?.name?.charAt(0) || '?'}
               </div>
               <div>
                 <h3 className="text-base font-bold font-serif text-stone-900 dark:text-zinc-100">
-                  {currentUser?.name || 'Timetable Coordinator'}
+                  {currentUser?.name}
                 </h3>
                 <p className="text-stone-500 text-[11px]">
-                  {currentRole?.name || 'Timetable Coordinator'} · Computer Science & Engineering
+                  {currentRole?.name ?? currentUser?.roleName}{currentUser?.department ? ` · ${currentUser.department}` : ''}
                 </p>
               </div>
             </div>
@@ -148,9 +153,10 @@ export function SettingsView() {
           {isEditing ? (
             <form onSubmit={handleSaveProfile} className="space-y-3">
               <div>
-                <label className="block text-stone-600 dark:text-zinc-400 mb-1">Phone Number</label>
+                <label htmlFor="settings-phone" className="block text-stone-600 dark:text-zinc-400 mb-1">Phone Number</label>
                 <input
-                  type="text"
+                  id="settings-phone"
+                  type="tel"
                   value={phone}
                   onChange={e => setPhone(e.target.value)}
                   className="w-full px-3 py-1.5 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 bg-white dark:bg-zinc-950 text-xs"
@@ -158,8 +164,9 @@ export function SettingsView() {
               </div>
 
               <div>
-                <label className="block text-stone-600 dark:text-zinc-400 mb-1">Office Location</label>
+                <label htmlFor="settings-office" className="block text-stone-600 dark:text-zinc-400 mb-1">Office Location</label>
                 <input
+                  id="settings-office"
                   type="text"
                   value={officeLocation}
                   onChange={e => setOfficeLocation(e.target.value)}
@@ -169,9 +176,10 @@ export function SettingsView() {
 
               <button
                 type="submit"
-                className="px-4 py-2 bg-[#8C1B2E] text-white font-semibold text-xs rounded-lg shadow-xs hover:bg-[#721525]"
+                disabled={saving}
+                className="px-4 py-2 bg-[#8C1B2E] text-white font-semibold text-xs rounded-lg shadow-xs hover:bg-[#721525] disabled:opacity-60"
               >
-                Save Profile
+                {saving ? 'Saving…' : 'Save Profile'}
               </button>
             </form>
           ) : (
@@ -183,7 +191,7 @@ export function SettingsView() {
 
               <div>
                 <span className="text-stone-500 block mb-0.5">Department</span>
-                <span className="font-semibold text-stone-900 dark:text-zinc-100">Computer Science & Engineering</span>
+                <span className="font-semibold text-stone-900 dark:text-zinc-100">{currentUser?.department || '—'}</span>
               </div>
 
               <div>
@@ -193,12 +201,12 @@ export function SettingsView() {
 
               <div>
                 <span className="text-stone-500 block mb-0.5">Phone Number</span>
-                <span className="font-mono text-stone-900 dark:text-zinc-100">{phone}</span>
+                <span className="font-mono text-stone-900 dark:text-zinc-100">{currentUser?.phone || '—'}</span>
               </div>
 
               <div className="sm:col-span-2">
                 <span className="text-stone-500 block mb-0.5">Office Location</span>
-                <span className="font-semibold text-stone-900 dark:text-zinc-100">{officeLocation}</span>
+                <span className="font-semibold text-stone-900 dark:text-zinc-100">{currentUser?.officeLocation || '—'}</span>
               </div>
             </div>
           )}
@@ -224,11 +232,12 @@ export function SettingsView() {
           <div className="space-y-3 pt-1">
             <div className="flex items-center justify-between">
               <div>
-                <span className="font-semibold block text-stone-900 dark:text-zinc-100">Timetable Updates</span>
+                <label htmlFor="pref-notifyTimetable" className="font-semibold block text-stone-900 dark:text-zinc-100">Timetable Updates</label>
                 <span className="text-stone-500 text-[11px]">Receive notifications when class schedules change</span>
               </div>
               <input
                 type="checkbox"
+                id="pref-notifyTimetable"
                 checked={notifyTimetable}
                 onChange={e => setNotifyTimetable(e.target.checked)}
                 className="h-4 w-4 rounded border-stone-300 text-[#8C1B2E] focus:ring-[#8C1B2E]"
@@ -237,11 +246,12 @@ export function SettingsView() {
 
             <div className="flex items-center justify-between border-t border-[#E5E2D9] dark:border-zinc-800/60 pt-3">
               <div>
-                <span className="font-semibold block text-stone-900 dark:text-zinc-100">Request Updates</span>
+                <label htmlFor="pref-notifyRequests" className="font-semibold block text-stone-900 dark:text-zinc-100">Request Updates</label>
                 <span className="text-stone-500 text-[11px]">Receive notifications when new cancellation/swap requests arrive</span>
               </div>
               <input
                 type="checkbox"
+                id="pref-notifyRequests"
                 checked={notifyRequests}
                 onChange={e => setNotifyRequests(e.target.checked)}
                 className="h-4 w-4 rounded border-stone-300 text-[#8C1B2E] focus:ring-[#8C1B2E]"
@@ -250,11 +260,12 @@ export function SettingsView() {
 
             <div className="flex items-center justify-between border-t border-[#E5E2D9] dark:border-zinc-800/60 pt-3">
               <div>
-                <span className="font-semibold block text-stone-900 dark:text-zinc-100">Conflict Notifications</span>
+                <label htmlFor="pref-notifyConflicts" className="font-semibold block text-stone-900 dark:text-zinc-100">Conflict Notifications</label>
                 <span className="text-stone-500 text-[11px]">Immediate alert if scheduling conflicts occur</span>
               </div>
               <input
                 type="checkbox"
+                id="pref-notifyConflicts"
                 checked={notifyConflicts}
                 onChange={e => setNotifyConflicts(e.target.checked)}
                 className="h-4 w-4 rounded border-stone-300 text-[#8C1B2E] focus:ring-[#8C1B2E]"
@@ -265,7 +276,8 @@ export function SettingsView() {
           <div className="pt-4 border-t border-[#E5E2D9] dark:border-zinc-800 flex justify-end">
             <button
               type="submit"
-              className="px-5 py-2 bg-[#8C1B2E] text-white font-semibold rounded-lg hover:bg-[#721525]"
+              disabled={saving}
+              className="px-5 py-2 bg-[#8C1B2E] text-white font-semibold rounded-lg hover:bg-[#721525] disabled:opacity-60"
             >
               Save Preferences
             </button>

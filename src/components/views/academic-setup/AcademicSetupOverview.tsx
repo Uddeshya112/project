@@ -1,5 +1,4 @@
 import React from 'react';
-import { Department, Program, Course, Faculty, Room, StudentSection, CourseAllocation } from '../../../types';
 
 interface AcademicSetupOverviewProps {
   academicYearLabel: string;
@@ -46,7 +45,7 @@ export function AcademicSetupOverview({
             Semester: <strong className="font-semibold text-stone-900 dark:text-zinc-100">{semesterType}</strong>
           </span>
           <span className="px-2.5 py-1 rounded-md bg-stone-100 dark:bg-zinc-800 border border-[#E5E2D9] dark:border-zinc-700 font-medium text-stone-600 dark:text-zinc-300">
-            Days: <strong>{workingDays.length} ({workingDays[0]}–{workingDays[workingDays.length - 1]})</strong>
+            Days: <strong>{workingDays.length ? `${workingDays.length} (${workingDays[0]}–${workingDays[workingDays.length - 1]})` : 'None set'}</strong>
           </span>
           <span className="px-2.5 py-1 rounded-md bg-stone-100 dark:bg-zinc-800 border border-[#E5E2D9] dark:border-zinc-700 font-medium text-stone-600 dark:text-zinc-300">
             Periods: <strong>{periodsRange}</strong>

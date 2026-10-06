@@ -29,6 +29,7 @@ export interface EngineOptions {
   timeBudgetMs?: number; // Max time limit for optimization
   seed?: number; // Deterministic seed
   maxCandidates?: number; // Number of top candidate schedules to generate
+  fixedSessions?: ClassSession[]; // Locked sessions: placed first, never moved
 }
 
 export interface SoftPenaltyBreakdown {
@@ -140,6 +141,7 @@ interface CompiledProblem {
   numDays: number;
   numPeriodsPerDay: number;
   lunchSlotIndices: Set<number>;
+  protectedSlotKeys: Set<string>; // `${facultyId}_${day}_${timeSlotId}`
   infeasibilityReasons: string[];
 }
 
@@ -237,20 +239,22 @@ export function compileSchedulingProblem(
     }
 
     // Find candidate rooms capable of holding this allocation
+    const needsLabRoom = alloc.sessionType === 'Lab' || alloc.sessionType === 'Practical';
+    const requiredCapacity = subSectionObj ? subSectionObj.studentCount : (alloc.subSectionId ? Math.ceil(section.studentCount / 2) : section.studentCount);
     const candidateRoomsIndices: number[] = [];
     activeRooms.forEach((r, rIdx) => {
-      const isLabType = alloc.sessionType === 'Lab' && (r.type === 'ComputerLab' || r.type === 'HardwareLab');
-      const isLectureType = alloc.sessionType !== 'Lab' && (r.type === 'LectureHall' || r.type === 'SeminarRoom' || r.type === 'TutorialRoom');
-      
-      const requiredCapacity = subSectionObj ? subSectionObj.studentCount : (alloc.subSectionId ? Math.ceil(section.studentCount / 2) : section.studentCount);
+      const isLabType = needsLabRoom && (r.type === 'ComputerLab' || r.type === 'HardwareLab');
+      const isLectureType = !needsLabRoom && (r.type === 'LectureHall' || r.type === 'SeminarRoom' || r.type === 'TutorialRoom');
       if ((isLabType || isLectureType) && r.capacity >= requiredCapacity) {
         candidateRoomsIndices.push(rIdx);
       }
     });
+    // Best fit first: keeps large halls free for large cohorts.
+    candidateRoomsIndices.sort((a, b) => activeRooms[a].capacity - activeRooms[b].capacity);
 
     if (candidateRoomsIndices.length === 0) {
       infeasibilityReasons.push(
-        `Course ${course.code} (${alloc.sessionType}) for ${section.name}: Required capacity ${section.studentCount} exceeds all available ${alloc.sessionType === 'Lab' ? 'laboratory' : 'lecture'} rooms.`
+        `Course ${course.code} (${alloc.sessionType}) for ${subSectionObj ? `${section.name}/${subSectionObj.name}` : section.name}: needs a ${needsLabRoom ? 'laboratory' : 'lecture room'} for ${requiredCapacity} students, but none is available.`
       );
     }
 
@@ -347,7 +351,7 @@ export function compileSchedulingProblem(
   }
 
   // Verify total required laboratory hours vs available lab room slot capacity
-  const labAllocations = compiledAllocations.filter(ca => ca.sessionType === 'Lab');
+  const labAllocations = compiledAllocations.filter(ca => ca.sessionType === 'Lab' || ca.sessionType === 'Practical');
   let totalRequiredLabHours = 0;
   labAllocations.forEach(ca => { totalRequiredLabHours += ca.requiredHours; });
 
@@ -370,6 +374,9 @@ export function compileSchedulingProblem(
     numDays,
     numPeriodsPerDay,
     lunchSlotIndices,
+    protectedSlotKeys: new Set(
+      activeFaculty.flatMap(f => (f.preferences?.protectedSlots ?? []).map(ps => `${f.id}_${ps.day}_${ps.periodId}`))
+    ),
     infeasibilityReasons,
   };
 }
@@ -451,12 +458,61 @@ export function executeOptimizationEngine(
   const subSectionOccupancy = new Array<bigint>(Math.max(1, problem.totalSubSections)).fill(0n);
   const sectionSubgroupCounts = Array.from({ length: numSections }, () => new Int16Array(totalSlots));
 
-  // Schedule Grid: slotIdx -> { allocIdx, roomIdx } | null
-  const scheduleAssignments = new Array<{ allocIdx: number; roomIdx: number } | null>(totalSlots).fill(null);
-
   // Tracking hours assigned per allocation
   const allocHoursAssigned = new Array<number>(problem.allocations.length).fill(0);
   const allocAssignedSlots = Array.from({ length: problem.allocations.length }, () => [] as { slotIdx: number; roomIdx: number }[]);
+  let timedOut = false;
+
+  const slotIndexByKey = new Map(problem.slots.map(sl => [`${sl.day}_${sl.timeSlotId}`, sl.slotIdx]));
+  const roomIndexById = new Map(problem.rooms.map((r, i) => [r.id, i]));
+  const fixedKeys = new Set<string>(); // `${allocIdx}_${slotIdx}` placed from locked sessions
+
+  /** Pre-places locked sessions. Ones that no longer fit the data are skipped and re-planned. */
+  function applyFixedSessions() {
+    fixedKeys.clear();
+    for (const fs of options.fixedSessions ?? []) {
+      const slotIdx = slotIndexByKey.get(`${fs.day}_${fs.timeSlotId}`);
+      const roomIdx = roomIndexById.get(fs.roomId);
+      const ia = problem.allocations.find(
+        a =>
+          a.course.id === fs.courseId &&
+          a.section.id === fs.sectionId &&
+          (a.allocation.subSectionId ?? '') === (fs.subSectionId ?? '') &&
+          a.sessionType === fs.type &&
+          allocHoursAssigned[a.allocIdx] < a.requiredHours
+      );
+      if (slotIdx === undefined || roomIdx === undefined || !ia || problem.lunchSlotIndices.has(slotIdx)) continue;
+      const bit = 1n << BigInt(slotIdx);
+      const subIdx = ia.subSectionIdx;
+      const studentClash =
+        subIdx !== undefined
+          ? (sectionWholeOccupancy[ia.sectionIdx] & bit) !== 0n || (subSectionOccupancy[subIdx] & bit) !== 0n
+          : (sectionWholeOccupancy[ia.sectionIdx] & bit) !== 0n || sectionSubgroupCounts[ia.sectionIdx][slotIdx] > 0;
+      if ((facultyOccupancy[ia.facultyIdx] & bit) !== 0n || (roomOccupancy[roomIdx] & bit) !== 0n || studentClash) continue;
+      facultyOccupancy[ia.facultyIdx] |= bit;
+      roomOccupancy[roomIdx] |= bit;
+      if (subIdx !== undefined) {
+        subSectionOccupancy[subIdx] |= bit;
+        sectionSubgroupCounts[ia.sectionIdx][slotIdx]++;
+      } else {
+        sectionWholeOccupancy[ia.sectionIdx] |= bit;
+      }
+      allocHoursAssigned[ia.allocIdx]++;
+      allocAssignedSlots[ia.allocIdx].push({ slotIdx, roomIdx });
+      fixedKeys.add(`${ia.allocIdx}_${slotIdx}`);
+    }
+  }
+
+  function resetState() {
+    facultyOccupancy.fill(0n);
+    roomOccupancy.fill(0n);
+    sectionWholeOccupancy.fill(0n);
+    subSectionOccupancy.fill(0n);
+    sectionSubgroupCounts.forEach(c => c.fill(0));
+    allocHoursAssigned.fill(0);
+    allocAssignedSlots.forEach(a => (a.length = 0));
+    applyFixedSessions();
+  }
 
   // Phase A: Feasibility Backtracking Search
   const feasibilityStart = performance.now();
@@ -464,8 +520,9 @@ export function executeOptimizationEngine(
   // MRV Ordering: Sort allocations by domain tightness (fewest feasible slots / required hours ratio)
   const searchAllocOrder = [...problem.allocations].sort((a, b) => {
     // Labs first (strictest room requirements)
-    if (a.sessionType === 'Lab' && b.sessionType !== 'Lab') return -1;
-    if (b.sessionType === 'Lab' && a.sessionType !== 'Lab') return 1;
+    const aLab = a.sessionType === 'Lab' || a.sessionType === 'Practical';
+    const bLab = b.sessionType === 'Lab' || b.sessionType === 'Practical';
+    if (aLab !== bLab) return aLab ? -1 : 1;
 
     const domainRatioA = a.feasibleSlotIndices.length / Math.max(1, a.requiredHours);
     const domainRatioB = b.feasibleSlotIndices.length / Math.max(1, b.requiredHours);
@@ -476,31 +533,29 @@ export function executeOptimizationEngine(
 
   function solvePhaseA(allocOrderIdx: number): boolean {
     if (performance.now() - startTime > timeBudgetMs) {
-      return false; // Time limit
+      timedOut = true;
+      return false;
     }
 
     if (allocOrderIdx >= searchAllocOrder.length) {
-      // Complete Feasible Assignment Reached!
       candidatesEvaluated++;
-      const candidate = buildCandidateFromState(
-        candidatesFound.length + 1,
-        prng.range(1000, 9999),
-        problem,
-        allocAssignedSlots,
-        options.optimizationProfile || 'BALANCED'
+      candidatesFound.push(
+        buildCandidateFromState(
+          candidatesFound.length + 1,
+          prng.range(1000, 9999),
+          problem,
+          allocAssignedSlots,
+          options.optimizationProfile || 'BALANCED',
+          fixedKeys
+        )
       );
-      candidatesFound.push(candidate);
-
-      if (mode === 'FAST' || candidatesFound.length >= maxCandidates) {
-        return true; // Stop Phase A
-      }
-      return false; // Continue search for additional distinct candidates
+      return true;
     }
 
     const currentAlloc = searchAllocOrder[allocOrderIdx];
     const hoursNeeded = currentAlloc.requiredHours - allocHoursAssigned[currentAlloc.allocIdx];
 
-    if (hoursNeeded === 0) {
+    if (hoursNeeded <= 0) {
       return solvePhaseA(allocOrderIdx + 1);
     }
 
@@ -510,16 +565,15 @@ export function executeOptimizationEngine(
 
     const isLabAlloc =
       (currentAlloc.sessionType === 'Lab' || currentAlloc.sessionType === 'Practical') &&
+      hoursNeeded >= 2 &&
       Boolean(currentAlloc.feasibleLabBlocks && currentAlloc.feasibleLabBlocks.length > 0);
 
     if (isLabAlloc) {
       // Branch 1: Atomic 2-Hour Lab Block Scheduling
       const candidateBlocks = [...currentAlloc.feasibleLabBlocks!];
-      if (candidatesFound.length > 0) {
-        for (let i = candidateBlocks.length - 1; i > 0; i--) {
-          const j = Math.floor(prng.next() * (i + 1));
-          [candidateBlocks[i], candidateBlocks[j]] = [candidateBlocks[j], candidateBlocks[i]];
-        }
+      for (let i = candidateBlocks.length - 1; i > 0; i--) {
+        const j = Math.floor(prng.next() * (i + 1));
+        [candidateBlocks[i], candidateBlocks[j]] = [candidateBlocks[j], candidateBlocks[i]];
       }
 
       for (const [s1, s2] of candidateBlocks) {
@@ -605,12 +659,10 @@ export function executeOptimizationEngine(
       return false;
     } else {
       // Branch 2: Single-Hour Lecture / Tutorial Scheduling (with 1-lecture/day/course distribution)
-      let candidateSlots = [...currentAlloc.feasibleSlotIndices];
-      if (candidatesFound.length > 0) {
-        for (let i = candidateSlots.length - 1; i > 0; i--) {
-          const j = Math.floor(prng.next() * (i + 1));
-          [candidateSlots[i], candidateSlots[j]] = [candidateSlots[j], candidateSlots[i]];
-        }
+      const candidateSlots = [...currentAlloc.feasibleSlotIndices];
+      for (let i = candidateSlots.length - 1; i > 0; i--) {
+        const j = Math.floor(prng.next() * (i + 1));
+        [candidateSlots[i], candidateSlots[j]] = [candidateSlots[j], candidateSlots[i]];
       }
 
       // Track days already assigned for this allocation
@@ -765,8 +817,14 @@ export function executeOptimizationEngine(
     }
   }
 
-  // Execute Phase A Feasibility Search
-  solvePhaseA(0);
+  // Phase A: one independent seeded search per candidate. Later candidates only run while
+  // there is time left, so Phase B still gets part of the budget.
+  const wanted = mode === 'FAST' ? 1 : Math.max(1, maxCandidates);
+  for (let c = 0; c < wanted; c++) {
+    if (c > 0 && performance.now() - startTime > timeBudgetMs * 0.5) break;
+    resetState();
+    if (!solvePhaseA(0)) break;
+  }
   const feasibilityTimeMs = Number((performance.now() - feasibilityStart).toFixed(2));
 
   // Phase B: Local Search Soft Constraint Optimization (if budget allows and feasible solution exists)
@@ -784,8 +842,8 @@ export function executeOptimizationEngine(
 
   const totalTimeMs = Number((performance.now() - startTime).toFixed(2));
 
-  // Sort candidates by lowest soft penalty (highest quality)
-  candidatesFound.sort((a, b) => b.healthScore - a.healthScore);
+  // Lowest soft penalty first.
+  candidatesFound.sort((a, b) => a.softPenalty.totalPenalty - b.softPenalty.totalPenalty);
 
   const bestCandidate = candidatesFound[0];
 
@@ -794,7 +852,9 @@ export function executeOptimizationEngine(
     isFeasible: candidatesFound.length > 0,
     statusMessage: candidatesFound.length > 0
       ? `Successfully generated ${candidatesFound.length} feasible, conflict-free timetable candidate(s) in ${totalTimeMs} ms.`
-      : `Search space exhausted within ${timeBudgetMs} ms budget without finding 100% hard-constraint solution.`,
+      : timedOut
+        ? `No conflict-free timetable found within the ${timeBudgetMs} ms budget. Try a larger budget, more rooms, or fewer constraints.`
+        : 'No conflict-free timetable exists for these allocations, rooms and faculty availability.',
     metrics: {
       compilationTimeMs,
       feasibilityTimeMs,
@@ -820,7 +880,8 @@ function buildCandidateFromState(
   seed: number,
   problem: CompiledProblem,
   allocAssignedSlots: { slotIdx: number; roomIdx: number }[][],
-  profile: OptimizationProfile = 'BALANCED'
+  profile: OptimizationProfile = 'BALANCED',
+  fixedKeys: Set<string> = new Set()
 ): GeneratedCandidate {
   const sessions: ClassSession[] = [];
   let scheduledHours = 0;
@@ -846,6 +907,7 @@ function buildCandidateFromState(
         type: internalAlloc.sessionType as any,
         status: 'Planned',
         version: 1,
+        ...(fixedKeys.has(`${internalAlloc.allocIdx}_${item.slotIdx}`) ? { isLocked: true } : {}),
       });
 
       scheduledHours++;
@@ -855,8 +917,7 @@ function buildCandidateFromState(
   const totalRequestedHours = problem.allocations.reduce((sum, a) => sum + a.requiredHours, 0);
   const softPenalty = calculateSoftPenalties(sessions, problem, profile);
 
-  // Health Score: 100 - softPenalty.totalPenalty, clamped to [10, 100]
-  const healthScore = Math.max(10, Math.min(100, Math.round(100 - softPenalty.totalPenalty)));
+  const healthScore = healthFromPenalty(softPenalty.totalPenalty, sessions.length);
 
   return {
     candidateId: `cand-v${candidateNum}`,
@@ -869,6 +930,12 @@ function buildCandidateFromState(
     totalRequestedHours,
     unscheduledAllocations: [],
   };
+}
+
+/** 0-100 quality score; penalty is averaged per session so the score is comparable across timetable sizes. */
+function healthFromPenalty(totalPenalty: number, sessionCount: number): number {
+  if (!sessionCount) return 0;
+  return Math.max(0, Math.min(100, Math.round(100 - (10 * totalPenalty) / sessionCount)));
 }
 
 // ---------------------------------------------------------------------------
@@ -890,9 +957,12 @@ function calculateSoftPenalties(
   const facultyDayMap = new Map<string, number[]>();
   const sectionDayMap = new Map<string, number[]>();
   const sectionCourseDayMap = new Map<string, number>();
+  const slotByKey = new Map(problem.slots.map(s => [`${s.day}_${s.timeSlotId}`, s]));
+  const roomById = new Map(problem.rooms.map(r => [r.id, r]));
+  const sectionById = new Map(problem.sections.map(s => [s.id, s]));
 
   for (const sess of sessions) {
-    const slotRef = problem.slots.find(s => s.day === sess.day && s.timeSlotId === sess.timeSlotId);
+    const slotRef = slotByKey.get(`${sess.day}_${sess.timeSlotId}`);
     if (!slotRef) continue;
 
     const facKey = `${sess.facultyId}_${sess.day}`;
@@ -907,10 +977,13 @@ function calculateSoftPenalties(
     sectionCourseDayMap.set(courseKey, (sectionCourseDayMap.get(courseKey) || 0) + 1);
 
     // Room Capacity Fit: Reward tight capacity fits
-    const room = problem.rooms.find(r => r.id === sess.roomId);
-    const section = problem.sections.find(s => s.id === sess.sectionId);
+    const room = roomById.get(sess.roomId);
+    const section = sectionById.get(sess.sectionId);
     if (room && section) {
-      const unusedChairs = room.capacity - section.studentCount;
+      const cohort = sess.subSectionId
+        ? section.subSections?.find(sub => sub.id === sess.subSectionId)?.studentCount ?? section.studentCount
+        : section.studentCount;
+      const unusedChairs = room.capacity - cohort;
       if (unusedChairs > 40) {
         roomCapacityFitPenalty += 1.0;
       }
@@ -1003,76 +1076,81 @@ function optimizeCandidatesPhaseB(
   profile: OptimizationProfile = 'BALANCED'
 ) {
   const endBy = performance.now() + Math.max(50, remainingBudgetMs);
+  const perCandidateMs = Math.max(25, remainingBudgetMs / Math.max(1, candidates.length));
 
   for (const candidate of candidates) {
-    if (performance.now() > endBy) break;
-
-    // Local Search Neighborhood Swap: Attempt swapping timeslots of two sessions of the same section
+    const stopAt = Math.min(endBy, performance.now() + perCandidateMs);
     let currentSessions = [...candidate.sessions];
-    let currentScore = candidate.healthScore;
+    let currentPenalty = candidate.softPenalty.totalPenalty;
 
-    for (let iteration = 0; iteration < 100; iteration++) {
-      if (performance.now() > endBy) break;
-      if (currentSessions.length < 2) break;
+    // Swapping two single-hour sessions of the same section keeps that section's occupancy intact,
+    // so these swaps pass hard constraints far more often than arbitrary pairs.
+    const bySection = new Map<string, number[]>();
+    currentSessions.forEach((sess, i) => {
+      if (sess.type === 'Lab' || sess.type === 'Practical' || sess.isLocked) return; // never break 2-hour labs or locked sessions
+      const list = bySection.get(sess.sectionId) ?? [];
+      list.push(i);
+      bySection.set(sess.sectionId, list);
+    });
+    const groups = [...bySection.values()].filter(g => g.length > 1);
+    if (!groups.length) continue;
 
-      const idxA = Math.floor(prng.next() * currentSessions.length);
-      const idxB = Math.floor(prng.next() * currentSessions.length);
+    for (let iteration = 0; iteration < 5000 && performance.now() < stopAt; iteration++) {
+      const group = groups[Math.floor(prng.next() * groups.length)];
+      const idxA = group[Math.floor(prng.next() * group.length)];
+      const idxB = group[Math.floor(prng.next() * group.length)];
       if (idxA === idxB) continue;
-
       const sessA = currentSessions[idxA];
       const sessB = currentSessions[idxB];
+      if (sessA.day === sessB.day && sessA.timeSlotId === sessB.timeSlotId) continue;
 
-      // Only swap single-hour lectures / tutorials (never break 2-hour labs!)
-      if (sessA.type === 'Lab' || sessA.type === 'Practical' || sessB.type === 'Lab' || sessB.type === 'Practical') {
-        continue;
-      }
-      if (sessA.type !== sessB.type) continue;
+      const swapped = currentSessions.slice();
+      swapped[idxA] = { ...sessA, day: sessB.day, timeSlotId: sessB.timeSlotId };
+      swapped[idxB] = { ...sessB, day: sessA.day, timeSlotId: sessA.timeSlotId };
+      if (!validateHardConstraintsFast(swapped, problem)) continue;
 
-      // Swap day & timeslot
-      const swappedSessions = currentSessions.map((s, i) => {
-        if (i === idxA) return { ...s, day: sessB.day, timeSlotId: sessB.timeSlotId };
-        if (i === idxB) return { ...s, day: sessA.day, timeSlotId: sessA.timeSlotId };
-        return s;
-      });
-
-      // Verify hard constraints on swapped state
-      if (!validateHardConstraintsFast(swappedSessions, problem)) continue;
-
-      // Compute new soft penalty with current profile
-      const newPenalty = calculateSoftPenalties(swappedSessions, problem, profile);
-      const newScore = Math.max(10, Math.min(100, Math.round(100 - newPenalty.totalPenalty)));
-
-      if (newScore > currentScore) {
-        currentSessions = swappedSessions;
-        currentScore = newScore;
+      const newPenalty = calculateSoftPenalties(swapped, problem, profile);
+      if (newPenalty.totalPenalty < currentPenalty) {
+        currentSessions = swapped;
+        currentPenalty = newPenalty.totalPenalty;
         candidate.sessions = currentSessions;
-        candidate.healthScore = currentScore;
         candidate.softPenalty = newPenalty;
+        candidate.healthScore = healthFromPenalty(currentPenalty, currentSessions.length);
       }
     }
   }
 }
 
 function validateHardConstraintsFast(sessions: ClassSession[], problem: CompiledProblem): boolean {
-  const facOccupancy = new Map<string, boolean>();
-  const roomOccupancy = new Map<string, boolean>();
-  const secOccupancy = new Map<string, boolean>();
+  const facultyBusy = new Set<string>();
+  const roomBusy = new Set<string>();
+  const wholeSectionBusy = new Set<string>(); // whole-class session in this slot
+  const anySubgroupBusy = new Set<string>(); // at least one subgroup session in this slot
+  const subgroupBusy = new Set<string>();
 
   for (const s of sessions) {
-    const keySlot = `${s.day}_${s.timeSlotId}`;
+    const slot = `${s.day}_${s.timeSlotId}`;
+    if (problem.protectedSlotKeys.has(`${s.facultyId}_${slot}`)) return false;
 
-    const facKey = `${s.facultyId}_${keySlot}`;
-    if (facOccupancy.has(facKey)) return false;
-    facOccupancy.set(facKey, true);
+    const fac = `${s.facultyId}_${slot}`;
+    if (facultyBusy.has(fac)) return false;
+    facultyBusy.add(fac);
 
-    const roomKey = `${s.roomId}_${keySlot}`;
-    if (roomOccupancy.has(roomKey)) return false;
-    roomOccupancy.set(roomKey, true);
+    const room = `${s.roomId}_${slot}`;
+    if (roomBusy.has(room)) return false;
+    roomBusy.add(room);
 
-    const secKey = `${s.sectionId}_${keySlot}`;
-    if (secOccupancy.has(secKey)) return false;
-    secOccupancy.set(secKey, true);
+    const sec = `${s.sectionId}_${slot}`;
+    if (wholeSectionBusy.has(sec)) return false;
+    if (s.subSectionId) {
+      const sub = `${s.sectionId}_${s.subSectionId}_${slot}`;
+      if (subgroupBusy.has(sub)) return false;
+      subgroupBusy.add(sub);
+      anySubgroupBusy.add(sec);
+    } else {
+      if (anySubgroupBusy.has(sec)) return false;
+      wholeSectionBusy.add(sec);
+    }
   }
-
   return true;
 }

@@ -1,5 +1,4 @@
 import { createRoot } from 'react-dom/client';
-import './lib/apiConfig';
 import App from './App';
 import './index.css';
 

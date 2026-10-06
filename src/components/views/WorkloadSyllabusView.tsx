@@ -1,19 +1,47 @@
 import React from 'react';
 import { useTimetable } from '../../context/TimetableContext';
+import type { TimeSlot } from '../../types';
 import {
   BarChart3,
   BookOpen,
-  Calendar,
-  AlertTriangle,
-  CheckCircle2,
-  Clock,
   ShieldCheck,
-  TrendingDown,
   Info
 } from 'lucide-react';
 
+// Sample content shown until real data exists — edit freely.
+const SAMPLE_EXAM_COUNTDOWN = 'Semester Exam in 21 Days';
+
+function SampleBadge() {
+  return (
+    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-stone-100 dark:bg-zinc-800 text-stone-500 dark:text-zinc-400 border border-[#E5E2D9] dark:border-zinc-700 font-sans">
+      Sample
+    </span>
+  );
+}
+
+/** Length of a period in hours from its "HH:MM" start/end (1 if unparseable). */
+const slotHours = (slot?: TimeSlot) => {
+  if (!slot) return 1;
+  const mins = (t: string) => {
+    const [h, m] = t.split(':').map(Number);
+    return h * 60 + m;
+  };
+  const h = (mins(slot.endTime) - mins(slot.startTime)) / 60;
+  return Number.isFinite(h) && h > 0 ? h : 1;
+};
+const fmtHrs = (h: number) => `${Math.round(h * 10) / 10}`;
+
 export function WorkloadSyllabusView() {
-  const { courses, facultyMembers, sessions } = useTimetable();
+  const { academicYear, courses, facultyMembers, sessions } = useTimetable();
+
+  const slotById = new Map(academicYear.timeSlots.map(t => [t.id, t]));
+  // Weekly direct-teaching hours per faculty member, from the (non-cancelled) timetable sessions.
+  const loadByFaculty = new Map<string, number>();
+  for (const s of sessions) {
+    if (s.status === 'Cancelled') continue;
+    loadByFaculty.set(s.facultyId, (loadByFaculty.get(s.facultyId) ?? 0) + slotHours(slotById.get(s.timeSlotId)));
+  }
+  const overloadedCount = facultyMembers.filter(f => (loadByFaculty.get(f.id) ?? 0) > f.maxDirectTeachingHours).length;
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -27,38 +55,46 @@ export function WorkloadSyllabusView() {
           Syllabus Progress & Faculty UGC Workload
         </h1>
         <p className="text-xs text-stone-600 dark:text-zinc-400 mt-1 max-w-3xl leading-relaxed">
-          Exam-aware syllabus deficit forecasting combined with UGC 2026 faculty workload caps. Prevents burnout while guaranteeing course completion.
+          Syllabus progress per course, and each faculty member's weekly teaching load from the timetable compared with their teaching cap.
         </p>
       </div>
 
-      {/* Syllabus Progress & Risk Breakdown (OCR Page 29, 30, 36) */}
+      {/* Syllabus Progress & Risk Breakdown */}
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-serif font-bold text-stone-900 dark:text-zinc-100 flex items-center gap-2">
             <BookOpen className="h-4 w-4 text-[#8C1B2E] dark:text-red-400" />
             <span>Syllabus Completion & Exam Readiness Radar</span>
           </h2>
-          <span className="text-xs text-stone-500 dark:text-zinc-400 font-mono">
-            Semester Exam in 21 Days
+          <span className="text-xs text-stone-500 dark:text-zinc-400 font-mono flex items-center gap-1.5">
+            {SAMPLE_EXAM_COUNTDOWN} <SampleBadge />
           </span>
         </div>
+
+        {courses.length === 0 && (
+          <div className="p-4 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl text-xs text-stone-500 dark:text-zinc-400 italic">
+            No courses yet.
+          </div>
+        )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {courses.map(course => {
             const faculty = facultyMembers.find(f => f.id === course.primaryFacultyId);
-            const remaining = course.totalSemesterHours - course.completedHours;
-            const completionPercent = Math.round((course.completedHours / course.totalSemesterHours) * 100);
+            const remaining = Math.max(0, course.totalSemesterHours - course.completedHours);
+            const completionPercent = course.totalSemesterHours > 0
+              ? Math.min(100, Math.round((course.completedHours / course.totalSemesterHours) * 100))
+              : 0;
 
-            // Risk calculation (Section 35, 36)
+            // Risk from cancelled (not yet recovered) hours
             let risk: 'GREEN' | 'YELLOW' | 'RED' = 'GREEN';
-            let riskNote = 'On schedule for examination';
+            let riskNote = 'No cancelled hours';
 
             if (course.cancelledHours >= 2) {
               risk = 'RED';
-              riskNote = 'Critical deficit: 2 makeups urgently required';
+              riskNote = `${course.cancelledHours}h cancelled — make-up classes needed`;
             } else if (course.cancelledHours === 1) {
               risk = 'YELLOW';
-              riskNote = 'Recovery recommended within 7 days';
+              riskNote = '1h cancelled — schedule a make-up class';
             }
 
             return (
@@ -73,7 +109,7 @@ export function WorkloadSyllabusView() {
                     </span>
                     <h3 className="font-serif font-bold text-sm text-stone-900 dark:text-zinc-100 mt-0.5">{course.name}</h3>
                     <div className="text-[11px] text-stone-500 dark:text-zinc-400 mt-1">
-                      Lead: {faculty?.name}
+                      Lead: {faculty?.name ?? 'Unassigned'}
                     </div>
                   </div>
 
@@ -136,12 +172,12 @@ export function WorkloadSyllabusView() {
         </div>
       </div>
 
-      {/* UGC Faculty Workload Matrix (OCR Page 10, 31, 37) */}
+      {/* UGC Faculty Workload Matrix */}
       <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl p-6 space-y-5 shadow-xs">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#E5E2D9] dark:border-zinc-800 pb-4">
           <div>
             <h2 className="text-base font-serif font-bold text-stone-900 dark:text-zinc-100 flex items-center gap-2">
-              <ShieldCheck className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+              <ShieldCheck className={`h-5 w-5 ${overloadedCount ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'}`} />
               <span>UGC 2026 Faculty Direct Teaching Compliance</span>
             </h2>
             <p className="text-xs text-stone-500 dark:text-zinc-400 mt-0.5">
@@ -149,18 +185,35 @@ export function WorkloadSyllabusView() {
             </p>
           </div>
 
-          <span className="text-xs font-mono text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-3 py-1 rounded-full border border-emerald-200 dark:border-emerald-500/20 font-semibold self-start sm:self-auto">
-            100% Institution Compliance
-          </span>
+          {facultyMembers.length > 0 && sessions.length > 0 && (
+            <span
+              className={`text-xs font-mono px-3 py-1 rounded-full border font-semibold self-start sm:self-auto ${
+                overloadedCount
+                  ? 'text-rose-800 dark:text-rose-300 bg-rose-50 dark:bg-rose-500/10 border-rose-200 dark:border-rose-500/30'
+                  : 'text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 border-emerald-200 dark:border-emerald-500/20'
+              }`}
+            >
+              {overloadedCount
+                ? `${overloadedCount} of ${facultyMembers.length} faculty over their cap`
+                : `All ${facultyMembers.length} faculty within their cap`}
+            </span>
+          )}
         </div>
+
+        {sessions.length === 0 && (
+          <div className="text-xs text-stone-500 dark:text-zinc-400 italic">
+            No timetable yet — loads will appear once sessions are scheduled.
+          </div>
+        )}
 
         <div className="divide-y divide-[#E5E2D9] dark:divide-zinc-800">
           {facultyMembers.map(faculty => {
-            const activeHours = sessions.filter(
-              s => s.facultyId === faculty.id && s.status !== 'Cancelled'
-            ).length;
-
-            const isOverloaded = activeHours > faculty.maxDirectTeachingHours;
+            const activeHours = loadByFaculty.get(faculty.id) ?? 0;
+            const cap = faculty.maxDirectTeachingHours;
+            const isOverloaded = activeHours > cap;
+            const researchHours = (faculty.preferences?.protectedSlots ?? [])
+              .filter(p => p.reason === 'Research')
+              .reduce((n, p) => n + slotHours(slotById.get(p.periodId)), 0);
 
             return (
               <div key={faculty.id} className="py-4 flex flex-col md:flex-row md:items-center justify-between gap-4 text-xs">
@@ -174,7 +227,7 @@ export function WorkloadSyllabusView() {
                   <div className="flex justify-between text-xs font-mono">
                     <span className="text-stone-500 dark:text-zinc-400">Direct Teaching Load</span>
                     <span className="text-stone-800 dark:text-zinc-200 font-bold">
-                      {activeHours} / {faculty.maxDirectTeachingHours} hrs
+                      {fmtHrs(activeHours)} / {cap} hrs
                     </span>
                   </div>
                   <div className="h-2 w-full bg-stone-200 dark:bg-zinc-950 rounded-full overflow-hidden border border-[#E5E2D9] dark:border-zinc-800">
@@ -183,7 +236,7 @@ export function WorkloadSyllabusView() {
                         isOverloaded ? 'bg-[#8C1B2E]' : 'bg-stone-700 dark:bg-zinc-400'
                       }`}
                       style={{
-                        width: `${Math.min(100, Math.round((activeHours / faculty.maxDirectTeachingHours) * 100))}%`,
+                        width: `${cap > 0 ? Math.min(100, Math.round((activeHours / cap) * 100)) : activeHours > 0 ? 100 : 0}%`,
                       }}
                     />
                   </div>
@@ -192,7 +245,7 @@ export function WorkloadSyllabusView() {
                 <div className="flex items-center gap-4 shrink-0 text-right">
                   <div>
                     <span className="text-stone-500 dark:text-zinc-400 block text-[10px]">Research Hours</span>
-                    <span className="font-mono text-stone-800 dark:text-zinc-200 font-semibold">6 hrs (Protected)</span>
+                    <span className="font-mono text-stone-800 dark:text-zinc-200 font-semibold">{fmtHrs(researchHours)} hrs (Protected)</span>
                   </div>
 
                   <span
@@ -202,7 +255,7 @@ export function WorkloadSyllabusView() {
                         : 'bg-emerald-50 text-emerald-800 border border-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-300 dark:border-emerald-500/20'
                     }`}
                   >
-                    {isOverloaded ? 'Potential Overload' : 'Balanced'}
+                    {isOverloaded ? 'Over Cap' : 'Within Cap'}
                   </span>
                 </div>
               </div>

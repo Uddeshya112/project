@@ -1,5 +1,4 @@
 import {
-  ClassSession,
   Room,
   Faculty,
   StudentSection,
@@ -7,8 +6,6 @@ import {
   CourseAllocation,
   AcademicConstraint,
   AcademicYearConfig,
-  TimeSlot,
-  DayOfWeek,
   ValidationReport,
   ValidationItem
 } from '../types';
@@ -190,11 +187,13 @@ export function validateAcademicSetup(
 
   // 7. Check Capacity Compatibility
   let capacityMismatchCount = 0;
+  const maxCapableRoom = Math.max(...availableRooms.map(r => r.capacity), 0);
   for (const alloc of allocations) {
     const section = sections.find(s => s.id === alloc.sectionId);
     if (!section) continue;
-    const requiredCap = alloc.subSectionId ? Math.ceil(section.studentCount / 2) : section.studentCount;
-    const maxCapableRoom = Math.max(...availableRooms.map(r => r.capacity), 0);
+    const requiredCap = alloc.subSectionId
+      ? section.subSections?.find(sub => sub.id === alloc.subSectionId)?.studentCount ?? Math.ceil(section.studentCount / 2)
+      : section.studentCount;
     if (requiredCap > maxCapableRoom) {
       capacityMismatchCount++;
     }
@@ -207,7 +206,7 @@ export function validateAcademicSetup(
       category: 'Infrastructure',
       status: 'Error',
       message: `${capacityMismatchCount} allocation(s) exceed the largest available room capacity.`,
-      fixTab: 'rooms_mgmt',
+      fixTab: 'rooms',
     });
   } else {
     items.push({
@@ -228,7 +227,7 @@ export function validateAcademicSetup(
       category: 'Infrastructure',
       status: 'Error',
       message: `${labAllocations.length} lab session(s) required, but 0 Computer/Hardware Labs are configured.`,
-      fixTab: 'rooms_mgmt',
+      fixTab: 'rooms',
     });
   }
 
@@ -253,7 +252,7 @@ export function validateAcademicSetup(
       category: 'Workload',
       status: 'Warning',
       message: `${workloadOverloadedFaculty} faculty member(s) assigned hours exceed their UGC direct teaching limit.`,
-      fixTab: 'faculty_mgmt',
+      fixTab: 'faculty',
     });
   } else {
     items.push({
@@ -275,55 +274,5 @@ export function validateAcademicSetup(
     warningCount,
     errorCount,
     items,
-  };
-}
-
-import { executeOptimizationEngine } from './optimizationEngine';
-
-/**
- * Generates a draft timetable using the high-performance Bitset Constraint Optimization Engine.
- */
-export function generateTimetableFromConfiguration(
-  academicYear: AcademicYearConfig,
-  allocations: CourseAllocation[],
-  facultyMembers: Faculty[],
-  rooms: Room[],
-  sections: StudentSection[],
-  courses: Course[],
-  constraints: AcademicConstraint[]
-): {
-  sessions: ClassSession[];
-  scheduledHours: number;
-  totalRequestedHours: number;
-  unscheduledAllocations: CourseAllocation[];
-  conflicts: string[];
-} {
-  const engineResult = executeOptimizationEngine(
-    academicYear,
-    allocations,
-    facultyMembers,
-    rooms,
-    sections,
-    courses,
-    constraints,
-    { budgetMode: 'FAST', timeBudgetMs: 100, seed: 1337 }
-  );
-
-  if (engineResult.isFeasible && engineResult.bestCandidate) {
-    return {
-      sessions: engineResult.bestCandidate.sessions,
-      scheduledHours: engineResult.bestCandidate.scheduledHours,
-      totalRequestedHours: engineResult.bestCandidate.totalRequestedHours,
-      unscheduledAllocations: engineResult.bestCandidate.unscheduledAllocations,
-      conflicts: [],
-    };
-  }
-
-  return {
-    sessions: [],
-    scheduledHours: 0,
-    totalRequestedHours: allocations.reduce((acc, a) => acc + a.hoursPerWeek, 0),
-    unscheduledAllocations: allocations,
-    conflicts: engineResult.infeasibilityDiagnostics || [engineResult.statusMessage],
   };
 }

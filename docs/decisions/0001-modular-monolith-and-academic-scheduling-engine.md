@@ -1,32 +1,22 @@
-# Architecture Decision Record (ADR) 0001: Modular Monolith Architecture & Constraint-Satisfaction Engine
+# ADR 0001: One process, in-memory working copy, built-in scheduling engine
 
-**Status**: Accepted  
-**Date**: 2026-10-02  
-**Deciders**: Principal Engineering Agent, System Architect  
-**Context**: IntelliSchedule University Operations Platform
+Status: accepted (describes the current code). Date: 2026-10-06.
 
----
+## Context
 
-## Context & Problem Statement
-
-University academic scheduling requires managing tightly coupled relational constraints (Faculty availability, Room capacity, Lab equipment, Student cohorts, UGC teaching limits) alongside real-time operational self-healing when unexpected cancellations occur. We needed an architecture that guarantees data consistency, zero-delay feedback during manual grid adjustments, and high security without distributed transaction overhead.
-
----
+One institute, a few coordinators and admins making changes, and many students and faculty reading. Timetable operations need the whole dataset at once (generation, validation, conflict checks on every move), and the result must survive restarts and be hosted cheaply.
 
 ## Decision
 
-We chose a **Modular Monolith** architecture:
-1. **Single Express 5 Full-Stack Service**: Collocates REST authentication, health monitoring, and Vite SPA static asset delivery.
-2. **Deterministic Constraint-Satisfaction Engine**: Client-side / server-side solver executing combinatorial allocation mapping with zero room, faculty, or section double-booking.
-3. **Server-Authoritative RBAC**: Roles resolved exclusively from backend user records and pre-authorized directories.
+1. **One Node.js process** (Express 5) serves the API and the built React app on one origin. No separate frontend host, no CORS, cookie sessions.
+2. **Working copy in memory, Postgres as the record.** The server loads academic data and the timetable as four JSONB documents (`intellischedule.app_state`) at start and saves every change in one transaction before responding. Each document has a `version` column; a mismatched version fails the request with 409 instead of overwriting. Timetable versions and the audit log are separate append-only tables. Users and sessions are normal rows queried directly.
+3. **Supabase Postgres through a direct connection string** (`pg`), in a private `intellischedule` schema with RLS enabled and no policies. No Supabase Auth or REST API. Embedded Postgres (PGlite) for development and tests.
+4. **Built-in scheduling engine** in TypeScript (`src/lib/optimizationEngine.ts`): seeded backtracking with bitset occupancy, then local search on a soft penalty, checked by a separate validator. No external solver service.
 
----
+## Consequences
 
-## Consequences & Trade-offs
-
-- **Positive**:
-  - Instantaneous constraint validation without network latency during timetable drag-and-drop or slot editing.
-  - Simplified operational deployment (single container, low memory footprint).
-  - High observability and unified logging.
-- **Negative**:
-  - Requires horizontal scaling of the entire monolith if request volume increases significantly (mitigated by stateless session token design).
+- Simple to run: one container plus a database. Local development needs no services.
+- Reads are served from memory; a write costs one transaction.
+- **Only one instance may serve traffic.** A second instance would conflict (409s and reloads). Rate-limit counters are per process too. This is the scaling ceiling; moving past it means storing entities as rows and moving rate limits and the solver out of the request process.
+- The solver blocks the event loop while it runs. The total budget is capped at 3 s per request, shared by its routines.
+- Each save rewrites the changed documents in full; fine at the size of the sample dataset, not tested beyond it.

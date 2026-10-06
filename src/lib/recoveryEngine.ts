@@ -1,4 +1,5 @@
 import {
+  TimeSlot,
   ClassSession,
   Room,
   Faculty,
@@ -77,10 +78,12 @@ export function checkHardConstraints(
   }
 
   // 3. Student-group conflict: sum_{c,r,f} x_{c,t,r,f} <= 1
+  // Parallel sessions of *different* subgroups of the same section are allowed.
   const studentBusy = activeSessions.find(
     s => s.day === candidateSession.day &&
          s.timeSlotId === candidateSession.timeSlotId &&
-         s.sectionId === candidateSession.sectionId
+         s.sectionId === candidateSession.sectionId &&
+         (!s.subSectionId || !candidateSession.subSectionId || s.subSectionId === candidateSession.subSectionId)
   );
   if (studentBusy) {
     const course = courses.find(c => c.id === studentBusy.courseId);
@@ -92,9 +95,12 @@ export function checkHardConstraints(
   // 4. Room capacity check
   const room = rooms.find(r => r.id === candidateSession.roomId);
   const section = sections.find(s => s.id === candidateSession.sectionId);
-  if (room && section && section.studentCount > room.capacity) {
+  const cohortSize = candidateSession.subSectionId
+    ? section?.subSections?.find(sub => sub.id === candidateSession.subSectionId)?.studentCount ?? section?.studentCount ?? 0
+    : section?.studentCount ?? 0;
+  if (room && section && cohortSize > room.capacity) {
     violations.push(
-      `Capacity violation: Room capacity is ${room.capacity}, but section has ${section.studentCount} students.`
+      `Capacity violation: Room capacity is ${room.capacity}, but the group has ${cohortSize} students.`
     );
   }
 
@@ -127,73 +133,123 @@ export function checkHardConstraints(
  * Calculates Timetable Health Score (Section 15, 16):
  * Returns overall score (0 - 100) and decomposed sub-indices.
  */
+/** Working week used by health and recovery calculations; defaults to the standard day. */
+export interface TeachingCalendar {
+  workingDays: DayOfWeek[];
+  timeSlots: TimeSlot[];
+  lunchPeriodId?: string;
+}
+
+const DEFAULT_CALENDAR: TeachingCalendar = {
+  workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+  timeSlots: TIME_SLOTS,
+  lunchPeriodId: 'ts-5',
+};
+
+const teachingSlotsOf = (cal: TeachingCalendar) =>
+  cal.timeSlots.filter(t => !t.isBreak && !t.isLunch && t.id !== cal.lunchPeriodId);
+
+/**
+ * Timetable health, every figure computed from the sessions:
+ * hard clashes (subgroup-aware), faculty load vs limits, student daily load,
+ * faculty preference fit, room use, stability and syllabus risk.
+ */
 export function calculateHealthScore(
   sessions: ClassSession[],
   rooms: Room[],
   facultyMembers: Faculty[],
   sections: StudentSection[],
-  courses: Course[]
+  courses: Course[],
+  calendar: TeachingCalendar = DEFAULT_CALENDAR
 ): SystemHealthMetrics {
-  const activeSessions = sessions.filter(s => s.status !== 'Cancelled');
-  let hardViolations = 0;
+  const active = sessions.filter(s => s.status !== 'Cancelled');
 
-  // Check pairwise conflicts
-  for (let i = 0; i < activeSessions.length; i++) {
-    for (let j = i + 1; j < activeSessions.length; j++) {
-      const a = activeSessions[i];
-      const b = activeSessions[j];
-      if (a.day === b.day && a.timeSlotId === b.timeSlotId) {
-        if (a.facultyId === b.facultyId) hardViolations++;
-        if (a.roomId === b.roomId) hardViolations++;
-        if (a.sectionId === b.sectionId) hardViolations++;
-      }
+  // Hard clashes: same faculty or room in a slot, or a section double-booked
+  // (parallel sessions of *different* subgroups are allowed).
+  let hardViolations = 0;
+  const seen = new Set<string>();
+  const wholeBusy = new Set<string>();
+  const subBusy = new Set<string>();
+  for (const s of active) {
+    const slot = `${s.day}_${s.timeSlotId}`;
+    for (const key of [`f_${s.facultyId}_${slot}`, `r_${s.roomId}_${slot}`]) {
+      if (seen.has(key)) hardViolations++;
+      seen.add(key);
+    }
+    const sec = `${s.sectionId}_${slot}`;
+    if (s.subSectionId) {
+      const sub = `${sec}_${s.subSectionId}`;
+      if (wholeBusy.has(sec) || seen.has(sub)) hardViolations++;
+      seen.add(sub);
+      subBusy.add(sec);
+    } else {
+      if (wholeBusy.has(sec) || subBusy.has(sec)) hardViolations++;
+      wholeBusy.add(sec);
     }
   }
 
-  // Room utilization
-  const totalSlotsPerWeek = 5 * (TIME_SLOTS.length - 1); // 5 days, minus lunch
-  const maxRoomCapacitySlots = rooms.length * totalSlotsPerWeek;
-  const roomUtilization = Math.min(95, Math.round((activeSessions.length / Math.max(1, maxRoomCapacitySlots)) * 100 * 2.2));
+  const teachingSlots = teachingSlotsOf(calendar);
+  const slotsPerWeek = calendar.workingDays.length * teachingSlots.length;
 
-  // Faculty balance (variance in teaching hours)
-  const facultyLoads = facultyMembers.map(f => {
-    const hours = activeSessions.filter(s => s.facultyId === f.id).length;
-    return hours / Math.max(1, f.maxDirectTeachingHours);
+  // Room utilisation: share of room-periods in use.
+  const usedRoomSlots = new Set(active.map(s => `${s.roomId}_${s.day}_${s.timeSlotId}`)).size;
+  const roomUtilization = Math.round((usedRoomSlots / Math.max(1, rooms.filter(r => r.isAvailable).length * slotsPerWeek)) * 100);
+
+  // Faculty balance: share of teaching faculty within their weekly limit.
+  const hoursByFaculty = new Map<string, number>();
+  active.forEach(s => hoursByFaculty.set(s.facultyId, (hoursByFaculty.get(s.facultyId) ?? 0) + 1));
+  const teaching = facultyMembers.filter(f => hoursByFaculty.has(f.id));
+  const withinLimit = teaching.filter(f => (hoursByFaculty.get(f.id) ?? 0) <= (f.maxDirectTeachingHours || Infinity)).length;
+  const facultyBalanceScore = teaching.length ? Math.round((withinLimit / teaching.length) * 100) : 100;
+
+  // Student balance: share of section-days with at most 6 periods.
+  const perSectionDay = new Map<string, Set<string>>();
+  active.forEach(s => {
+    const k = `${s.sectionId}_${s.day}`;
+    if (!perSectionDay.has(k)) perSectionDay.set(k, new Set());
+    perSectionDay.get(k)!.add(s.timeSlotId);
   });
-  const avgLoadRatio = facultyLoads.reduce((a, b) => a + b, 0) / facultyLoads.length;
-  const facultyBalanceScore = Math.max(80, Math.min(98, Math.round((1 - Math.abs(avgLoadRatio - 0.85)) * 100)));
+  const days = [...perSectionDay.values()];
+  const studentBalanceScore = days.length ? Math.round((days.filter(d => d.size <= 6).length / days.length) * 100) : 100;
 
-  // Student schedule balance (distribution across days)
-  const studentBalanceScore = 94;
+  // Faculty preferences: share of sessions on preferred days and periods.
+  const periodOf = new Map(calendar.timeSlots.map(t => [t.id, t.periodNumber]));
+  const facultyById = new Map(facultyMembers.map(f => [f.id, f]));
+  const preferred = active.filter(s => {
+    const p = facultyById.get(s.facultyId)?.preferences;
+    if (!p) return true;
+    const dayOk = !p.preferredDays?.length || p.preferredDays.includes(s.day);
+    const periodOk = !p.preferredPeriods?.length || p.preferredPeriods.includes(periodOf.get(s.timeSlotId) ?? -1);
+    return dayOk && periodOk;
+  }).length;
+  const facultyPreferencesSatisfaction = active.length ? Math.round((preferred / active.length) * 100) : 100;
 
-  // Schedule stability (penalizes cancelled or rescheduled sessions)
-  const rescheduledCount = sessions.filter(s => s.status === 'Rescheduled').length;
-  const stabilityScore = Math.max(70, 100 - rescheduledCount * 3);
+  // Stability: penalise cancelled and rescheduled classes.
+  const disrupted = sessions.filter(s => s.status === 'Cancelled' || s.status === 'Rescheduled').length;
+  const stabilityScore = sessions.length ? Math.round(100 - (disrupted / sessions.length) * 100) : 100;
 
-  // Syllabus progress alignment
-  const atRiskCourses = courses.filter(c => (c.totalSemesterHours - c.completedHours) > 10 && c.cancelledHours > 0).length;
-  const syllabusScore = Math.max(75, 100 - atRiskCourses * 5);
+  // Syllabus: courses behind schedule that also lost classes.
+  const atRiskCourses = courses.filter(c => c.totalSemesterHours - c.completedHours > 10 && c.cancelledHours > 0).length;
+  const syllabusScore = Math.max(0, 100 - atRiskCourses * 5);
 
-  const hardPenalty = hardViolations * 25;
-  const weightedOverall = Math.max(
-    0,
-    Math.round(
-      (100 - hardPenalty) * 0.4 +
-      facultyBalanceScore * 0.15 +
-      studentBalanceScore * 0.15 +
-      roomUtilization * 0.1 +
-      stabilityScore * 0.1 +
+  const soft = Math.round(
+    facultyBalanceScore * 0.25 +
+      studentBalanceScore * 0.25 +
+      facultyPreferencesSatisfaction * 0.15 +
+      Math.min(100, roomUtilization * 2) * 0.1 +
+      stabilityScore * 0.15 +
       syllabusScore * 0.1
-    )
   );
+  // Any hard clash means the timetable is not usable as-is.
+  const overallScore = active.length === 0 ? 0 : hardViolations > 0 ? Math.min(soft, 40) : soft;
 
   return {
-    overallScore: Math.min(100, weightedOverall),
+    overallScore,
     hardConstraintViolations: hardViolations,
     facultyBalanceScore,
     studentBalanceScore,
-    roomUtilizationRate: Math.max(75, roomUtilization),
-    facultyPreferencesSatisfaction: 90,
+    roomUtilizationRate: roomUtilization,
+    facultyPreferencesSatisfaction,
     scheduleStabilityScore: stabilityScore,
     syllabusAlignmentScore: syllabusScore,
   };
@@ -214,11 +270,12 @@ export function findSelfHealingRecoverySlots(
   rooms: Room[],
   facultyMembers: Faculty[],
   sections: StudentSection[],
-  courses: Course[]
+  courses: Course[],
+  calendar: TeachingCalendar = DEFAULT_CALENDAR
 ): RecoveryOpportunity[] {
   const opportunities: RecoveryOpportunity[] = [];
-  const candidateDays: DayOfWeek[] = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  const eligibleSlots = TIME_SLOTS.filter(ts => ts.id !== 'ts-5'); // Exclude lunch
+  const candidateDays = calendar.workingDays;
+  const eligibleSlots = teachingSlotsOf(calendar);
 
   const targetFaculty = facultyMembers.find(f => f.id === makeupTask.facultyId);
   const targetCourse = courses.find(c => c.id === makeupTask.courseId);
@@ -228,16 +285,15 @@ export function findSelfHealingRecoverySlots(
 
   for (const day of candidateDays) {
     for (const slot of eligibleSlots) {
-      // Check if students are free in this slot
-      const studentSession = sessions.find(
+      // Never propose the slot that was just cancelled.
+      if (day === makeupTask.cancelledDay && slot.id === makeupTask.cancelledTimeSlot) continue;
+      // Students are free when none of the section's sessions (whole class or any subgroup) is running.
+      const sectionSessions = sessions.filter(
         s => s.day === day && s.timeSlotId === slot.id && s.sectionId === makeupTask.sectionId
       );
-
-      // Student is considered available if no session exists OR if the session in this slot is CANCELLED!
-      const isStudentFree = !studentSession || studentSession.status === 'Cancelled';
-      if (!isStudentFree) continue;
-
-      const isCrossCancellation = studentSession && studentSession.status === 'Cancelled';
+      if (sectionSessions.some(s => s.status !== 'Cancelled')) continue;
+      const studentSession = sectionSessions.find(s => s.status === 'Cancelled');
+      const isCrossCancellation = Boolean(studentSession);
 
       // Check if faculty is free in this slot
       const facultySession = sessions.find(
@@ -250,11 +306,11 @@ export function findSelfHealingRecoverySlots(
         ps => ps.day === day && ps.periodId === slot.id
       );
 
-      // Find suitable rooms
+      // Find suitable rooms (smallest that fits first)
       const availableRooms = rooms.filter(r => {
         if (!r.isAvailable) return false;
         if (r.capacity < targetSection.studentCount) return false;
-        if (targetCourse.requiresLab && r.type !== 'ComputerLab') return false;
+        if (targetCourse.requiresLab && r.type !== 'ComputerLab' && r.type !== 'HardwareLab') return false;
         // Check if room occupied
         const roomOccupied = sessions.some(
           s => s.day === day && s.timeSlotId === slot.id && s.roomId === r.id && s.status !== 'Cancelled'
@@ -264,7 +320,7 @@ export function findSelfHealingRecoverySlots(
 
       if (availableRooms.length === 0) continue;
 
-      const selectedRoom = availableRooms[0];
+      const selectedRoom = availableRooms.sort((a, b) => a.capacity - b.capacity)[0];
 
       // Calculate formula factors (Section 59)
       const teacherAvailability = isProtected ? 80 : 100;
@@ -287,14 +343,14 @@ export function findSelfHealingRecoverySlots(
 
       let rationale = '';
       if (isCrossCancellation) {
-        const otherCourse = courses.find(c => c.id === studentSession.courseId);
+        const otherCourse = courses.find(c => c.id === studentSession?.courseId);
         rationale = `Discovered via Cross-Cancellation Engine: ${otherCourse?.code || 'Another subject'} was cancelled on ${day} ${slot.label}, freeing ${targetSection.name}. ${targetFaculty.name} and ${selectedRoom.name} are both open.`;
       } else {
         rationale = `Open timetable window: Zero conflicts detected for ${targetSection.name}, ${targetFaculty.name}, and ${selectedRoom.name}.`;
       }
 
       opportunities.push({
-        id: `rec-opp-${day}-${slot.id}-${selectedRoom.id}`,
+        id: `rec-opp-${makeupTask.id}-${day}-${slot.id}`,
         makeupTaskId: makeupTask.id,
         targetDay: day,
         timeSlotId: slot.id,
@@ -329,9 +385,13 @@ export function findSubstituteFaculty(
   day: DayOfWeek,
   timeSlotId: string,
   facultyMembers: Faculty[],
-  sessions: ClassSession[]
+  sessions: ClassSession[],
+  courseCode?: string
 ) {
-  const eligible = facultyMembers.filter(f => f.subjectsQualified.includes(courseId));
+  // subjectsQualified holds course codes; older data may hold course ids.
+  const eligible = facultyMembers.filter(
+    f => f.subjectsQualified.includes(courseId) || (!!courseCode && f.subjectsQualified.includes(courseCode))
+  );
 
   return eligible.map(faculty => {
     // Check if busy

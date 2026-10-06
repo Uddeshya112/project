@@ -14,6 +14,22 @@ import {
   Sparkles
 } from 'lucide-react';
 
+/** Server timestamps are ISO strings; older sample items may hold text like "Just now". */
+function whenLabel(ts: string): string {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return ts;
+  const mins = Math.round((Date.now() - d.getTime()) / 60000);
+  if (mins < 1) return 'Just now';
+  if (mins < 60) return `${mins} min ago`;
+  if (mins < 24 * 60) return `${Math.round(mins / 60)} h ago`;
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+}
+
+function isToday(ts: string): boolean {
+  const d = new Date(ts);
+  return Number.isNaN(d.getTime()) || d.toDateString() === new Date().toDateString();
+}
+
 interface AcademicInboxModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -40,11 +56,17 @@ export function AcademicInboxModal({ isOpen, onClose, onActionClick }: AcademicI
   const isStudent = currentWorkspace === 'Student' || currentWorkspace === 'CR';
 
   // Group notifications into Today vs Earlier
-  const todayNotifs = notifications.filter(n => n.timestamp.includes('min') || n.timestamp.includes('hour'));
-  const earlierNotifs = notifications.filter(n => !n.timestamp.includes('min') && !n.timestamp.includes('hour'));
+  const todayNotifs = notifications.filter(n => isToday(n.timestamp));
+  const earlierNotifs = notifications.filter(n => !isToday(n.timestamp));
+  const markRead = (id: string) => {
+    if (notifications.find(n => n.id === id && !n.read)) markNotificationRead(id);
+  };
+  const markAllRead = async () => {
+    for (const n of notifications.filter(x => !x.read)) await markNotificationRead(n.id);
+  };
 
   const handleNotificationAction = (notifId: string, actionType?: string) => {
-    markNotificationRead(notifId);
+    markRead(notifId);
     onClose();
     if (isStudent) {
       // In student view, go to dashboard or replacement time voting
@@ -65,7 +87,7 @@ export function AcademicInboxModal({ isOpen, onClose, onActionClick }: AcademicI
       />
 
       <div className="fixed inset-y-0 right-0 max-w-full flex pl-10">
-        <div className="w-screen max-w-md bg-[#FAF9F5] dark:bg-zinc-900 border-l border-[#E5E2D9] dark:border-zinc-800 shadow-xl flex flex-col text-stone-900 dark:text-zinc-100 animate-in slide-in-from-right duration-150">
+        <div role="dialog" aria-modal="true" aria-label="Notifications" className="w-screen max-w-md bg-[#FAF9F5] dark:bg-zinc-900 border-l border-[#E5E2D9] dark:border-zinc-800 shadow-xl flex flex-col text-stone-900 dark:text-zinc-100 animate-in slide-in-from-right duration-150">
           
           {/* Header */}
           <div className="p-4 border-b border-[#E5E2D9] dark:border-zinc-800 flex items-center justify-between bg-[#F4F2EC] dark:bg-zinc-950/60">
@@ -85,9 +107,8 @@ export function AcademicInboxModal({ isOpen, onClose, onActionClick }: AcademicI
 
             <div className="flex items-center gap-3">
               <button
-                onClick={() => {
-                  notifications.forEach(n => markNotificationRead(n.id));
-                }}
+                onClick={markAllRead}
+                disabled={!notifications.some(n => !n.read)}
                 className="text-xs text-[#8C1B2E] dark:text-red-400 hover:text-[#721525] dark:hover:text-red-300 font-medium transition-colors"
               >
                 Mark all as read
@@ -119,7 +140,7 @@ export function AcademicInboxModal({ isOpen, onClose, onActionClick }: AcademicI
                     return (
                       <div
                         key={notif.id}
-                        onClick={() => markNotificationRead(notif.id)}
+                        onClick={() => markRead(notif.id)}
                         className={`p-3.5 rounded-xl border text-xs transition-all cursor-pointer ${
                           !notif.read
                             ? 'bg-white dark:bg-zinc-950 border-[#E5E2D9] dark:border-zinc-700/80 shadow-xs'
@@ -140,7 +161,7 @@ export function AcademicInboxModal({ isOpen, onClose, onActionClick }: AcademicI
                             </span>
                           </div>
                           <span className="text-[10px] text-stone-400 dark:text-zinc-500 shrink-0 font-medium">
-                            {notif.timestamp}
+                            {whenLabel(notif.timestamp)}
                           </span>
                         </div>
 
@@ -205,7 +226,7 @@ export function AcademicInboxModal({ isOpen, onClose, onActionClick }: AcademicI
                   {earlierNotifs.map(notif => (
                     <div
                       key={notif.id}
-                      onClick={() => markNotificationRead(notif.id)}
+                      onClick={() => markRead(notif.id)}
                       className={`p-3.5 rounded-xl border text-xs transition-all cursor-pointer ${
                         !notif.read
                           ? 'bg-white dark:bg-zinc-950 border-[#E5E2D9] dark:border-zinc-700/80 shadow-xs'
@@ -217,7 +238,7 @@ export function AcademicInboxModal({ isOpen, onClose, onActionClick }: AcademicI
                           {notif.title}
                         </span>
                         <span className="text-[10px] text-stone-400 dark:text-zinc-500 shrink-0 font-medium">
-                          {notif.timestamp}
+                          {whenLabel(notif.timestamp)}
                         </span>
                       </div>
 

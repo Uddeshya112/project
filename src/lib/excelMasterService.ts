@@ -6,12 +6,10 @@ import {
   Faculty,
   Room,
   StudentSection,
-  SubSection,
   CourseAllocation,
-  AcademicYearConfig,
-  DayOfWeek,
   SessionType
 } from '../types';
+import type { StudentRecord } from './initialData';
 
 export interface ExcelImportPreview {
   sheetCounts: {
@@ -37,7 +35,8 @@ export interface ExcelImportPreview {
     courses: Array<Omit<Course, 'id'> & { code: string; departmentCode: string; primaryFacultyEmail?: string; id?: string }>;
     faculty: Array<Omit<Faculty, 'id'> & { email: string; departmentCode: string; id?: string }>;
     rooms: Array<Omit<Room, 'id'> & { name: string; id?: string }>;
-    groups: Array<Omit<StudentSection, 'id' | 'subSections'> & { code: string; programCode?: string; id?: string }>;
+    // classRepresentative is omitted on import so an existing CR is kept.
+    groups: Array<Omit<StudentSection, 'id' | 'subSections' | 'classRepresentative'> & { classRepresentative?: StudentSection['classRepresentative']; code: string; programCode?: string; id?: string }>;
     subgroups: Array<{ groupCode: string; name: string; studentCount: number; type?: 'Lab' | 'Tutorial' | 'Practical' | 'General' }>;
     allocations: Array<{
       courseCode: string;
@@ -61,7 +60,8 @@ export interface ExcelImportPreview {
 }
 
 /**
- * Generates an official, well-formatted downloadable Excel template for Thapar Timetable Master Setup
+ * Builds the master workbook. Without `currentData` it is the blank template with sample rows;
+ * with `currentData` it is an export of exactly that data (an empty list exports a header-only sheet).
  */
 export function generateMasterExcelTemplate(currentData?: {
   departments?: Department[];
@@ -71,11 +71,18 @@ export function generateMasterExcelTemplate(currentData?: {
   rooms?: Room[];
   sections?: StudentSection[];
   allocations?: CourseAllocation[];
+  students?: StudentRecord[];
 }): Blob {
   const wb = XLSX.utils.book_new();
+  const addSheet = (name: string, rows: (string | undefined)[][]) =>
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), name);
+  // Export rows from the database, or the template's sample rows when no data was passed.
+  const rowsOf = <T,>(list: T[] | undefined, toRow: (item: T) => (string | undefined)[], samples: string[][]) =>
+    currentData ? (list ?? []).map(toRow) : samples;
+  const deptCode = (id: string) => currentData?.departments?.find(d => d.id === id)?.code ?? '';
 
   // 1. README Sheet
-  const readmeData = [
+  addSheet('README', [
     ['THAPAR INSTITUTE OF ENGINEERING & TECHNOLOGY — MASTER TIMETABLE SETUP WORKBOOK'],
     ['Version: 2026.1-Unified'],
     ['Instructions for Academic Coordinators:'],
@@ -97,238 +104,178 @@ export function generateMasterExcelTemplate(currentData?: {
     ['Subgroups', 'Lab/Tutorial Small Cohorts (e.g. A1, A2, A3, A4)', 'group_code + subgroup_name'],
     ['Course Allocations', 'Curriculum Teaching Assignments to Groups/Subgroups', 'course_code + faculty + group'],
     ['Students', 'Optional Student Enrollment & Group Assignments', 'student_id']
-  ];
-  const wsReadme = XLSX.utils.aoa_to_sheet(readmeData);
-  XLSX.utils.book_append_sheet(wb, wsReadme, 'README');
+  ]);
 
   // 2. Departments Sheet
-  const deptData = [
-    ['department_code', 'department_name', 'hod_name', 'contact_email', 'status']
-  ];
-  if (currentData?.departments && currentData.departments.length > 0) {
-    currentData.departments.forEach(d => {
-      deptData.push([d.code, d.name, d.hodName, d.contactEmail, d.status]);
-    });
-  } else {
-    deptData.push(
+  addSheet('Departments', [
+    ['department_code', 'department_name', 'hod_name', 'contact_email', 'status'],
+    ...rowsOf(currentData?.departments, d => [d.code, d.name, d.hodName, d.contactEmail, d.status], [
       ['CSED', 'Computer Science & Engineering', 'Dr. Rajesh Kumar', 'hod.csed@thapar.edu', 'Active'],
       ['ECED', 'Electronics & Communication Engineering', 'Dr. Alpana Agarwal', 'hod.eced@thapar.edu', 'Active'],
       ['MED', 'Mechanical Engineering Department', 'Dr. S. K. Mohapatra', 'hod.med@thapar.edu', 'Active'],
       ['CED', 'Civil Engineering Department', 'Dr. Naveen Kwatra', 'hod.ced@thapar.edu', 'Active']
-    );
-  }
-  const wsDepts = XLSX.utils.aoa_to_sheet(deptData);
-  XLSX.utils.book_append_sheet(wb, wsDepts, 'Departments');
+    ])
+  ]);
 
   // 3. Programs Sheet
-  const progData = [
-    ['program_code', 'program_name', 'department_code', 'duration_years', 'total_semesters', 'status']
-  ];
-  if (currentData?.programs && currentData.programs.length > 0) {
-    currentData.programs.forEach(p => {
-      const dept = currentData.departments?.find(d => d.id === p.departmentId);
-      progData.push([p.code, p.name, dept?.code || 'CSED', String(p.durationYears), String(p.totalSemesters), p.status]);
-    });
-  } else {
-    progData.push(
+  addSheet('Programs', [
+    ['program_code', 'program_name', 'department_code', 'duration_years', 'total_semesters', 'status'],
+    ...rowsOf(currentData?.programs, p => [p.code, p.name, deptCode(p.departmentId), String(p.durationYears), String(p.totalSemesters), p.status], [
       ['BTECH-CSE', 'B.Tech Computer Science & Engineering', 'CSED', '4', '8', 'Active'],
       ['BTECH-ECE', 'B.Tech Electronics & Communication', 'ECED', '4', '8', 'Active'],
       ['BTECH-ME', 'B.Tech Mechanical Engineering', 'MED', '4', '8', 'Active']
-    );
-  }
-  const wsProgs = XLSX.utils.aoa_to_sheet(progData);
-  XLSX.utils.book_append_sheet(wb, wsProgs, 'Programs');
+    ])
+  ]);
 
   // 4. Courses Sheet
-  const courseData = [
-    ['course_code', 'course_name', 'department_code', 'credits', 'lecture_hours', 'tutorial_hours', 'lab_hours', 'requires_lab', 'primary_faculty_email']
-  ];
-  if (currentData?.courses && currentData.courses.length > 0) {
-    currentData.courses.forEach(c => {
-      const dept = currentData.departments?.find(d => d.id === c.departmentId);
-      const fac = currentData.facultyMembers?.find(f => f.id === c.primaryFacultyId);
-      courseData.push([
+  addSheet('Courses', [
+    ['course_code', 'course_name', 'department_code', 'credits', 'lecture_hours', 'tutorial_hours', 'lab_hours', 'requires_lab', 'primary_faculty_email'],
+    ...rowsOf(
+      currentData?.courses,
+      c => [
         c.code,
         c.name,
-        dept?.code || 'CSED',
+        deptCode(c.departmentId),
         String(c.credits),
         String(c.requiredLecturesPerWeek),
         String(c.requiredTutorialsPerWeek),
         String(c.requiredLabsPerWeek),
         c.requiresLab ? 'YES' : 'NO',
-        fac?.email || ''
-      ]);
-    });
-  } else {
-    courseData.push(
-      ['CS501', 'Database Management Systems', 'CSED', '4', '3', '0', '2', 'YES', 'arvind.sharma@thapar.edu'],
-      ['CS502', 'Operating Systems Principles', 'CSED', '4', '3', '0', '2', 'YES', 'priya.nair@thapar.edu'],
-      ['CS503', 'Theory of Computation', 'CSED', '4', '3', '1', '0', 'NO', 'vikram.seth@thapar.edu'],
-      ['CS504', 'Computer Networks & Security', 'CSED', '4', '3', '0', '2', 'YES', 'ananya.roy@thapar.edu'],
-      ['CS505', 'Design & Analysis of Algorithms', 'CSED', '4', '3', '1', '0', 'NO', 'arvind.sharma@thapar.edu']
-    );
-  }
-  const wsCourses = XLSX.utils.aoa_to_sheet(courseData);
-  XLSX.utils.book_append_sheet(wb, wsCourses, 'Courses');
+        currentData?.facultyMembers?.find(f => f.id === c.primaryFacultyId)?.email ?? ''
+      ],
+      [
+        ['CS501', 'Database Management Systems', 'CSED', '4', '3', '0', '2', 'YES', 'arvind.sharma@thapar.edu'],
+        ['CS502', 'Operating Systems Principles', 'CSED', '4', '3', '0', '2', 'YES', 'priya.nair@thapar.edu'],
+        ['CS503', 'Theory of Computation', 'CSED', '4', '3', '1', '0', 'NO', 'vikram.seth@thapar.edu'],
+        ['CS504', 'Computer Networks & Security', 'CSED', '4', '3', '0', '2', 'YES', 'ananya.roy@thapar.edu'],
+        ['CS505', 'Design & Analysis of Algorithms', 'CSED', '4', '3', '1', '0', 'NO', 'arvind.sharma@thapar.edu']
+      ]
+    )
+  ]);
 
   // 5. Faculty Sheet
-  const facData = [
-    ['name', 'email', 'department_code', 'designation', 'max_teaching_hours_per_week', 'status']
-  ];
-  if (currentData?.facultyMembers && currentData.facultyMembers.length > 0) {
-    currentData.facultyMembers.forEach(f => {
-      const dept = currentData.departments?.find(d => d.id === f.departmentId);
-      facData.push([
-        f.name,
-        f.email,
-        dept?.code || 'CSED',
-        f.designation,
-        String(f.maxDirectTeachingHours || 14),
-        f.status || 'Active'
-      ]);
-    });
-  } else {
-    facData.push(
+  addSheet('Faculty', [
+    ['name', 'email', 'department_code', 'designation', 'max_teaching_hours_per_week', 'status'],
+    ...rowsOf(currentData?.facultyMembers, f => [f.name, f.email, deptCode(f.departmentId), f.designation, String(f.maxDirectTeachingHours), f.status || 'Active'], [
       ['Prof. Arvind Sharma', 'arvind.sharma@thapar.edu', 'CSED', 'Professor', '14', 'Active'],
       ['Dr. Priya Nair', 'priya.nair@thapar.edu', 'CSED', 'Associate Professor', '14', 'Active'],
       ['Dr. Vikram Seth', 'vikram.seth@thapar.edu', 'CSED', 'Assistant Professor', '16', 'Active'],
       ['Dr. Ananya Roy', 'ananya.roy@thapar.edu', 'CSED', 'Assistant Professor', '16', 'Active'],
       ['Dr. Rajesh Kumar', 'rajesh.kumar@thapar.edu', 'CSED', 'Professor', '14', 'Active']
-    );
-  }
-  const wsFac = XLSX.utils.aoa_to_sheet(facData);
-  XLSX.utils.book_append_sheet(wb, wsFac, 'Faculty');
+    ])
+  ]);
 
   // 6. Rooms Sheet
-  const roomData = [
-    ['room_name', 'building', 'type', 'capacity', 'equipment', 'status']
-  ];
-  if (currentData?.rooms && currentData.rooms.length > 0) {
-    currentData.rooms.forEach(r => {
-      roomData.push([
-        r.name,
-        r.building,
-        r.type,
-        String(r.capacity),
-        r.equipment.join('; '),
-        r.isAvailable ? 'Available' : 'Maintenance'
-      ]);
-    });
-  } else {
-    roomData.push(
+  addSheet('Rooms', [
+    ['room_name', 'building', 'type', 'capacity', 'equipment', 'status'],
+    ...rowsOf(currentData?.rooms, r => [r.name, r.building, r.type, String(r.capacity), r.equipment.join('; '), r.isAvailable ? 'Available' : 'Maintenance'], [
       ['LT101', 'Academic Block A', 'LectureHall', '80', 'Projector; Smart Board; Audio System', 'Available'],
       ['LT102', 'Academic Block A', 'LectureHall', '80', 'Projector; Smart Board; Audio System', 'Available'],
       ['LT201', 'Academic Block B', 'LectureHall', '120', 'Projector; Tiered Seating; Surround Audio', 'Available'],
       ['C-Lab 301', 'Computer Centre', 'ComputerLab', '60', '60 Workstations; Linux/Windows; Gigabit LAN', 'Available'],
       ['C-Lab 302', 'Computer Centre', 'ComputerLab', '60', '60 Workstations; GPU Nodes; Gigabit LAN', 'Available'],
       ['TR-105', 'Academic Block A', 'TutorialRoom', '35', 'Whiteboard; Display Screen', 'Available']
-    );
-  }
-  const wsRooms = XLSX.utils.aoa_to_sheet(roomData);
-  XLSX.utils.book_append_sheet(wb, wsRooms, 'Rooms');
+    ])
+  ]);
 
   // 7. Groups Sheet
-  const groupData = [
-    ['group_code', 'group_name', 'program_code', 'batch_year', 'semester', 'student_count', 'target_size', 'status']
-  ];
-  if (currentData?.sections && currentData.sections.length > 0) {
-    currentData.sections.forEach(s => {
-      groupData.push([
+  addSheet('Groups', [
+    ['group_code', 'group_name', 'program_code', 'batch_year', 'semester', 'student_count', 'target_size', 'status'],
+    ...rowsOf(
+      currentData?.sections,
+      s => [
         s.name,
         s.name,
-        s.program || 'BTECH-CSE',
-        String(s.batchYear || 2024),
-        String(s.semester || 5),
-        String(s.studentCount || 50),
-        String(s.targetSize || 50),
+        currentData?.programs?.find(p => p.id === s.programId)?.code ?? '',
+        String(s.batchYear),
+        String(s.semester),
+        String(s.studentCount),
+        String(s.targetSize ?? s.studentCount),
         s.status || 'Active'
-      ]);
-    });
-  } else {
-    groupData.push(
-      ['CSE-A', 'CSE Section A', 'BTECH-CSE', '2024', '5', '50', '50', 'Active'],
-      ['CSE-B', 'CSE Section B', 'BTECH-CSE', '2024', '5', '50', '50', 'Active'],
-      ['CSE-C', 'CSE Section C', 'BTECH-CSE', '2024', '5', '50', '50', 'Active']
-    );
-  }
-  const wsGroups = XLSX.utils.aoa_to_sheet(groupData);
-  XLSX.utils.book_append_sheet(wb, wsGroups, 'Groups');
+      ],
+      [
+        ['CSE-A', 'CSE Section A', 'BTECH-CSE', '2024', '5', '50', '50', 'Active'],
+        ['CSE-B', 'CSE Section B', 'BTECH-CSE', '2024', '5', '50', '50', 'Active'],
+        ['CSE-C', 'CSE Section C', 'BTECH-CSE', '2024', '5', '50', '50', 'Active']
+      ]
+    )
+  ]);
 
   // 8. Subgroups Sheet
-  const subgroupData = [
-    ['group_code', 'subgroup_code', 'subgroup_name', 'student_count', 'type']
-  ];
-  if (currentData?.sections && currentData.sections.length > 0) {
-    currentData.sections.forEach(s => {
-      (s.subSections || []).forEach(sub => {
-        subgroupData.push([
-          s.name,
-          sub.name,
-          `${s.name}-${sub.name}`,
-          String(sub.studentCount || 25),
-          sub.type || 'Lab'
-        ]);
-      });
-    });
-  } else {
-    subgroupData.push(
-      ['CSE-A', 'A1', 'CSE-A Lab Batch 1', '25', 'Lab'],
-      ['CSE-A', 'A2', 'CSE-A Lab Batch 2', '25', 'Lab'],
-      ['CSE-B', 'B1', 'CSE-B Lab Batch 1', '25', 'Lab'],
-      ['CSE-B', 'B2', 'CSE-B Lab Batch 2', '25', 'Lab']
-    );
-  }
-  const wsSubgroups = XLSX.utils.aoa_to_sheet(subgroupData);
-  XLSX.utils.book_append_sheet(wb, wsSubgroups, 'Subgroups');
+  addSheet('Subgroups', [
+    ['group_code', 'subgroup_code', 'subgroup_name', 'student_count', 'type'],
+    ...rowsOf(
+      currentData?.sections?.flatMap(s => (s.subSections ?? []).map(sub => ({ s, sub }))),
+      ({ s, sub }) => [s.name, sub.name, `${s.name}-${sub.name}`, String(sub.studentCount), sub.type || 'Lab'],
+      [
+        ['CSE-A', 'A1', 'CSE-A Lab Batch 1', '25', 'Lab'],
+        ['CSE-A', 'A2', 'CSE-A Lab Batch 2', '25', 'Lab'],
+        ['CSE-B', 'B1', 'CSE-B Lab Batch 1', '25', 'Lab'],
+        ['CSE-B', 'B2', 'CSE-B Lab Batch 2', '25', 'Lab']
+      ]
+    )
+  ]);
 
   // 9. Course Allocations Sheet
-  const allocData = [
-    ['course_code', 'faculty_email', 'group_code', 'subgroup_code', 'session_type', 'hours_per_week', 'preferred_room']
-  ];
-  if (currentData?.allocations && currentData.allocations.length > 0) {
-    currentData.allocations.forEach(a => {
-      const course = currentData.courses?.find(c => c.id === a.courseId);
-      const fac = currentData.facultyMembers?.find(f => f.id === a.facultyId);
-      const sec = currentData.sections?.find(s => s.id === a.sectionId);
-      const sub = sec?.subSections?.find(sub => sub.id === a.subSectionId);
-      const rm = currentData.rooms?.find(r => r.id === a.preferredRoomId);
-      allocData.push([
-        course?.code || 'CS501',
-        fac?.email || '',
-        sec?.name || 'CSE-A',
-        sub?.name || '',
-        a.sessionType,
-        String(a.hoursPerWeek),
-        rm?.name || ''
-      ]);
-    });
-  } else {
-    allocData.push(
-      ['CS501', 'arvind.sharma@thapar.edu', 'CSE-A', '', 'Lecture', '3', 'LT101'],
-      ['CS501', 'arvind.sharma@thapar.edu', 'CSE-A', 'A1', 'Lab', '2', 'C-Lab 301'],
-      ['CS501', 'arvind.sharma@thapar.edu', 'CSE-A', 'A2', 'Lab', '2', 'C-Lab 302'],
-      ['CS502', 'priya.nair@thapar.edu', 'CSE-A', '', 'Lecture', '3', 'LT102'],
-      ['CS503', 'vikram.seth@thapar.edu', 'CSE-A', '', 'Lecture', '3', 'LT101'],
-      ['CS504', 'ananya.roy@thapar.edu', 'CSE-A', '', 'Lecture', '3', 'LT102'],
-      ['CS505', 'arvind.sharma@thapar.edu', 'CSE-A', '', 'Lecture', '3', 'LT101']
-    );
-  }
-  const wsAlloc = XLSX.utils.aoa_to_sheet(allocData);
-  XLSX.utils.book_append_sheet(wb, wsAlloc, 'Course Allocations');
+  addSheet('Course Allocations', [
+    ['course_code', 'faculty_email', 'group_code', 'subgroup_code', 'session_type', 'hours_per_week', 'preferred_room'],
+    ...rowsOf(
+      currentData?.allocations,
+      a => {
+        const sec = currentData?.sections?.find(s => s.id === a.sectionId);
+        return [
+          currentData?.courses?.find(c => c.id === a.courseId)?.code ?? '',
+          currentData?.facultyMembers?.find(f => f.id === a.facultyId)?.email ?? '',
+          sec?.name ?? '',
+          sec?.subSections?.find(sub => sub.id === a.subSectionId)?.name ?? '',
+          a.sessionType,
+          String(a.hoursPerWeek),
+          currentData?.rooms?.find(r => r.id === a.preferredRoomId)?.name ?? ''
+        ];
+      },
+      [
+        ['CS501', 'arvind.sharma@thapar.edu', 'CSE-A', '', 'Lecture', '3', 'LT101'],
+        ['CS501', 'arvind.sharma@thapar.edu', 'CSE-A', 'A1', 'Lab', '2', 'C-Lab 301'],
+        ['CS501', 'arvind.sharma@thapar.edu', 'CSE-A', 'A2', 'Lab', '2', 'C-Lab 302'],
+        ['CS502', 'priya.nair@thapar.edu', 'CSE-A', '', 'Lecture', '3', 'LT102'],
+        ['CS503', 'vikram.seth@thapar.edu', 'CSE-A', '', 'Lecture', '3', 'LT101'],
+        ['CS504', 'ananya.roy@thapar.edu', 'CSE-A', '', 'Lecture', '3', 'LT102'],
+        ['CS505', 'arvind.sharma@thapar.edu', 'CSE-A', '', 'Lecture', '3', 'LT101']
+      ]
+    )
+  ]);
 
-  // 10. Students Sheet (Optional Enrollment)
-  const studentData = [
+  // 10. Students Sheet (Optional Enrollment). Exports only students actually passed in.
+  addSheet('Students', [
     ['student_id', 'name', 'email', 'program_code', 'batch_year', 'group_code', 'subgroup_code'],
-    ['102303999', 'Rohan Sharma', 'rsharma_be24@thapar.edu', 'BTECH-CSE', '2024', 'CSE-A', 'A1'],
-    ['102303102', 'Aarav Gupta', 'agupta_be24@thapar.edu', 'BTECH-CSE', '2024', 'CSE-A', 'A1'],
-    ['102303103', 'Sneha Kapoor', 'skapoor_be24@thapar.edu', 'BTECH-CSE', '2024', 'CSE-A', 'A2']
-  ];
-  const wsStudents = XLSX.utils.aoa_to_sheet(studentData);
-  XLSX.utils.book_append_sheet(wb, wsStudents, 'Students');
+    ...rowsOf(currentData?.students, st => [st.studentId, st.name, st.email, st.programCode, String(st.batchYear), st.sectionName, st.subSectionName], [
+      ['102303101', 'Sample Student One', 'student1@thapar.edu', 'BTECH-CSE', '2024', 'CSE-A', 'A1'],
+      ['102303102', 'Sample Student Two', 'student2@thapar.edu', 'BTECH-CSE', '2024', 'CSE-A', 'A1'],
+      ['102303103', 'Sample Student Three', 'student3@thapar.edu', 'BTECH-CSE', '2024', 'CSE-A', 'A2']
+    ])
+  ]);
 
   const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
   return new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 }
+
+/** Lower-cases a header and drops spaces/underscores/punctuation: "Roll No." -> "rollno". */
+const normKey = (k: string) => k.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/** First non-empty cell among the given header variants (compared after normKey). */
+const cell = (row: Record<string, unknown>, ...keys: string[]) => {
+  for (const k of keys) {
+    const v = row[normKey(k)];
+    if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
+  }
+  return '';
+};
+
+/** Integer cell, or `fallback` only when the cell is empty or not a number (so "0" stays 0). */
+const intCell = (row: Record<string, unknown>, fallback: number, ...keys: string[]) => {
+  const n = parseInt(cell(row, ...keys), 10);
+  return Number.isFinite(n) ? n : fallback;
+};
 
 /**
  * Parses and validates an uploaded Excel workbook, generating a clean validation preview
@@ -381,11 +328,13 @@ export async function parseAndValidateMasterWorkbook(
     },
   };
 
-  // Helper to extract JSON from sheet safely
-  const getSheetRows = (sheetName: string): any[] => {
-    const sheet = wb.Sheets[sheetName] || Object.keys(wb.Sheets).find(k => k.trim().toLowerCase() === sheetName.toLowerCase()) ? wb.Sheets[Object.keys(wb.Sheets).find(k => k.trim().toLowerCase() === sheetName.toLowerCase())!] : null;
-    if (!sheet) return [];
-    return XLSX.utils.sheet_to_json(sheet, { defval: '' });
+  // Rows of a sheet (sheet name matched case-insensitively), with normalised header keys.
+  const getSheetRows = (sheetName: string): Record<string, unknown>[] => {
+    const key = Object.keys(wb.Sheets).find(k => k.trim().toLowerCase() === sheetName.toLowerCase());
+    if (!key) return [];
+    return XLSX.utils
+      .sheet_to_json<Record<string, unknown>>(wb.Sheets[key], { defval: '' })
+      .map(row => Object.fromEntries(Object.entries(row).map(([k, v]) => [normKey(k), v])));
   };
 
   // Maps for cross-validation within workbook and existing database
@@ -408,11 +357,8 @@ export async function parseAndValidateMasterWorkbook(
   preview.sheetCounts.departments = deptRows.length;
   deptRows.forEach((row, idx) => {
     const lineNum = idx + 2;
-    const code = String(row.department_code || row.code || '').trim().toUpperCase();
-    const name = String(row.department_name || row.name || '').trim();
-    const hod = String(row.hod_name || row.hod || '').trim();
-    const email = String(row.contact_email || row.email || '').trim();
-    const status = String(row.status || 'Active').trim() === 'Inactive' ? 'Inactive' : 'Active';
+    const code = cell(row, 'department_code', 'code').toUpperCase();
+    const name = cell(row, 'department_name', 'name');
 
     if (!code || !name) {
       errors.push(`Row ${lineNum} · Departments: Missing department_code or department_name.`);
@@ -423,40 +369,42 @@ export async function parseAndValidateMasterWorkbook(
     preview.parsedData.departments.push({
       code,
       name,
-      hodName: hod || 'Department Head',
-      contactEmail: email || `contact.${code.toLowerCase()}@thapar.edu`,
-      status
+      hodName: cell(row, 'hod_name', 'hod'),
+      contactEmail: cell(row, 'contact_email', 'email'),
+      status: cell(row, 'status') === 'Inactive' ? 'Inactive' : 'Active'
     });
   });
+
+  const checkDept = (sheet: string, lineNum: number, deptCode: string) => {
+    if (!deptCode) errors.push(`Row ${lineNum} · ${sheet}: Missing department_code.`);
+    else if (!validDeptCodes.has(deptCode)) errors.push(`Row ${lineNum} · ${sheet}: Department code "${deptCode}" does not exist in Departments sheet or database.`);
+    else return true;
+    return false;
+  };
 
   // --- 2. PROGRAMS ---
   const progRows = getSheetRows('Programs');
   preview.sheetCounts.programs = progRows.length;
   progRows.forEach((row, idx) => {
     const lineNum = idx + 2;
-    const code = String(row.program_code || row.code || '').trim().toUpperCase();
-    const name = String(row.program_name || row.name || '').trim();
-    const deptCode = String(row.department_code || '').trim().toUpperCase();
-    const duration = parseInt(row.duration_years || '4', 10) || 4;
-    const sems = parseInt(row.total_semesters || '8', 10) || 8;
+    const code = cell(row, 'program_code', 'code').toUpperCase();
+    const name = cell(row, 'program_name', 'name');
+    const deptCode = cell(row, 'department_code').toUpperCase();
 
     if (!code || !name) {
       errors.push(`Row ${lineNum} · Programs: Missing program_code or program_name.`);
       return;
     }
-    if (deptCode && !validDeptCodes.has(deptCode)) {
-      errors.push(`Row ${lineNum} · Programs: Department code "${deptCode}" does not exist in Departments sheet or database.`);
-      return;
-    }
+    if (!checkDept('Programs', lineNum, deptCode)) return;
 
     validProgCodes.add(code);
     preview.parsedData.programs.push({
       code,
       name,
-      departmentId: '', // resolved later
-      departmentCode: deptCode || 'CSED',
-      durationYears: duration,
-      totalSemesters: sems,
+      departmentId: '', // resolved on the server from departmentCode
+      departmentCode: deptCode,
+      durationYears: intCell(row, 4, 'duration_years'),
+      totalSemesters: intCell(row, 8, 'total_semesters'),
       status: 'Active'
     });
   });
@@ -466,29 +414,26 @@ export async function parseAndValidateMasterWorkbook(
   preview.sheetCounts.faculty = facRows.length;
   facRows.forEach((row, idx) => {
     const lineNum = idx + 2;
-    const name = String(row.name || '').trim();
-    const email = String(row.email || '').trim().toLowerCase();
-    const deptCode = String(row.department_code || '').trim().toUpperCase();
-    const designation = String(row.designation || 'Assistant Professor').trim() as any;
-    const maxHours = parseInt(row.max_teaching_hours_per_week || row.max_hours || '14', 10) || 14;
+    const name = cell(row, 'name', 'faculty_name');
+    const email = cell(row, 'email', 'faculty_email').toLowerCase();
+    const deptCode = cell(row, 'department_code').toUpperCase();
+    const designation = (cell(row, 'designation') || 'Assistant Professor') as Faculty['designation'];
 
-    if (!name || !email) {
-      errors.push(`Row ${lineNum} · Faculty: Missing faculty name or email.`);
+    if (!name || !email.includes('@')) {
+      errors.push(`Row ${lineNum} · Faculty: Missing faculty name or a valid email.`);
       return;
     }
-    if (deptCode && !validDeptCodes.has(deptCode)) {
-      warnings.push(`Row ${lineNum} · Faculty: Department "${deptCode}" not found; defaulting to CSED.`);
-    }
+    if (!checkDept('Faculty', lineNum, deptCode)) return;
 
     validFacultyEmails.add(email);
     preview.parsedData.faculty.push({
       name,
       email,
       departmentId: '',
-      departmentCode: deptCode || 'CSED',
+      departmentCode: deptCode,
       designation: ['Professor', 'Associate Professor', 'Assistant Professor', 'Visiting Faculty'].includes(designation) ? designation : 'Assistant Professor',
       subjectsQualified: [],
-      maxDirectTeachingHours: maxHours,
+      maxDirectTeachingHours: intCell(row, 14, 'max_teaching_hours_per_week', 'max_hours'),
       weeklyHoursLimit: 40,
       preferences: {
         preferredDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
@@ -507,26 +452,25 @@ export async function parseAndValidateMasterWorkbook(
   preview.sheetCounts.rooms = roomRows.length;
   roomRows.forEach((row, idx) => {
     const lineNum = idx + 2;
-    const name = String(row.room_name || row.name || '').trim();
-    const building = String(row.building || 'Academic Block A').trim();
-    const type = String(row.type || 'LectureHall').trim() as any;
-    const capacity = parseInt(row.capacity || '60', 10) || 60;
-    const equipStr = String(row.equipment || '').trim();
+    const name = cell(row, 'room_name', 'name');
+    const type = (cell(row, 'type') || 'LectureHall') as Room['type'];
+    const capacity = intCell(row, 0, 'capacity');
+    const equipStr = cell(row, 'equipment');
 
-    if (!name) {
-      errors.push(`Row ${lineNum} · Rooms: Missing room_name.`);
+    if (!name || capacity <= 0) {
+      errors.push(`Row ${lineNum} · Rooms: Missing room_name or a positive capacity.`);
       return;
     }
 
     validRoomNames.add(name.toUpperCase());
     preview.parsedData.rooms.push({
       name,
-      building,
-      floor: 1,
+      building: cell(row, 'building'),
+      floor: intCell(row, 0, 'floor'),
       capacity,
       type: ['LectureHall', 'ComputerLab', 'HardwareLab', 'SeminarRoom', 'TutorialRoom'].includes(type) ? type : 'LectureHall',
-      equipment: equipStr ? equipStr.split(/[;,]/).map(s => s.trim()).filter(Boolean) : ['Projector', 'Whiteboard'],
-      isAvailable: true
+      equipment: equipStr ? equipStr.split(/[;,]/).map(s => s.trim()).filter(Boolean) : [],
+      isAvailable: cell(row, 'status').toLowerCase() !== 'maintenance'
     });
   });
 
@@ -535,31 +479,27 @@ export async function parseAndValidateMasterWorkbook(
   preview.sheetCounts.courses = courseRows.length;
   courseRows.forEach((row, idx) => {
     const lineNum = idx + 2;
-    const code = String(row.course_code || row.code || '').trim().toUpperCase();
-    const name = String(row.course_name || row.name || '').trim();
-    const deptCode = String(row.department_code || '').trim().toUpperCase();
-    const credits = parseInt(row.credits || '4', 10) || 4;
-    const lectures = parseInt(row.lecture_hours || '3', 10) || 3;
-    const tutorials = parseInt(row.tutorial_hours || '0', 10) || 0;
-    const labs = parseInt(row.lab_hours || '0', 10) || 0;
-    const reqLab = String(row.requires_lab || '').toUpperCase().startsWith('Y') || labs > 0;
-    const facEmail = String(row.primary_faculty_email || '').trim().toLowerCase();
+    const code = cell(row, 'course_code', 'code').toUpperCase();
+    const name = cell(row, 'course_name', 'name');
+    const deptCode = cell(row, 'department_code').toUpperCase();
+    const lectures = intCell(row, 3, 'lecture_hours');
+    const tutorials = intCell(row, 0, 'tutorial_hours');
+    const labs = intCell(row, 0, 'lab_hours');
+    const reqLab = cell(row, 'requires_lab').toUpperCase().startsWith('Y') || labs > 0;
 
     if (!code || !name) {
       errors.push(`Row ${lineNum} · Courses: Missing course_code or course_name.`);
       return;
     }
-    if (deptCode && !validDeptCodes.has(deptCode)) {
-      warnings.push(`Row ${lineNum} · Courses: Department "${deptCode}" not found.`);
-    }
+    if (!checkDept('Courses', lineNum, deptCode)) return;
 
     validCourseCodes.add(code);
     preview.parsedData.courses.push({
       code,
       name,
       departmentId: '',
-      departmentCode: deptCode || 'CSED',
-      credits,
+      departmentCode: deptCode,
+      credits: intCell(row, 4, 'credits'),
       requiredLecturesPerWeek: lectures,
       requiredTutorialsPerWeek: tutorials,
       requiredLabsPerWeek: labs,
@@ -567,9 +507,9 @@ export async function parseAndValidateMasterWorkbook(
       completedHours: 0,
       cancelledHours: 0,
       requiresLab: reqLab,
-      requiredEquipment: reqLab ? ['Workstations', 'LAN'] : ['Projector'],
+      requiredEquipment: [],
       primaryFacultyId: '',
-      primaryFacultyEmail: facEmail,
+      primaryFacultyEmail: cell(row, 'primary_faculty_email').toLowerCase(),
       status: 'Active'
     });
   });
@@ -579,16 +519,16 @@ export async function parseAndValidateMasterWorkbook(
   preview.sheetCounts.groups = groupRows.length;
   groupRows.forEach((row, idx) => {
     const lineNum = idx + 2;
-    const code = String(row.group_code || row.name || '').trim().toUpperCase();
-    const name = String(row.group_name || code).trim();
-    const progCode = String(row.program_code || 'BTECH-CSE').trim().toUpperCase();
-    const batch = parseInt(row.batch_year || row.batch || '2024', 10) || 2024;
-    const sem = parseInt(row.semester || '5', 10) || 5;
-    const count = parseInt(row.student_count || '50', 10) || 50;
+    const code = cell(row, 'group_code', 'name').toUpperCase();
+    const progCode = cell(row, 'program_code').toUpperCase();
+    const count = intCell(row, 0, 'student_count');
 
-    if (!code) {
-      errors.push(`Row ${lineNum} · Groups: Missing group_code.`);
+    if (!code || count <= 0) {
+      errors.push(`Row ${lineNum} · Groups: Missing group_code or a positive student_count.`);
       return;
+    }
+    if (progCode && !validProgCodes.has(progCode)) {
+      warnings.push(`Row ${lineNum} · Groups: Program "${progCode}" not found; the group will have no program.`);
     }
 
     validGroupCodes.add(code);
@@ -599,17 +539,13 @@ export async function parseAndValidateMasterWorkbook(
       departmentId: '',
       program: progCode,
       programId: '',
-      semester: sem,
-      batchYear: batch,
+      // 0 lets the server keep the existing value or use its default.
+      semester: intCell(row, 0, 'semester'),
+      batchYear: intCell(row, 0, 'batch_year', 'batch'),
       studentCount: count,
-      targetSize: count,
+      targetSize: intCell(row, count, 'target_size'),
       maxSize: Math.ceil(count * 1.2),
-      status: 'Active',
-      classRepresentative: {
-        name: 'Assigned CR',
-        email: `cr.${code.toLowerCase()}@thapar.edu`,
-        studentId: '102303001'
-      }
+      status: 'Active'
     });
   });
 
@@ -618,10 +554,9 @@ export async function parseAndValidateMasterWorkbook(
   preview.sheetCounts.subgroups = subRows.length;
   subRows.forEach((row, idx) => {
     const lineNum = idx + 2;
-    const groupCode = String(row.group_code || '').trim().toUpperCase();
-    const subCode = String(row.subgroup_code || row.name || '').trim().toUpperCase();
-    const count = parseInt(row.student_count || '25', 10) || 25;
-    const type = String(row.type || 'Lab').trim() as any;
+    const groupCode = cell(row, 'group_code').toUpperCase();
+    const subCode = cell(row, 'subgroup_code', 'name').toUpperCase();
+    const type = (cell(row, 'type') || 'Lab') as 'Lab' | 'Tutorial' | 'Practical' | 'General';
 
     if (!groupCode || !subCode) {
       errors.push(`Row ${lineNum} · Subgroups: Missing group_code or subgroup_code.`);
@@ -637,7 +572,7 @@ export async function parseAndValidateMasterWorkbook(
     preview.parsedData.subgroups.push({
       groupCode,
       name: subCode,
-      studentCount: count,
+      studentCount: intCell(row, 0, 'student_count'), // 0 = split the group evenly on the server
       type: ['Lab', 'Tutorial', 'Practical', 'General'].includes(type) ? type : 'Lab'
     });
   });
@@ -647,13 +582,13 @@ export async function parseAndValidateMasterWorkbook(
   preview.sheetCounts.allocations = allocRows.length;
   allocRows.forEach((row, idx) => {
     const lineNum = idx + 2;
-    const cCode = String(row.course_code || '').trim().toUpperCase();
-    const fEmail = String(row.faculty_email || '').trim().toLowerCase();
-    const gCode = String(row.group_code || '').trim().toUpperCase();
-    const subName = String(row.subgroup_code || row.subgroup || '').trim().toUpperCase();
-    const sType = String(row.session_type || 'Lecture').trim() as SessionType;
-    const hours = parseInt(row.hours_per_week || '3', 10) || 3;
-    const roomName = String(row.preferred_room || '').trim();
+    const cCode = cell(row, 'course_code').toUpperCase();
+    const fEmail = cell(row, 'faculty_email').toLowerCase();
+    const gCode = cell(row, 'group_code').toUpperCase();
+    const subName = cell(row, 'subgroup_code', 'subgroup').toUpperCase();
+    const sType = (cell(row, 'session_type') || 'Lecture') as SessionType;
+    const hours = intCell(row, 3, 'hours_per_week');
+    const roomName = cell(row, 'preferred_room');
 
     if (!cCode || !fEmail || !gCode) {
       errors.push(`Row ${lineNum} · Course Allocations: Missing course_code, faculty_email, or group_code.`);
@@ -675,13 +610,27 @@ export async function parseAndValidateMasterWorkbook(
       return;
     }
 
+    if (hours <= 0) {
+      errors.push(`Row ${lineNum} · Course Allocations: hours_per_week must be a positive number.`);
+      return;
+    }
+
+    if ((sType === 'Lab' || sType === 'Practical') && hours % 2 !== 0) {
+      errors.push(`Row ${lineNum} · Course Allocations: ${sType} hours must be even (2-hour blocks).`);
+      return;
+    }
+
+    if (roomName && !validRoomNames.has(roomName.toUpperCase())) {
+      warnings.push(`Row ${lineNum} · Course Allocations: Room "${roomName}" not found; the solver will pick a room.`);
+    }
+
     if (subName && !validSubgroups.has(`${gCode}:${subName}`)) {
       warnings.push(`Row ${lineNum} · Course Allocations: Subgroup "${subName}" not declared for group "${gCode}". It will be auto-created.`);
       validSubgroups.add(`${gCode}:${subName}`);
       preview.parsedData.subgroups.push({
         groupCode: gCode,
         name: subName,
-        studentCount: 25,
+        studentCount: 0,
         type: sType === 'Lab' ? 'Lab' : 'Tutorial'
       });
     }
@@ -697,6 +646,47 @@ export async function parseAndValidateMasterWorkbook(
     });
   });
 
+  // --- 9. STUDENTS (optional roster) ---
+  const studentRows = getSheetRows('Students');
+  preview.sheetCounts.students = studentRows.length;
+  const seenStudentIds = new Set<string>();
+  studentRows.forEach((row, idx) => {
+    const lineNum = idx + 2;
+    const studentId = cell(row, 'student_id', 'studentId', 'roll_number', 'roll_no', 'roll', 'enrollment_no', 'enrollment_number', 'registration_no');
+    const name = cell(row, 'name', 'student_name', 'full_name');
+    const email = cell(row, 'email', 'student_email', 'email_id').toLowerCase();
+    const programCode = cell(row, 'program_code', 'program').toUpperCase();
+    const batchYear = intCell(row, 0, 'batch_year', 'batch');
+    const groupCode = cell(row, 'group_code', 'group', 'section', 'section_code').toUpperCase();
+    const subgroupName = cell(row, 'subgroup_code', 'subgroup_name', 'subgroup', 'sub_group').toUpperCase();
+
+    if (!studentId || !name || !email.includes('@') || !groupCode) {
+      errors.push(`Row ${lineNum} · Students: roll number, name, a valid email and group_code are required.`);
+      return;
+    }
+    if (!validGroupCodes.has(groupCode)) {
+      errors.push(`Row ${lineNum} · Students: Group "${groupCode}" was not found in Groups sheet or database.`);
+      return;
+    }
+    if (seenStudentIds.has(studentId)) {
+      warnings.push(`Row ${lineNum} · Students: Roll number ${studentId} appears more than once; the last row wins.`);
+    }
+    seenStudentIds.add(studentId);
+    if (subgroupName && !validSubgroups.has(`${groupCode}:${subgroupName}`)) {
+      warnings.push(`Row ${lineNum} · Students: Subgroup "${subgroupName}" not found in group "${groupCode}"; the student will be placed in the whole group only.`);
+    }
+
+    preview.parsedData.students.push({
+      studentId,
+      name,
+      email,
+      programCode: programCode || undefined,
+      batchYear: batchYear || undefined,
+      groupCode,
+      subgroupName: subgroupName || undefined
+    });
+  });
+
   // Calculate totals
   const total =
     deptRows.length +
@@ -706,7 +696,8 @@ export async function parseAndValidateMasterWorkbook(
     courseRows.length +
     groupRows.length +
     subRows.length +
-    allocRows.length;
+    allocRows.length +
+    studentRows.length;
 
   preview.totalRows = total;
   preview.errorCount = errors.length;

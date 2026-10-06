@@ -2,47 +2,6 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <script>
-      (function() {
-        // Prevent "Cannot set property fetch of #<Window> which has only a getter" from failing app
-        window.addEventListener('error', function(event) {
-          if (event && event.message && event.message.indexOf('Cannot set property fetch of') !== -1) {
-            event.preventDefault();
-            event.stopImmediatePropagation();
-            return true;
-          }
-        }, true);
-
-        try {
-          var origFetch = window.fetch ? window.fetch.bind(window) : null;
-          var curFetch = origFetch;
-          Object.defineProperty(window, 'fetch', {
-            get: function() {
-              return curFetch || origFetch;
-            },
-            set: function(val) {
-              curFetch = val;
-            },
-            configurable: true,
-            enumerable: true
-          });
-        } catch (e) {
-          try {
-            var proto = Object.getPrototypeOf(window) || Window.prototype;
-            Object.defineProperty(proto, 'fetch', {
-              get: function() {
-                return this.__customFetch || origFetch;
-              },
-              set: function(val) {
-                this.__customFetch = val;
-              },
-              configurable: true,
-              enumerable: true
-            });
-          } catch (e2) {}
-        }
-      })();
-    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Thapar Institute of Engineering and Technology Timetable</title>
     <meta name="description" content="Thapar Institute of Engineering and Technology Timetable - Centralized Academic Timetabling & Class Operations Portal." />

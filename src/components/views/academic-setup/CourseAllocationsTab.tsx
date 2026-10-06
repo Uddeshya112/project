@@ -1,21 +1,32 @@
 import React, { useState } from 'react';
 import { useTimetable } from '../../../context/TimetableContext';
-import { SessionType, CourseAllocation } from '../../../types';
+import { SessionType } from '../../../types';
 import {
   BookOpen,
   Plus,
   Trash2,
   Search,
-  Filter,
   Users,
   Layers,
   DoorOpen,
   UserSquare2,
-  Clock,
-  CheckCircle2
+  Clock
 } from 'lucide-react';
 
-export function CourseAllocationsTab() {
+type AllocForm = {
+  courseId: string;
+  facultyId: string;
+  sectionId: string;
+  subSectionId?: string;
+  sessionType: SessionType;
+  hoursPerWeek: number;
+  preferredRoomId?: string;
+};
+
+const EMPTY_FORM: AllocForm = { courseId: '', facultyId: '', sectionId: '', sessionType: 'Lecture', hoursPerWeek: 3 };
+const SELECT = 'w-full bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2 text-xs text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]';
+
+export function CourseAllocationsTab({ canEdit = true }: { canEdit?: boolean }) {
   const {
     allocations,
     addAllocation,
@@ -30,25 +41,9 @@ export function CourseAllocationsTab() {
   const [typeFilter, setTypeFilter] = useState<string>('ALL');
   const [sectionFilter, setSectionFilter] = useState<string>('ALL');
   const [showAddForm, setShowAddForm] = useState(false);
-
-  // Form State
-  const [allocForm, setAllocForm] = useState<{
-    courseId: string;
-    facultyId: string;
-    sectionId: string;
-    subSectionId?: string;
-    sessionType: SessionType;
-    hoursPerWeek: number;
-    preferredRoomId?: string;
-  }>({
-    courseId: courses[0]?.id || 'cs501',
-    facultyId: facultyMembers[0]?.id || 'fac-sharma',
-    sectionId: sections[0]?.id || 'sec-cse-a',
-    subSectionId: undefined,
-    sessionType: 'Lecture',
-    hoursPerWeek: 3,
-    preferredRoomId: undefined
-  });
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState('');
+  const [allocForm, setAllocForm] = useState<AllocForm>(EMPTY_FORM);
 
   // Selected section to derive available subgroups
   const selectedSectionObj = sections.find(s => s.id === allocForm.sectionId);
@@ -75,11 +70,23 @@ export function CourseAllocationsTab() {
     }));
   };
 
-  const handleCreateAllocation = (e: React.FormEvent) => {
+  const handleCreateAllocation = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!allocForm.courseId || !allocForm.facultyId || !allocForm.sectionId) return;
-
-    addAllocation({
+    if (!allocForm.courseId || !allocForm.facultyId || !allocForm.sectionId) {
+      setFormError('Choose a course, a faculty member and a section.');
+      return;
+    }
+    if (!Number.isInteger(allocForm.hoursPerWeek) || allocForm.hoursPerWeek < 1 || allocForm.hoursPerWeek > 40) {
+      setFormError('Hours per week must be a whole number between 1 and 40.');
+      return;
+    }
+    if ((allocForm.sessionType === 'Lab' || allocForm.sessionType === 'Practical') && allocForm.hoursPerWeek % 2 !== 0) {
+      setFormError('Labs and practicals are scheduled in 2-hour blocks, so hours per week must be even.');
+      return;
+    }
+    setFormError('');
+    setSaving(true);
+    const r = await addAllocation({
       courseId: allocForm.courseId,
       facultyId: allocForm.facultyId,
       sectionId: allocForm.sectionId,
@@ -88,8 +95,11 @@ export function CourseAllocationsTab() {
       hoursPerWeek: allocForm.hoursPerWeek,
       preferredRoomId: allocForm.preferredRoomId || undefined
     });
-
-    setShowAddForm(false);
+    setSaving(false);
+    if (r.success) {
+      setShowAddForm(false);
+      setAllocForm(EMPTY_FORM);
+    }
   };
 
   // Filtered Allocations
@@ -113,7 +123,7 @@ export function CourseAllocationsTab() {
 
   const lectureCount = allocations.filter(a => a.sessionType === 'Lecture').length;
   const labCount = allocations.filter(a => a.sessionType === 'Lab').length;
-  const tutCount = allocations.filter(a => a.sessionType === 'Tutorial').length;
+  const tutCount = allocations.filter(a => a.sessionType === 'Tutorial' || a.sessionType === 'Practical').length;
 
   return (
     <div className="p-5 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl space-y-5 shadow-xs">
@@ -133,13 +143,15 @@ export function CourseAllocationsTab() {
           </p>
         </div>
 
-        <button
-          onClick={() => setShowAddForm(!showAddForm)}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-[#8C1B2E] hover:bg-[#731625] text-white rounded-lg text-xs font-semibold shadow-xs transition-colors self-start sm:self-auto"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          <span>New Teaching Assignment</span>
-        </button>
+        {canEdit && (
+          <button
+            onClick={() => setShowAddForm(!showAddForm)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-[#8C1B2E] hover:bg-[#731625] text-white rounded-lg text-xs font-semibold shadow-xs transition-colors self-start sm:self-auto"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            <span>New Teaching Assignment</span>
+          </button>
+        )}
       </div>
 
       {/* Metrics Bar */}
@@ -163,7 +175,7 @@ export function CourseAllocationsTab() {
       </div>
 
       {/* Add Allocation Form */}
-      {showAddForm && (
+      {showAddForm && canEdit && (
         <form
           onSubmit={handleCreateAllocation}
           className="p-4 bg-white dark:bg-zinc-950 border border-[#8C1B2E]/30 rounded-xl space-y-3 shadow-xs animate-in fade-in duration-150"
@@ -175,12 +187,15 @@ export function CourseAllocationsTab() {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
             {/* Course */}
             <div>
-              <label className="text-[11px] text-stone-500 block mb-1">Course</label>
+              <label htmlFor="alloc-course" className="text-[11px] text-stone-500 block mb-1">Course</label>
               <select
+                id="alloc-course"
                 value={allocForm.courseId}
                 onChange={e => setAllocForm(a => ({ ...a, courseId: e.target.value }))}
-                className="w-full bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2 text-xs text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
+                className={SELECT}
+                required
               >
+                <option value="">Select course…</option>
                 {courses.map(c => (
                   <option key={c.id} value={c.id}>
                     {c.code} · {c.name}
@@ -191,12 +206,15 @@ export function CourseAllocationsTab() {
 
             {/* Faculty */}
             <div>
-              <label className="text-[11px] text-stone-500 block mb-1">Faculty Instructor</label>
+              <label htmlFor="alloc-faculty" className="text-[11px] text-stone-500 block mb-1">Faculty Instructor</label>
               <select
+                id="alloc-faculty"
                 value={allocForm.facultyId}
                 onChange={e => setAllocForm(a => ({ ...a, facultyId: e.target.value }))}
-                className="w-full bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2 text-xs text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
+                className={SELECT}
+                required
               >
+                <option value="">Select faculty…</option>
                 {facultyMembers.map(f => (
                   <option key={f.id} value={f.id}>
                     {f.name} ({f.designation})
@@ -207,12 +225,15 @@ export function CourseAllocationsTab() {
 
             {/* Target Section */}
             <div>
-              <label className="text-[11px] text-stone-500 block mb-1">Target Section</label>
+              <label htmlFor="alloc-section" className="text-[11px] text-stone-500 block mb-1">Target Section</label>
               <select
+                id="alloc-section"
                 value={allocForm.sectionId}
                 onChange={e => handleSectionChange(e.target.value)}
-                className="w-full bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2 text-xs text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
+                className={SELECT}
+                required
               >
+                <option value="">Select section…</option>
                 {sections.map(s => (
                   <option key={s.id} value={s.id}>
                     Section {s.name} ({s.studentCount} students)
@@ -223,11 +244,12 @@ export function CourseAllocationsTab() {
 
             {/* Subgroup or Whole Section */}
             <div>
-              <label className="text-[11px] text-stone-500 block mb-1">Cohort Scope (Group / Subgroup)</label>
+              <label htmlFor="alloc-scope" className="text-[11px] text-stone-500 block mb-1">Cohort Scope (Group / Subgroup)</label>
               <select
+                id="alloc-scope"
                 value={allocForm.subSectionId || ''}
                 onChange={e => setAllocForm(a => ({ ...a, subSectionId: e.target.value || undefined }))}
-                className="w-full bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2 text-xs text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
+                className={SELECT}
               >
                 <option value="">Whole Section (All students)</option>
                 {availableSubgroups.map(sub => (
@@ -240,11 +262,12 @@ export function CourseAllocationsTab() {
 
             {/* Session Type */}
             <div>
-              <label className="text-[11px] text-stone-500 block mb-1">Session Type</label>
+              <label htmlFor="alloc-type" className="text-[11px] text-stone-500 block mb-1">Session Type</label>
               <select
+                id="alloc-type"
                 value={allocForm.sessionType}
                 onChange={e => handleSessionTypeChange(e.target.value as SessionType)}
-                className="w-full bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2 text-xs text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
+                className={SELECT}
               >
                 <option value="Lecture">Lecture</option>
                 <option value="Lab">Lab (Practical Session)</option>
@@ -256,25 +279,28 @@ export function CourseAllocationsTab() {
 
             {/* Hours per Week */}
             <div>
-              <label className="text-[11px] text-stone-500 block mb-1">Hours / Week</label>
+              <label htmlFor="alloc-hours" className="text-[11px] text-stone-500 block mb-1">Hours / Week</label>
               <input
+                id="alloc-hours"
                 type="number"
                 value={allocForm.hoursPerWeek}
                 onChange={e => setAllocForm(a => ({ ...a, hoursPerWeek: Number(e.target.value) || 1 }))}
                 min={1}
-                max={10}
-                className="w-full bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2 text-xs text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
+                max={40}
+                step={allocForm.sessionType === 'Lab' || allocForm.sessionType === 'Practical' ? 2 : 1}
+                className={SELECT}
                 required
               />
             </div>
 
             {/* Preferred Room */}
             <div className="sm:col-span-2">
-              <label className="text-[11px] text-stone-500 block mb-1">Preferred Room / Lab</label>
+              <label htmlFor="alloc-room" className="text-[11px] text-stone-500 block mb-1">Preferred Room / Lab</label>
               <select
+                id="alloc-room"
                 value={allocForm.preferredRoomId || ''}
                 onChange={e => setAllocForm(a => ({ ...a, preferredRoomId: e.target.value || undefined }))}
-                className="w-full bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2 text-xs text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
+                className={SELECT}
               >
                 <option value="">Auto-assign suitable room during solver run</option>
                 {rooms.map(r => (
@@ -295,12 +321,16 @@ export function CourseAllocationsTab() {
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 bg-[#8C1B2E] hover:bg-[#731625] text-white rounded-lg text-xs font-semibold shadow-xs"
+                disabled={saving}
+                className="px-4 py-2 bg-[#8C1B2E] hover:bg-[#731625] text-white rounded-lg text-xs font-semibold shadow-xs disabled:opacity-50"
               >
-                Save Assignment
+                {saving ? 'Saving…' : 'Save Assignment'}
               </button>
             </div>
           </div>
+          {formError && (
+            <p role="alert" className="text-[11px] text-[#8C1B2E] dark:text-red-400">{formError}</p>
+          )}
         </form>
       )}
 
@@ -312,6 +342,7 @@ export function CourseAllocationsTab() {
             <input
               type="text"
               placeholder="Search course, faculty, group..."
+              aria-label="Search allocations"
               value={search}
               onChange={e => setSearch(e.target.value)}
               className="pl-8 pr-3 py-1.5 bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg text-xs text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E] w-48 sm:w-64 shadow-2xs"
@@ -319,6 +350,7 @@ export function CourseAllocationsTab() {
           </div>
 
           <select
+            aria-label="Filter by session type"
             value={typeFilter}
             onChange={e => setTypeFilter(e.target.value)}
             className="bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-stone-800 dark:text-zinc-200 outline-none focus:border-[#8C1B2E] shadow-2xs"
@@ -331,6 +363,7 @@ export function CourseAllocationsTab() {
           </select>
 
           <select
+            aria-label="Filter by section"
             value={sectionFilter}
             onChange={e => setSectionFilter(e.target.value)}
             className="bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-stone-800 dark:text-zinc-200 outline-none focus:border-[#8C1B2E] shadow-2xs"
@@ -417,13 +450,21 @@ export function CourseAllocationsTab() {
               </div>
 
               <div className="flex items-center gap-2 self-end sm:self-center">
-                <button
-                  onClick={() => deleteAllocation(alloc.id)}
-                  title="Delete Teaching Assignment"
-                  className="p-1.5 text-stone-400 hover:text-[#8C1B2E] dark:hover:text-red-400 transition-colors"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
+                {canEdit && (
+                  <button
+                    onClick={async () => {
+                      setSaving(true);
+                      await deleteAllocation(alloc.id);
+                      setSaving(false);
+                    }}
+                    disabled={saving}
+                    title="Delete Teaching Assignment"
+                    aria-label={`Delete allocation ${course?.code ?? alloc.courseId} for ${section?.name ?? alloc.sectionId}`}
+                    className="p-1.5 text-stone-400 hover:text-[#8C1B2E] dark:hover:text-red-400 transition-colors disabled:opacity-40"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                )}
               </div>
             </div>
           );

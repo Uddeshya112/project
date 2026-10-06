@@ -1,53 +1,71 @@
-# API Conventions & REST Specifications — IntelliSchedule
+# API
 
-**Protocol**: HTTPS  
-**Content-Type**: `application/json`  
-**Authentication**: Bearer Token (`Authorization: Bearer jwt_live_*`) or `HttpOnly` cookie (`intellischedule_session`)
+JSON over HTTPS, same origin as the web app, under `/api`. Defined in `server.ts` (data endpoints) and `src/server/auth.ts` (auth and user admin).
 
----
+## Conventions
 
-## 1. Standard Endpoints
+- **Authentication**: httpOnly session cookie `tt_session`, set by the sign-in endpoints. There are no bearer tokens and the token is never returned in a response body. Clients must send cookies (`credentials: 'same-origin'`).
+- **Cross-site protection**: non-GET requests to `/api` with an `Origin` header must come from the same host or from `APP_URL`; otherwise 403. Requests without `Origin` (e.g. curl) are allowed.
+- **Bodies**: `application/json`, at most 10 MB (413 above that; 400 for malformed JSON). Unknown fields in academic entities are dropped; wrong types are rejected (`src/server/validate.ts`).
+- **Responses**: most endpoints return `{ "success": true, ... }`. Errors return:
 
-### Health & Monitoring
-- `GET /api/health/live`: Lightweight liveness check confirming the HTTP process is responsive.
-- `GET /api/health/ready`: Readiness check inspecting database and rate-limiter operational readiness.
+  ```json
+  { "success": false, "message": "Readable reason." }
+  ```
 
-### Authentication & Identity
-- `POST /api/auth/login`: Authenticate with institutional email and password. Returns user object, session token, and authorized workspaces.
-- `GET /api/auth/me`: Verifies active session token and returns authenticated principal context.
-- `POST /api/auth/logout`: Revokes active cryptographic session and clears session cookie.
-- `POST /api/auth/register`: Onboards new user with server-determined role resolution.
-- `POST /api/auth/forgot-password`: Generates secure single-use 15-minute password reset token (with anti-enumeration response).
-- `GET /api/auth/validate-token`: Verifies status, expiration, and single-use state of reset token.
-- `POST /api/auth/reset-password`: Updates password and invalidates all active sessions for the user.
+  Guards add `"error": "UNAUTHENTICATED"` (401) or `"error": "FORBIDDEN"` (403). Login rate limiting also sets `Retry-After`. Unknown `/api` paths return 404 JSON.
+- **Writes are durable**: a successful response to a data write means it is committed to Postgres.
+- **Caching**: `/api/academic/bootstrap` and the health endpoints send `Cache-Control: no-store`.
 
-### Google OAuth 2.0
-- `GET /api/auth/google/status`: Returns provider status and configuration state.
-- `GET /api/auth/google/authorize`: Initiates OAuth authorization code flow with 256-bit CSRF state token.
-- `GET /api/auth/google/callback`: Validates state, exchanges authorization code, verifies ID token, links user identity, and issues authenticated session.
-- `GET /api/auth/google/debug`: Diagnostic inspection endpoint for redirect URIs and scopes.
+| Status | Meaning here |
+| --- | --- |
+| 200 / 201 | OK / created |
+| 400 | Invalid input, missing field, malformed JSON |
+| 401 | Not signed in, or wrong email/password |
+| 403 | Role not allowed, not your item, account locked, cross-site request, demo mode off |
+| 404 | Unknown record or path |
+| 409 | Duplicate, record still in use, already cancelled/voted/decided, slot no longer free, or data changed by another server instance (reload and retry) |
+| 413 | Body larger than 10 MB |
+| 422 | Breaks a hard constraint (move, swap, add, select, approve, publish), or Excel import rejected |
+| 429 | Rate limited |
+| 500 | Unexpected error (details only in server logs) |
+| 503 | Change could not be saved, or database not ready |
 
----
+## Endpoints
 
-## 2. Standard Error Format
+Roles per endpoint: [permissions.md](permissions.md).
 
-All error responses return a standardized JSON structure with appropriate HTTP status codes:
+**Health** (no auth): `GET /api/health/live` -> `{"status":"LIVE"}`; `GET /api/health/ready` -> `{"status":"READY"}` after `select 1` on the database, else 503 `{"status":"DATABASE_UNAVAILABLE"}`.
 
-```json
-{
-  "success": false,
-  "message": "Clear, non-technical explanation of the failure reason.",
-  "retryAfter": 60
-}
-```
+**Auth**
+- `GET /api/auth/config`: `{ googleEnabled, demoEnabled, allowedDomains }`
+- `POST /api/auth/login` `{ email, password }`
+- `POST /api/auth/demo-login` `{ roleKey: "Coordinator" | "Faculty" | "Student" | "Admin" | "HOD" }` (only when `DEMO_MODE` is on)
+- `GET /api/auth/google/start`, `GET /api/auth/google/callback`: full-page redirect flow; errors come back as `/?auth_error=...`
+- `GET /api/auth/me`, `POST /api/auth/logout`
+- `PATCH /api/auth/profile` `{ name?, profile? }` (phone, office location/hours, specialization, notification preferences)
+- `POST /api/auth/change-password` `{ currentPassword, newPassword }` (signs out other devices)
+- `POST /api/auth/forgot-password`: same reply for every email; tells the user to use Google or ask an admin. No email is sent.
 
-### HTTP Status Code Guidelines
-- `200 OK`: Request succeeded.
-- `201 Created`: Resource created successfully.
-- `400 Bad Request`: Input validation failed or required field missing.
-- `401 Unauthorized`: Missing or invalid authentication token.
-- `403 Forbidden`: Authenticated user lacks permission or account is locked.
-- `404 Not Found`: Requested resource does not exist.
-- `409 Conflict`: Unique constraint violation (e.g. email already registered).
-- `429 Too Many Requests`: Rate limit threshold exceeded.
-- `500 Internal Server Error`: Safe unexpected error message.
+**User admin**: `GET|POST /api/admin/users`, `PATCH|DELETE /api/admin/users/:id`, `POST /api/admin/users/:id/revoke-sessions`, `GET /api/admin/sessions`.
+
+**Reads**: `GET /api/me` (user + roster link), `GET /api/academic/bootstrap` (everything the UI needs), `GET /api/students?page&limit&search&sectionId`, `GET /api/audit?limit`, `GET /api/timetable/versions/:n`, `GET /api/timetable/benchmark` (runs the engine three times; once per 10 s per user).
+
+**Academic data**: `POST /api/academic/{departments|programs|courses|faculty|rooms|groups|allocations}`, `PUT` and `DELETE .../:id`; `POST /api/academic/groups/bulk`; `POST /api/academic/subgroups`, `DELETE /api/academic/subgroups/:groupId/:subgroupId`; `PUT /api/academic/year`; `POST /api/academic/import` `{ parsedData, mode: "upsert" | "replace" }`; `POST /api/academic/constraints/:id/toggle`; `POST /api/academic/faculty-protected-slot` `{ day, periodId, reason?, facultyId? }`.
+
+**Timetable**: `POST /api/academic/generate` `{ budgetMode?, timeBudgetMs?, routines? }`; `POST /api/timetable/select-routine` `{ versionNumber }`; `POST /api/timetable/move` `{ sessionId, targetDay, targetTimeSlotId, targetRoomId, reason? }`; `POST /api/timetable/swap` `{ sessionAId, sessionBId, reason? }`; `POST /api/timetable/sessions` (add a class); `POST /api/timetable/sessions/:id/lock` `{ reason? }` (toggles); `POST /api/timetable/status` `{ status: "Draft" | "Review" }`; `POST /api/timetable/approve`; `POST /api/timetable/publish`; `POST /api/timetable/versions/:n/restore`.
+
+**Recovery, polls, notifications**: `POST /api/recovery/cancel-class` `{ sessionId, reason? }`; `POST /api/recovery/schedule-makeup` `{ opportunityId }`; `POST /api/recovery/decline` `{ opportunityId }`; `POST /api/voting/polls` `{ question, options[2..6], sectionId? }`; `POST /api/voting/vote` `{ pollId, optionId }`; `POST /api/notifications` `{ title, message, type?, category?, recipientRole? }` (10 per minute); `POST /api/notifications/:id/read`.
+
+## Rate limits
+
+In process memory, per instance, reset on restart.
+
+| What | Limit |
+| --- | --- |
+| Password sign-in, per email | 10 attempts per 15 minutes (successful attempts count too) |
+| Password sign-in, per IP; Google sign-in start, per IP (separate counters) | `LOGIN_RATE_LIMIT_PER_IP` per minute each (default 300; campus NAT puts many users behind one address) |
+| Forgot password, per IP | 30 per minute |
+| Change password, per user | 5 per 15 minutes |
+| Post notification, per user | 10 per minute |
+| Solver benchmark, per user | once per 10 seconds |

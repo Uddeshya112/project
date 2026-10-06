@@ -1,8 +1,11 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useTimetable } from '../../context/TimetableContext';
+import { useAuth } from '../../context/AuthContext';
 import {
+  LayoutDashboard,
   CalendarDays,
   Building2,
+  Award,
   GraduationCap,
   BookOpen,
   UserSquare2,
@@ -19,12 +22,11 @@ import {
   Check,
   Play,
   Eye,
-  Upload,
   AlertCircle,
   FileSpreadsheet,
   Download
 } from 'lucide-react';
-import { DayOfWeek, SessionType } from '../../types';
+import { AcademicYearConfig, Course, DayOfWeek, Faculty, Room } from '../../types';
 import { MasterExcelHub } from './academic-setup/MasterExcelHub';
 import { GroupsAndSubgroupsTab } from './academic-setup/GroupsAndSubgroupsTab';
 import { CourseAllocationsTab } from './academic-setup/CourseAllocationsTab';
@@ -45,10 +47,54 @@ export type SetupSubTab =
   | 'students'
   | 'allocations'
   | 'constraints'
-  | 'validation'
   | 'generator'
-  | 'review'
-  | 'bulk_import';
+  | 'review';
+
+const ALL_DAYS: DayOfWeek[] = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const INPUT = 'bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2 text-xs text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]';
+const SAVE_BTN = 'px-3.5 py-1.5 bg-[#8C1B2E] text-white rounded-lg text-xs font-semibold disabled:opacity-50';
+const DELETE_BTN = 'p-1.5 text-stone-400 hover:text-[#8C1B2E] dark:hover:text-red-400 transition-colors disabled:opacity-40';
+const NEW_BTN = 'flex items-center gap-1.5 px-3 py-1.5 bg-[#8C1B2E] hover:bg-[#721525] text-white rounded-lg text-xs font-semibold transition-all shadow-2xs';
+
+const EMPTY_DEPT = { name: '', code: '', hodName: '', contactEmail: '', status: 'Active' as const };
+const EMPTY_PROG = { name: '', code: '', departmentId: '', durationYears: 4, totalSemesters: 8, status: 'Active' as const };
+const EMPTY_COURSE: Omit<Course, 'id'> = {
+  code: '',
+  name: '',
+  departmentId: '',
+  credits: 4,
+  requiredLecturesPerWeek: 3,
+  requiredTutorialsPerWeek: 0,
+  requiredLabsPerWeek: 0,
+  totalSemesterHours: 45,
+  completedHours: 0,
+  cancelledHours: 0,
+  requiresLab: false,
+  requiredEquipment: [],
+  primaryFacultyId: '',
+  status: 'Active',
+};
+const EMPTY_FACULTY: Omit<Faculty, 'id'> = {
+  name: '',
+  email: '',
+  departmentId: '',
+  designation: 'Assistant Professor',
+  subjectsQualified: [],
+  maxDirectTeachingHours: 16,
+  weeklyHoursLimit: 40,
+  status: 'Active',
+  preferences: {
+    preferredDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+    preferredPeriods: [1, 2, 3, 4],
+    protectedSlots: [],
+    maxConsecutivePeriods: 2,
+    availableForMakeup: true,
+    availableForTutorial: true,
+  },
+};
+const EMPTY_ROOM: Omit<Room, 'id'> = { name: '', building: '', floor: 0, capacity: 60, type: 'LectureHall', equipment: [], isAvailable: true };
+
+type YearDraft = Pick<AcademicYearConfig, 'yearLabel' | 'semesterType' | 'semesterNumber' | 'workingDays'>;
 
 export function AcademicSetupHubView() {
   const {
@@ -71,23 +117,18 @@ export function AcademicSetupHubView() {
     deleteFaculty,
     toggleFacultyStatus,
     sections,
-    addSection,
-    deleteSection,
     courses,
     addCourse,
     deleteCourse,
     allocations,
-    addAllocation,
-    deleteAllocation,
     constraints,
     toggleConstraint,
     validationReport,
-    runValidation,
     generateDraftTimetable,
-    publishStatus,
     updatePublishStatus,
-    bulkImportData,
+    publishMasterTimetable,
     sessions,
+    studentsCount,
     selectedSectionId,
     setSelectedSectionId,
     selectedFacultyId,
@@ -95,10 +136,14 @@ export function AcademicSetupHubView() {
     selectedRoomId,
     setSelectedRoomId,
   } = useTimetable();
+  const { currentUser } = useAuth();
+  const isAdmin = ['COLLEGE_ADMIN', 'SUPER_ADMIN'].includes(currentUser?.roleCode ?? '');
+  const canEdit = isAdmin || currentUser?.roleCode === 'COORDINATOR';
+  const publishStatus = academicYear.publishStatus;
 
   const [activeTab, setActiveTab] = useState<SetupSubTab>('courses');
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (activeView === 'academic_year') setActiveTab('academic_year');
     else if (activeView === 'departments') setActiveTab('departments');
     else if (activeView === 'courses_mgmt') setActiveTab('courses');
@@ -111,156 +156,66 @@ export function AcademicSetupHubView() {
   }, [activeView]);
   const [courseSearch, setCourseSearch] = useState('');
   const [facultySearch, setFacultySearch] = useState('');
-  const [roomFilter, setRoomFilter] = useState<string>('ALL');
+
+  // One in-flight request at a time: disables every mutating button while it runs.
+  const [saving, setSaving] = useState(false);
+  const submit = async (action: () => Promise<{ success: boolean }>, onSuccess?: () => void) => {
+    setSaving(true);
+    const r = await action();
+    setSaving(false);
+    if (r.success) onSuccess?.();
+  };
+
+  // Academic year: edited locally, saved explicitly.
+  const yearFromServer = (): YearDraft => ({
+    yearLabel: academicYear.yearLabel,
+    semesterType: academicYear.semesterType,
+    semesterNumber: academicYear.semesterNumber,
+    workingDays: academicYear.workingDays,
+  });
+  const [yearDraft, setYearDraft] = useState<YearDraft>(yearFromServer);
+  useEffect(() => setYearDraft(yearFromServer()), [academicYear]);
+  const yearDirty = JSON.stringify(yearDraft) !== JSON.stringify(yearFromServer());
+  const yearValid = yearDraft.yearLabel.trim() !== '' && yearDraft.workingDays.length > 0 && Number.isInteger(yearDraft.semesterNumber) && yearDraft.semesterNumber >= 1 && yearDraft.semesterNumber <= 20;
 
   // Generation status state
   const [isGenerating, setIsGenerating] = useState(false);
-  const [generationResult, setGenerationResult] = useState<{
-    isSuccess: boolean;
-    sessionsGenerated: number;
-    conflicts: string[];
-    scheduledHours: number;
-    totalHours: number;
-  } | null>(null);
+  const [generationResult, setGenerationResult] = useState<Awaited<ReturnType<typeof generateDraftTimetable>> | null>(null);
 
   // Review View Angle
   const [reviewAngle, setReviewAngle] = useState<'section' | 'faculty' | 'room'>('section');
   const [reviewDay, setReviewDay] = useState<DayOfWeek>('Monday');
+  const activeReviewDay = academicYear.workingDays.includes(reviewDay) ? reviewDay : academicYear.workingDays[0];
 
   // Form states
   const [showAddDept, setShowAddDept] = useState(false);
-  const [deptForm, setDeptForm] = useState({ name: '', code: '', hodName: '', contactEmail: '', status: 'Active' as const });
-
+  const [deptForm, setDeptForm] = useState(EMPTY_DEPT);
   const [showAddProg, setShowAddProg] = useState(false);
-  const [progForm, setProgForm] = useState({ name: '', code: '', departmentId: departments[0]?.id || 'dept-cse', durationYears: 4, totalSemesters: 8, status: 'Active' as const });
-
+  const [progForm, setProgForm] = useState(EMPTY_PROG);
   const [showAddCourse, setShowAddCourse] = useState(false);
-  const [courseForm, setCourseForm] = useState({
-    code: '',
-    name: '',
-    departmentId: departments[0]?.id || 'dept-cse',
-    credits: 4,
-    requiredLecturesPerWeek: 3,
-    requiredTutorialsPerWeek: 1,
-    requiredLabsPerWeek: 0,
-    totalSemesterHours: 45,
-    completedHours: 0,
-    cancelledHours: 0,
-    requiresLab: false,
-    requiredEquipment: ['Smart Projector'],
-    primaryFacultyId: facultyMembers[0]?.id || '',
-    status: 'Active' as const,
-  });
-
+  const [courseForm, setCourseForm] = useState(EMPTY_COURSE);
   const [showAddFaculty, setShowAddFaculty] = useState(false);
-  const [facultyForm, setFacultyForm] = useState({
-    name: '',
-    employeeId: '',
-    email: '',
-    departmentId: departments[0]?.id || 'dept-cse',
-    designation: 'Assistant Professor' as const,
-    subjectsQualified: [] as string[],
-    maxDirectTeachingHours: 14,
-    weeklyHoursLimit: 40,
-    status: 'Active' as const,
-    preferences: {
-      preferredDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] as DayOfWeek[],
-      preferredPeriods: [1, 2, 3, 4],
-      protectedSlots: [],
-      maxConsecutivePeriods: 2,
-      availableForMakeup: true,
-      availableForTutorial: true,
-    },
-  });
-
+  const [facultyForm, setFacultyForm] = useState(EMPTY_FACULTY);
   const [showAddRoom, setShowAddRoom] = useState(false);
-  const [roomForm, setRoomForm] = useState({
-    name: '',
-    building: 'Turing Block',
-    floor: 2,
-    capacity: 60,
-    type: 'LectureHall' as const,
-    equipment: ['Smart Projector', 'Whiteboard'],
-    isAvailable: true,
-  });
-
-  const [showAddSection, setShowAddSection] = useState(false);
-  const [sectionForm, setSectionForm] = useState({
-    name: '',
-    departmentId: departments[0]?.id || 'dept-cse',
-    program: 'B.Tech Computer Science & Engineering',
-    semester: 5,
-    batchYear: 2024,
-    studentCount: 50,
-    classRepresentative: { name: '', email: '', studentId: '' },
-  });
-
-  const [showAddAlloc, setShowAddAlloc] = useState(false);
-  const [allocForm, setAllocForm] = useState({
-    courseId: courses[0]?.id || '',
-    facultyId: facultyMembers[0]?.id || '',
-    sectionId: sections[0]?.id || '',
-    subSectionId: '',
-    sessionType: 'Lecture' as SessionType,
-    hoursPerWeek: 3,
-    preferredRoomId: rooms[0]?.id || '',
-  });
-
-  // Bulk Import
-  const [importType, setImportType] = useState<'faculty' | 'courses' | 'rooms' | 'sections' | 'allocations'>('faculty');
-  const [importRaw, setImportRaw] = useState('');
-  const [importFeedback, setImportFeedback] = useState<{ successCount: number; errors: string[] } | null>(null);
+  const [roomForm, setRoomForm] = useState(EMPTY_ROOM);
 
   const totalCoursesAllocated = new Set(allocations.map(a => a.courseId)).size;
   const activeFacultyCount = facultyMembers.filter(f => f.status !== 'Inactive').length;
   const activeCoursesCount = courses.filter(c => c.status !== 'Archived').length;
   const activeRoomsCount = rooms.filter(r => r.isAvailable).length;
   const activeSectionsCount = sections.filter(s => s.status !== 'Inactive').length;
+  const totalSubgroupsCount = sections.reduce((acc, s) => acc + (s.subSections?.length || 0), 0);
+  const isBreakSlot = (slot: { id: string; isBreak?: boolean; isLunch?: boolean }) => Boolean(slot.isBreak || slot.isLunch || slot.id === academicYear.lunchPeriodId);
+  const academicYearComplete = academicYear.workingDays.length > 0 && academicYear.timeSlots.some(s => !isBreakSlot(s));
 
-  const handleRunGeneration = () => {
+  const handleRunGeneration = async () => {
     setIsGenerating(true);
     setGenerationResult(null);
-    setTimeout(() => {
-      const res = generateDraftTimetable();
-      setGenerationResult(res);
-      setIsGenerating(false);
-      if (res.isSuccess) {
-        setActiveTab('review');
-      }
-    }, 600);
+    const res = await generateDraftTimetable();
+    setGenerationResult(res);
+    setIsGenerating(false);
+    if (res.isSuccess && res.conflicts.length === 0) setActiveTab('review');
   };
-
-  const handleBulkImport = () => {
-    if (!importRaw.trim()) return;
-    try {
-      let parsed: any[] = [];
-      if (importRaw.trim().startsWith('[') || importRaw.trim().startsWith('{')) {
-        const json = JSON.parse(importRaw);
-        parsed = Array.isArray(json) ? json : [json];
-      } else {
-        const lines = importRaw.trim().split('\n');
-        const headers = lines[0].split(',').map(h => h.trim());
-        parsed = lines.slice(1).map(line => {
-          const values = line.split(',').map(v => v.trim());
-          const obj: any = {};
-          headers.forEach((h, i) => {
-            obj[h] = values[i] || '';
-          });
-          return obj;
-        });
-      }
-
-      const res = bulkImportData(importType, parsed);
-      setImportFeedback(res);
-      if (res.successCount > 0) setImportRaw('');
-    } catch (err: any) {
-      setImportFeedback({ successCount: 0, errors: [err?.message || 'Format error'] });
-    }
-  };
-
-  const daysList: DayOfWeek[] = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
-  const totalSubgroupsCount = sections.reduce((acc, s) => acc + (s.subSections?.length || 0), 0);
-  const totalStudentsCount = sections.reduce((acc, s) => acc + (s.studentCount || 0), 0);
 
   const handleDownloadMasterTemplate = () => {
     const blob = generateMasterExcelTemplate({
@@ -282,15 +237,39 @@ export function AcademicSetupHubView() {
     URL.revokeObjectURL(url);
   };
 
+  const departmentSelect = (value: string, onChange: (id: string) => void) => (
+    <select value={value} onChange={e => onChange(e.target.value)} aria-label="Department" className={INPUT} required>
+      <option value="">Select department…</option>
+      {departments.map(d => (
+        <option key={d.id} value={d.id}>{d.name}</option>
+      ))}
+    </select>
+  );
+
   const navTabs = [
+    { id: 'overview', label: 'Overview', icon: <LayoutDashboard className="h-3.5 w-3.5" /> },
+    { id: 'academic_year', label: 'Academic Year', icon: <CalendarDays className="h-3.5 w-3.5" /> },
+    { id: 'departments', label: 'Departments', icon: <Building2 className="h-3.5 w-3.5" />, badge: departments.length },
+    { id: 'programs', label: 'Programs', icon: <Award className="h-3.5 w-3.5" />, badge: programs.length },
     { id: 'courses', label: 'Courses', icon: <BookOpen className="h-3.5 w-3.5" />, badge: courses.length },
     { id: 'faculty', label: 'Faculty', icon: <UserSquare2 className="h-3.5 w-3.5" />, badge: facultyMembers.length },
     { id: 'rooms', label: 'Rooms & Labs', icon: <DoorOpen className="h-3.5 w-3.5" />, badge: rooms.length },
     { id: 'sections', label: 'Sections & Groups', icon: <Users className="h-3.5 w-3.5" />, badge: sections.length },
-    { id: 'students', label: 'Students', icon: <GraduationCap className="h-3.5 w-3.5" />, badge: 1280 },
+    { id: 'students', label: 'Students', icon: <GraduationCap className="h-3.5 w-3.5" />, badge: studentsCount },
     { id: 'allocations', label: 'Allocations', icon: <Layers className="h-3.5 w-3.5" />, badge: allocations.length },
     { id: 'constraints', label: 'Constraints & Rules', icon: <ShieldCheck className="h-3.5 w-3.5" />, badge: constraints.filter(c => c.isActive).length },
+    { id: 'generator', label: 'Validate & Generate', icon: <Play className="h-3.5 w-3.5" /> },
+    { id: 'review', label: 'Review & Publish', icon: <Eye className="h-3.5 w-3.5" /> },
     { id: 'master_excel', label: 'Excel Import', icon: <FileSpreadsheet className="h-3.5 w-3.5" /> },
+  ];
+
+  const checklist: { tab: SetupSubTab; label: string; detail: React.ReactNode }[] = [
+    { tab: 'departments', label: 'Departments', detail: `${departments.length} departments` },
+    { tab: 'programs', label: 'Programs', detail: `${programs.length} programs` },
+    { tab: 'courses', label: 'Courses', detail: `${activeCoursesCount} active courses` },
+    { tab: 'faculty', label: 'Faculty', detail: `${activeFacultyCount} active members` },
+    { tab: 'rooms', label: 'Rooms & labs', detail: `${activeRoomsCount} available rooms` },
+    { tab: 'sections', label: 'Sections', detail: `${activeSectionsCount} student sections` },
   ];
 
   return (
@@ -304,6 +283,11 @@ export function AcademicSetupHubView() {
           <p className="text-xs sm:text-sm text-stone-500 dark:text-zinc-400 mt-1">
             Institutional coordinator workspace for curriculum, cohort groups/subgroups, and Excel master sync.
           </p>
+          {!canEdit && (
+            <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-1">
+              Read-only: only coordinators and admins can change academic setup.
+            </p>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
@@ -316,13 +300,15 @@ export function AcademicSetupHubView() {
             <span>Download Master Excel (.xlsx)</span>
           </button>
 
-          <button
-            onClick={() => setActiveTab('master_excel')}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#8C1B2E] hover:bg-[#731625] text-white rounded-lg text-xs font-semibold shadow-xs transition-colors"
-          >
-            <FileSpreadsheet className="h-3.5 w-3.5" />
-            <span>Import Master Data</span>
-          </button>
+          {canEdit && (
+            <button
+              onClick={() => setActiveTab('master_excel')}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#8C1B2E] hover:bg-[#731625] text-white rounded-lg text-xs font-semibold shadow-xs transition-colors"
+            >
+              <FileSpreadsheet className="h-3.5 w-3.5" />
+              <span>Import Master Data</span>
+            </button>
+          )}
 
           <div className="flex items-center gap-1.5 pl-1">
             <span className="text-xs text-stone-500 dark:text-zinc-400">Status:</span>
@@ -335,12 +321,11 @@ export function AcademicSetupHubView() {
 
       {/* 2. Sub-navigation: Horizontal Pill Bar + Mobile Dropdown */}
       <div className="space-y-2">
-        {/* Horizontal Scrollable Tabs */}
         <div className="flex items-center gap-1.5 overflow-x-auto pb-1 max-w-full no-scrollbar">
           {navTabs.map(tab => (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id as any)}
+              onClick={() => setActiveTab(tab.id as SetupSubTab)}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
                 activeTab === tab.id
                   ? 'bg-[#8C1B2E] text-white font-semibold shadow-xs'
@@ -366,10 +351,11 @@ export function AcademicSetupHubView() {
 
         {/* Mobile Dropdown fallback for narrow viewports */}
         <div className="flex sm:hidden items-center gap-2 pt-1">
-          <span className="text-xs text-stone-500 font-medium">Jump to:</span>
+          <label htmlFor="setup-tab-jump" className="text-xs text-stone-500 font-medium">Jump to:</label>
           <select
+            id="setup-tab-jump"
             value={activeTab}
-            onChange={e => setActiveTab(e.target.value as any)}
+            onChange={e => setActiveTab(e.target.value as SetupSubTab)}
             className="flex-1 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-stone-800 dark:text-zinc-200 font-medium focus:outline-none focus:border-[#8C1B2E] shadow-2xs"
           >
             {navTabs.map(tab => (
@@ -385,17 +371,21 @@ export function AcademicSetupHubView() {
 
       {/* MASTER EXCEL SETUP HUB */}
       {activeTab === 'master_excel' && (
-        <MasterExcelHub onNavigateToTab={tab => setActiveTab(tab as any)} />
+        <MasterExcelHub canEdit={canEdit} onNavigateToTab={tab => setActiveTab(tab as SetupSubTab)} />
       )}
 
-      {/* TAB 1: OVERVIEW */}
+      {/* OVERVIEW */}
       {activeTab === 'overview' && (
         <div className="space-y-5">
           <AcademicSetupOverview
             academicYearLabel={academicYear.yearLabel}
             semesterType={academicYear.semesterType}
             workingDays={academicYear.workingDays}
-            periodsRange={`${academicYear.timeSlots[0]?.startTime || '08:00'} – ${academicYear.timeSlots[academicYear.timeSlots.length - 1]?.endTime || '17:30'}`}
+            periodsRange={
+              academicYear.timeSlots.length
+                ? `${academicYear.timeSlots[0].startTime} – ${academicYear.timeSlots[academicYear.timeSlots.length - 1].endTime}`
+                : 'Not configured'
+            }
             counts={{
               departments: departments.length,
               programs: programs.length,
@@ -417,79 +407,85 @@ export function AcademicSetupHubView() {
             </p>
 
             <div className="mt-4 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl divide-y divide-[#E5E2D9] dark:divide-zinc-800/80 text-xs overflow-hidden shadow-2xs">
-              <div onClick={() => setActiveTab('academic_year')} className="p-3.5 bg-white dark:bg-zinc-950/60 flex items-center justify-between hover:bg-stone-50 dark:hover:bg-zinc-800/50 cursor-pointer transition-colors">
+              <button type="button" onClick={() => setActiveTab('academic_year')} className="w-full text-left p-3.5 bg-white dark:bg-zinc-950/60 flex items-center justify-between hover:bg-stone-50 dark:hover:bg-zinc-800/50 cursor-pointer transition-colors">
                 <div>
                   <span className="font-semibold text-stone-900 dark:text-zinc-100">Academic year</span>
                   <span className="text-stone-500 dark:text-zinc-400 ml-2">{academicYear.yearLabel} · Semester {academicYear.semesterNumber}</span>
                 </div>
-                <span className="font-semibold text-emerald-700 dark:text-emerald-400">Complete</span>
-              </div>
+                <span className={`font-semibold ${academicYearComplete ? 'text-emerald-700 dark:text-emerald-400' : 'text-amber-700 dark:text-amber-400'}`}>
+                  {academicYearComplete ? 'Complete' : 'Incomplete'}
+                </span>
+              </button>
 
-              <div onClick={() => setActiveTab('departments')} className="p-3.5 bg-white dark:bg-zinc-950/60 flex items-center justify-between hover:bg-stone-50 dark:hover:bg-zinc-800/50 cursor-pointer transition-colors">
-                <span className="font-semibold text-stone-900 dark:text-zinc-100">Departments</span>
-                <span className="font-medium text-stone-700 dark:text-zinc-300">{departments.length} departments</span>
-              </div>
+              {checklist.map(item => (
+                <button key={item.tab} type="button" onClick={() => setActiveTab(item.tab)} className="w-full text-left p-3.5 bg-white dark:bg-zinc-950/60 flex items-center justify-between hover:bg-stone-50 dark:hover:bg-zinc-800/50 cursor-pointer transition-colors">
+                  <span className="font-semibold text-stone-900 dark:text-zinc-100">{item.label}</span>
+                  <span className="font-medium text-stone-700 dark:text-zinc-300">{item.detail}</span>
+                </button>
+              ))}
 
-              <div onClick={() => setActiveTab('programs')} className="p-3.5 bg-white dark:bg-zinc-950/60 flex items-center justify-between hover:bg-stone-50 dark:hover:bg-zinc-800/50 cursor-pointer transition-colors">
-                <span className="font-semibold text-stone-900 dark:text-zinc-100">Programs</span>
-                <span className="font-medium text-stone-700 dark:text-zinc-300">{programs.length} programs</span>
-              </div>
-
-              <div onClick={() => setActiveTab('courses')} className="p-3.5 bg-white dark:bg-zinc-950/60 flex items-center justify-between hover:bg-stone-50 dark:hover:bg-zinc-800/50 cursor-pointer transition-colors">
-                <span className="font-semibold text-stone-900 dark:text-zinc-100">Courses</span>
-                <span className="font-medium text-stone-700 dark:text-zinc-300">{activeCoursesCount} active courses</span>
-              </div>
-
-              <div onClick={() => setActiveTab('faculty')} className="p-3.5 bg-white dark:bg-zinc-950/60 flex items-center justify-between hover:bg-stone-50 dark:hover:bg-zinc-800/50 cursor-pointer transition-colors">
-                <span className="font-semibold text-stone-900 dark:text-zinc-100">Faculty</span>
-                <span className="font-medium text-stone-700 dark:text-zinc-300">{activeFacultyCount} active members</span>
-              </div>
-
-              <div onClick={() => setActiveTab('rooms')} className="p-3.5 bg-white dark:bg-zinc-950/60 flex items-center justify-between hover:bg-stone-50 dark:hover:bg-zinc-800/50 cursor-pointer transition-colors">
-                <span className="font-semibold text-stone-900 dark:text-zinc-100">Rooms & labs</span>
-                <span className="font-medium text-stone-700 dark:text-zinc-300">{activeRoomsCount} available rooms</span>
-              </div>
-
-              <div onClick={() => setActiveTab('sections')} className="p-3.5 bg-white dark:bg-zinc-950/60 flex items-center justify-between hover:bg-stone-50 dark:hover:bg-zinc-800/50 cursor-pointer transition-colors">
-                <span className="font-semibold text-stone-900 dark:text-zinc-100">Sections</span>
-                <span className="font-medium text-stone-700 dark:text-zinc-300">{activeSectionsCount} student sections</span>
-              </div>
-
-              <div onClick={() => setActiveTab('allocations')} className="p-3.5 bg-white dark:bg-zinc-950/60 flex items-center justify-between hover:bg-stone-50 dark:hover:bg-zinc-800/50 cursor-pointer transition-colors">
+              <button type="button" onClick={() => setActiveTab('allocations')} className="w-full text-left p-3.5 bg-white dark:bg-zinc-950/60 flex items-center justify-between hover:bg-stone-50 dark:hover:bg-zinc-800/50 cursor-pointer transition-colors">
                 <span className="font-semibold text-stone-900 dark:text-zinc-100">Course allocations</span>
                 <span className={`font-semibold ${totalCoursesAllocated >= activeCoursesCount ? 'text-emerald-700 dark:text-emerald-400' : 'text-amber-700 dark:text-amber-400'}`}>
                   {totalCoursesAllocated} / {activeCoursesCount} allocated
                 </span>
-              </div>
+              </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* TAB 2: ACADEMIC YEAR */}
+      {/* ACADEMIC YEAR */}
       {activeTab === 'academic_year' && (
         <div className="p-5 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl space-y-5 shadow-xs">
-          <div className="border-b border-[#E5E2D9] dark:border-zinc-800 pb-3">
-            <h3 className="text-base font-bold font-serif text-stone-900 dark:text-zinc-100">Academic Year & Semester Calendar</h3>
-            <p className="text-xs text-stone-500 dark:text-zinc-400 mt-1">Configure working schedule, teaching period duration, and protected lunch slots</p>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#E5E2D9] dark:border-zinc-800 pb-3">
+            <div>
+              <h3 className="text-base font-bold font-serif text-stone-900 dark:text-zinc-100">Academic Year & Semester Calendar</h3>
+              <p className="text-xs text-stone-500 dark:text-zinc-400 mt-1">Configure the semester and working days. Changes apply when you press Save.</p>
+            </div>
+            {canEdit && (
+              <div className="flex items-center gap-2 self-start sm:self-auto">
+                <button
+                  type="button"
+                  onClick={() => setYearDraft(yearFromServer())}
+                  disabled={!yearDirty || saving}
+                  className="px-3 py-1.5 text-xs text-stone-500 disabled:opacity-40"
+                >
+                  Discard
+                </button>
+                <button
+                  type="button"
+                  onClick={() => submit(() => updateAcademicYear({ ...yearDraft, yearLabel: yearDraft.yearLabel.trim() }))}
+                  disabled={!yearDirty || !yearValid || saving}
+                  className={SAVE_BTN}
+                >
+                  {saving ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="space-y-1">
-              <label className="text-xs text-stone-600 dark:text-zinc-400 font-medium">Academic Year Label</label>
+              <label htmlFor="ay-label" className="text-xs text-stone-600 dark:text-zinc-400 font-medium">Academic Year Label</label>
               <input
+                id="ay-label"
                 type="text"
-                value={academicYear.yearLabel}
-                onChange={e => updateAcademicYear({ yearLabel: e.target.value })}
+                value={yearDraft.yearLabel}
+                disabled={!canEdit}
+                maxLength={50}
+                onChange={e => setYearDraft(d => ({ ...d, yearLabel: e.target.value }))}
                 className="w-full bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2.5 text-xs text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
               />
             </div>
 
             <div className="space-y-1">
-              <label className="text-xs text-stone-600 dark:text-zinc-400 font-medium">Semester Type</label>
+              <label htmlFor="ay-semester-type" className="text-xs text-stone-600 dark:text-zinc-400 font-medium">Semester Type</label>
               <select
-                value={academicYear.semesterType}
-                onChange={e => updateAcademicYear({ semesterType: e.target.value as any })}
+                id="ay-semester-type"
+                value={yearDraft.semesterType}
+                disabled={!canEdit}
+                onChange={e => setYearDraft(d => ({ ...d, semesterType: e.target.value as YearDraft['semesterType'] }))}
                 className="w-full bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2.5 text-xs text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
               >
                 <option value="Odd (Autumn)">Odd (Autumn)</option>
@@ -499,30 +495,34 @@ export function AcademicSetupHubView() {
             </div>
 
             <div className="space-y-1">
-              <label className="text-xs text-stone-600 dark:text-zinc-400 font-medium">Semester Level</label>
+              <label htmlFor="ay-semester-number" className="text-xs text-stone-600 dark:text-zinc-400 font-medium">Semester Level</label>
               <input
+                id="ay-semester-number"
                 type="number"
-                value={academicYear.semesterNumber}
-                onChange={e => updateAcademicYear({ semesterNumber: Number(e.target.value) || 1 })}
+                min={1}
+                max={20}
+                value={yearDraft.semesterNumber}
+                disabled={!canEdit}
+                onChange={e => setYearDraft(d => ({ ...d, semesterNumber: Number(e.target.value) || 1 }))}
                 className="w-full bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2.5 text-xs text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
               />
             </div>
           </div>
 
           <div className="space-y-2 pt-2 border-t border-[#E5E2D9] dark:border-zinc-800">
-            <label className="text-xs font-semibold text-stone-800 dark:text-zinc-300">Active Working Days</label>
+            <span className="text-xs font-semibold text-stone-800 dark:text-zinc-300">Active Working Days</span>
             <div className="flex flex-wrap gap-2">
-              {(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'] as DayOfWeek[]).map(day => {
-                const isSelected = academicYear.workingDays.includes(day);
+              {ALL_DAYS.map(day => {
+                const isSelected = yearDraft.workingDays.includes(day);
                 return (
                   <button
                     key={day}
-                    onClick={() => {
-                      const next = isSelected
-                        ? academicYear.workingDays.filter(d => d !== day)
-                        : [...academicYear.workingDays, day];
-                      updateAcademicYear({ workingDays: next });
-                    }}
+                    type="button"
+                    aria-pressed={isSelected}
+                    disabled={!canEdit}
+                    onClick={() =>
+                      setYearDraft(d => ({ ...d, workingDays: ALL_DAYS.filter(x => (x === day ? !isSelected : d.workingDays.includes(x))) }))
+                    }
                     className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
                       isSelected
                         ? 'bg-[#8C1B2E] text-white font-semibold shadow-2xs'
@@ -534,19 +534,22 @@ export function AcademicSetupHubView() {
                 );
               })}
             </div>
+            {yearDraft.workingDays.length === 0 && (
+              <p className="text-[11px] text-[#8C1B2E] dark:text-red-400">Select at least one working day.</p>
+            )}
           </div>
 
           <div className="space-y-2 pt-2 border-t border-[#E5E2D9] dark:border-zinc-800">
-            <label className="text-xs font-semibold text-stone-800 dark:text-zinc-300">Daily Teaching Periods</label>
+            <span className="text-xs font-semibold text-stone-800 dark:text-zinc-300">Daily Teaching Periods</span>
             <div className="border border-[#E5E2D9] dark:border-zinc-800 rounded-xl overflow-hidden divide-y divide-[#E5E2D9] dark:divide-zinc-800 shadow-2xs">
               {academicYear.timeSlots.map(slot => (
                 <div key={slot.id} className="p-3 bg-white dark:bg-zinc-950/60 flex items-center justify-between text-xs">
                   <div className="flex items-center gap-3">
                     <span className="font-mono text-stone-500 dark:text-zinc-400 font-semibold w-16">Period {slot.periodNumber}</span>
                     <span className="font-medium text-stone-900 dark:text-zinc-200">{slot.label}</span>
-                    {slot.isLunch && (
+                    {isBreakSlot(slot) && (
                       <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-50 dark:bg-amber-500/10 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-500/20">
-                        Campus Lunch Break
+                        {slot.isBreak && !slot.isLunch ? 'Break' : 'Campus Lunch Break'}
                       </span>
                     )}
                   </div>
@@ -558,7 +561,7 @@ export function AcademicSetupHubView() {
         </div>
       )}
 
-      {/* TAB 3: DEPARTMENTS */}
+      {/* DEPARTMENTS */}
       {activeTab === 'departments' && (
         <div className="p-5 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl space-y-4 shadow-xs">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#E5E2D9] dark:border-zinc-800 pb-3">
@@ -566,16 +569,16 @@ export function AcademicSetupHubView() {
               <h3 className="text-base font-bold font-serif text-stone-900 dark:text-zinc-100">Academic Departments</h3>
               <p className="text-xs text-stone-500 dark:text-zinc-400 mt-1">Manage departmental leadership and faculty placement</p>
             </div>
-            <button
-              onClick={() => setShowAddDept(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-[#8C1B2E] hover:bg-[#721525] text-white rounded-lg text-xs font-semibold transition-all self-start sm:self-auto shadow-2xs"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              <span>Add Department</span>
-            </button>
+            {canEdit && (
+              <button onClick={() => setShowAddDept(true)} className={`${NEW_BTN} self-start sm:self-auto`}>
+                <Plus className="h-3.5 w-3.5" />
+                <span>Add Department</span>
+              </button>
+            )}
           </div>
 
           <div className="border border-[#E5E2D9] dark:border-zinc-800 rounded-xl overflow-hidden divide-y divide-[#E5E2D9] dark:divide-zinc-800 shadow-2xs">
+            {departments.length === 0 && <div className="p-6 text-center text-xs text-stone-400 italic">No departments yet.</div>}
             {departments.map(dept => (
               <div key={dept.id} className="p-3.5 bg-white dark:bg-zinc-950/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
                 <div className="space-y-0.5">
@@ -591,83 +594,56 @@ export function AcademicSetupHubView() {
                     </span>
                   </div>
                   <div className="text-[11px] text-stone-500 dark:text-zinc-400">
-                    HOD: <span className="text-stone-800 dark:text-zinc-200 font-medium">{dept.hodName}</span> · Contact: <span className="font-mono text-stone-600 dark:text-zinc-400">{dept.contactEmail}</span>
+                    HOD: <span className="text-stone-800 dark:text-zinc-200 font-medium">{dept.hodName || '—'}</span> · Contact: <span className="font-mono text-stone-600 dark:text-zinc-400">{dept.contactEmail || '—'}</span>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0">
-                  <button
-                    onClick={() => toggleDepartmentStatus(dept.id)}
-                    className="px-2.5 py-1 rounded bg-[#FAF9F5] dark:bg-zinc-900 hover:bg-stone-100 dark:hover:bg-zinc-850 text-stone-700 dark:text-zinc-300 border border-[#E5E2D9] dark:border-zinc-800 text-[11px] transition-colors"
-                  >
-                    {dept.status === 'Active' ? 'Deactivate' : 'Activate'}
-                  </button>
-                  <button
-                    onClick={() => deleteDepartment(dept.id)}
-                    className="p-1.5 text-stone-400 hover:text-[#8C1B2E] dark:hover:text-red-400 transition-colors"
-                    title="Delete"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
+                {canEdit && (
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      onClick={() => submit(() => toggleDepartmentStatus(dept.id))}
+                      disabled={saving}
+                      className="px-2.5 py-1 rounded bg-[#FAF9F5] dark:bg-zinc-900 hover:bg-stone-100 dark:hover:bg-zinc-850 text-stone-700 dark:text-zinc-300 border border-[#E5E2D9] dark:border-zinc-800 text-[11px] transition-colors disabled:opacity-50"
+                    >
+                      {dept.status === 'Active' ? 'Deactivate' : 'Activate'}
+                    </button>
+                    <button onClick={() => submit(() => deleteDepartment(dept.id))} disabled={saving} className={DELETE_BTN} aria-label={`Delete department ${dept.name}`} title="Delete">
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                )}
               </div>
             ))}
           </div>
 
-          {showAddDept && (
+          {showAddDept && canEdit && (
             <form
               onSubmit={e => {
                 e.preventDefault();
-                if (!deptForm.name || !deptForm.code) return;
-                addDepartment(deptForm);
-                setShowAddDept(false);
-                setDeptForm({ name: '', code: '', hodName: '', contactEmail: '', status: 'Active' });
+                submit(() => addDepartment(deptForm), () => {
+                  setShowAddDept(false);
+                  setDeptForm(EMPTY_DEPT);
+                });
               }}
               className="p-4 bg-white dark:bg-zinc-950 border border-[#8C1B2E]/40 rounded-xl space-y-3 shadow-2xs"
             >
               <div className="text-xs font-semibold text-stone-900 dark:text-zinc-200">New Department</div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <input
-                  type="text"
-                  placeholder="Department Name"
-                  value={deptForm.name}
-                  onChange={e => setDeptForm(d => ({ ...d, name: e.target.value }))}
-                  className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2 text-xs text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
-                  required
-                />
-                <input
-                  type="text"
-                  placeholder="Code (e.g. CSED)"
-                  value={deptForm.code}
-                  onChange={e => setDeptForm(d => ({ ...d, code: e.target.value }))}
-                  className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2 text-xs text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
-                  required
-                />
-                <input
-                  type="text"
-                  placeholder="HOD Name"
-                  value={deptForm.hodName}
-                  onChange={e => setDeptForm(d => ({ ...d, hodName: e.target.value }))}
-                  className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2 text-xs text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
-                />
-                <input
-                  type="email"
-                  placeholder="Email"
-                  value={deptForm.contactEmail}
-                  onChange={e => setDeptForm(d => ({ ...d, contactEmail: e.target.value }))}
-                  className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2 text-xs text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
-                />
+                <input type="text" placeholder="Department Name" aria-label="Department name" value={deptForm.name} onChange={e => setDeptForm(d => ({ ...d, name: e.target.value }))} className={INPUT} required />
+                <input type="text" placeholder="Code (e.g. CSED)" aria-label="Department code" value={deptForm.code} onChange={e => setDeptForm(d => ({ ...d, code: e.target.value }))} className={INPUT} required maxLength={30} />
+                <input type="text" placeholder="HOD Name" aria-label="HOD name" value={deptForm.hodName} onChange={e => setDeptForm(d => ({ ...d, hodName: e.target.value }))} className={INPUT} />
+                <input type="email" placeholder="Email" aria-label="Contact email" value={deptForm.contactEmail} onChange={e => setDeptForm(d => ({ ...d, contactEmail: e.target.value }))} className={INPUT} />
               </div>
               <div className="flex justify-end gap-2 pt-2">
                 <button type="button" onClick={() => setShowAddDept(false)} className="px-3 py-1 text-xs text-stone-500">Cancel</button>
-                <button type="submit" className="px-3.5 py-1.5 bg-[#8C1B2E] text-white rounded-lg text-xs font-semibold">Save Department</button>
+                <button type="submit" disabled={saving} className={SAVE_BTN}>{saving ? 'Saving…' : 'Save Department'}</button>
               </div>
             </form>
           )}
         </div>
       )}
 
-      {/* TAB 4: PROGRAMS */}
+      {/* PROGRAMS */}
       {activeTab === 'programs' && (
         <div className="p-5 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl space-y-4 shadow-xs">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#E5E2D9] dark:border-zinc-800 pb-3">
@@ -675,16 +651,16 @@ export function AcademicSetupHubView() {
               <h3 className="text-base font-bold font-serif text-stone-900 dark:text-zinc-100">Degree Programs</h3>
               <p className="text-xs text-stone-500 dark:text-zinc-400 mt-1">Programs offered across academic departments</p>
             </div>
-            <button
-              onClick={() => setShowAddProg(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-[#8C1B2E] hover:bg-[#721525] text-white rounded-lg text-xs font-semibold transition-all self-start sm:self-auto shadow-2xs"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              <span>Add Program</span>
-            </button>
+            {canEdit && (
+              <button onClick={() => setShowAddProg(true)} className={`${NEW_BTN} self-start sm:self-auto`}>
+                <Plus className="h-3.5 w-3.5" />
+                <span>Add Program</span>
+              </button>
+            )}
           </div>
 
           <div className="border border-[#E5E2D9] dark:border-zinc-800 rounded-xl overflow-hidden divide-y divide-[#E5E2D9] dark:divide-zinc-800 shadow-2xs">
+            {programs.length === 0 && <div className="p-6 text-center text-xs text-stone-400 italic">No programs yet.</div>}
             {programs.map(prog => {
               const dept = departments.find(d => d.id === prog.departmentId);
               return (
@@ -700,70 +676,53 @@ export function AcademicSetupHubView() {
                       Dept: <span className="text-stone-800 dark:text-zinc-200 font-medium">{dept?.name || prog.departmentId}</span> · Duration: {prog.durationYears} Years
                     </div>
                   </div>
-                  <button onClick={() => deleteProgram(prog.id)} className="p-1.5 text-stone-400 hover:text-[#8C1B2E] dark:hover:text-red-400 transition-colors">
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
+                  {canEdit && (
+                    <button onClick={() => submit(() => deleteProgram(prog.id))} disabled={saving} className={DELETE_BTN} aria-label={`Delete program ${prog.name}`} title="Delete">
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                 </div>
               );
             })}
           </div>
 
-          {showAddProg && (
+          {showAddProg && canEdit && (
             <form
               onSubmit={e => {
                 e.preventDefault();
-                if (!progForm.name || !progForm.code) return;
-                addProgram(progForm);
-                setShowAddProg(false);
-                setProgForm({ name: '', code: '', departmentId: departments[0]?.id || '', durationYears: 4, totalSemesters: 8, status: 'Active' });
+                submit(() => addProgram(progForm), () => {
+                  setShowAddProg(false);
+                  setProgForm(EMPTY_PROG);
+                });
               }}
               className="p-4 bg-white dark:bg-zinc-950 border border-[#8C1B2E]/40 rounded-xl space-y-3 shadow-2xs"
             >
               <div className="text-xs font-semibold text-stone-900 dark:text-zinc-200">New Degree Program</div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <input
-                  type="text"
-                  placeholder="Program Name"
-                  value={progForm.name}
-                  onChange={e => setProgForm(p => ({ ...p, name: e.target.value }))}
-                  className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2 text-xs text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
-                  required
-                />
-                <input
-                  type="text"
-                  placeholder="Code (e.g. BTECH-CSE)"
-                  value={progForm.code}
-                  onChange={e => setProgForm(p => ({ ...p, code: e.target.value }))}
-                  className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2 text-xs text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
-                  required
-                />
-                <select
-                  value={progForm.departmentId}
-                  onChange={e => setProgForm(p => ({ ...p, departmentId: e.target.value }))}
-                  className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2 text-xs text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
-                >
-                  {departments.map(d => (
-                    <option key={d.id} value={d.id}>{d.name}</option>
-                  ))}
-                </select>
+                <input type="text" placeholder="Program Name" aria-label="Program name" value={progForm.name} onChange={e => setProgForm(p => ({ ...p, name: e.target.value }))} className={INPUT} required />
+                <input type="text" placeholder="Code (e.g. BTECH-CSE)" aria-label="Program code" value={progForm.code} onChange={e => setProgForm(p => ({ ...p, code: e.target.value }))} className={INPUT} required maxLength={30} />
+                {departmentSelect(progForm.departmentId, id => setProgForm(p => ({ ...p, departmentId: id })))}
                 <input
                   type="number"
+                  min={1}
+                  max={10}
                   placeholder="Duration (Years)"
+                  aria-label="Duration in years"
                   value={progForm.durationYears}
                   onChange={e => setProgForm(p => ({ ...p, durationYears: Number(e.target.value) || 4 }))}
-                  className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2 text-xs text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
+                  className={INPUT}
                 />
               </div>
               <div className="flex justify-end gap-2 pt-2">
                 <button type="button" onClick={() => setShowAddProg(false)} className="px-3 py-1 text-xs text-stone-500">Cancel</button>
-                <button type="submit" className="px-3.5 py-1.5 bg-[#8C1B2E] text-white rounded-lg text-xs font-semibold">Save Program</button>
+                <button type="submit" disabled={saving} className={SAVE_BTN}>{saving ? 'Saving…' : 'Save Program'}</button>
               </div>
             </form>
           )}
         </div>
       )}
 
-      {/* TAB 5: COURSES */}
+      {/* COURSES */}
       {activeTab === 'courses' && (
         <div className="p-5 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl space-y-4 shadow-xs">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#E5E2D9] dark:border-zinc-800 pb-3">
@@ -777,22 +736,23 @@ export function AcademicSetupHubView() {
                 <input
                   type="text"
                   placeholder="Search code / title..."
+                  aria-label="Search courses"
                   value={courseSearch}
                   onChange={e => setCourseSearch(e.target.value)}
                   className="pl-8 pr-3 py-1.5 bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg text-xs text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E] w-44 sm:w-56"
                 />
               </div>
-              <button
-                onClick={() => setShowAddCourse(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-[#8C1B2E] hover:bg-[#721525] text-white rounded-lg text-xs font-semibold transition-all shadow-2xs"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                <span>Add Course</span>
-              </button>
+              {canEdit && (
+                <button onClick={() => setShowAddCourse(true)} className={NEW_BTN}>
+                  <Plus className="h-3.5 w-3.5" />
+                  <span>Add Course</span>
+                </button>
+              )}
             </div>
           </div>
 
           <div className="border border-[#E5E2D9] dark:border-zinc-800 rounded-xl overflow-hidden divide-y divide-[#E5E2D9] dark:divide-zinc-800 shadow-2xs">
+            {courses.length === 0 && <div className="p-6 text-center text-xs text-stone-400 italic">No courses yet.</div>}
             {courses
               .filter(c =>
                 c.code.toLowerCase().includes(courseSearch.toLowerCase()) ||
@@ -823,74 +783,47 @@ export function AcademicSetupHubView() {
                         </span>
                       </div>
                     </div>
-                    <button onClick={() => deleteCourse(course.id)} className="p-1.5 text-stone-400 hover:text-[#8C1B2E] dark:hover:text-red-400 transition-colors">
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    {canEdit && (
+                      <button onClick={() => submit(() => deleteCourse(course.id))} disabled={saving} className={DELETE_BTN} aria-label={`Delete course ${course.code}`} title="Delete">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                   </div>
                 );
               })}
           </div>
 
-          {showAddCourse && (
+          {showAddCourse && canEdit && (
             <form
               onSubmit={e => {
                 e.preventDefault();
-                if (!courseForm.code || !courseForm.name) return;
-                addCourse(courseForm);
-                setShowAddCourse(false);
+                submit(() => addCourse({ ...courseForm, requiresLab: courseForm.requiredLabsPerWeek > 0 }), () => {
+                  setShowAddCourse(false);
+                  setCourseForm(EMPTY_COURSE);
+                });
               }}
               className="p-4 bg-white dark:bg-zinc-950 border border-[#8C1B2E]/40 rounded-xl space-y-3 shadow-2xs"
             >
               <div className="text-xs font-semibold text-stone-900 dark:text-zinc-200">New Course Specification</div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <input
-                  type="text"
-                  placeholder="Code (e.g. CS504)"
-                  value={courseForm.code}
-                  onChange={e => setCourseForm(c => ({ ...c, code: e.target.value }))}
-                  className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2 text-xs text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
-                  required
-                />
-                <input
-                  type="text"
-                  placeholder="Title (e.g. Machine Learning)"
-                  value={courseForm.name}
-                  onChange={e => setCourseForm(c => ({ ...c, name: e.target.value }))}
-                  className="sm:col-span-2 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2 text-xs text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
-                  required
-                />
-                <input
-                  type="number"
-                  placeholder="Credits"
-                  value={courseForm.credits}
-                  onChange={e => setCourseForm(c => ({ ...c, credits: Number(e.target.value) || 4 }))}
-                  className="bg-zinc-900 border border-zinc-800 rounded-lg p-2 text-xs text-zinc-200 outline-none focus:border-red-600"
-                />
-                <input
-                  type="number"
-                  placeholder="Lec / wk"
-                  value={courseForm.requiredLecturesPerWeek}
-                  onChange={e => setCourseForm(c => ({ ...c, requiredLecturesPerWeek: Number(e.target.value) || 3 }))}
-                  className="bg-zinc-900 border border-zinc-800 rounded-lg p-2 text-xs text-zinc-200 outline-none focus:border-red-600"
-                />
-                <input
-                  type="number"
-                  placeholder="Lab / wk"
-                  value={courseForm.requiredLabsPerWeek}
-                  onChange={e => setCourseForm(c => ({ ...c, requiredLabsPerWeek: Number(e.target.value) || 0, requiresLab: Number(e.target.value) > 0 }))}
-                  className="bg-zinc-900 border border-zinc-800 rounded-lg p-2 text-xs text-zinc-200 outline-none focus:border-red-600"
-                />
+                <input type="text" placeholder="Code (e.g. CS504)" aria-label="Course code" value={courseForm.code} onChange={e => setCourseForm(c => ({ ...c, code: e.target.value }))} className={INPUT} required maxLength={30} />
+                <input type="text" placeholder="Title (e.g. Machine Learning)" aria-label="Course title" value={courseForm.name} onChange={e => setCourseForm(c => ({ ...c, name: e.target.value }))} className={`sm:col-span-2 ${INPUT}`} required />
+                {departmentSelect(courseForm.departmentId, id => setCourseForm(c => ({ ...c, departmentId: id })))}
+                <input type="number" min={0} max={40} placeholder="Credits" aria-label="Credits" value={courseForm.credits} onChange={e => setCourseForm(c => ({ ...c, credits: Math.max(0, Number(e.target.value) || 0) }))} className={INPUT} />
+                <input type="number" min={0} max={40} placeholder="Lec / wk" aria-label="Lectures per week" value={courseForm.requiredLecturesPerWeek} onChange={e => setCourseForm(c => ({ ...c, requiredLecturesPerWeek: Math.max(0, Number(e.target.value) || 0) }))} className={INPUT} />
+                <input type="number" min={0} max={40} placeholder="Tut / wk" aria-label="Tutorials per week" value={courseForm.requiredTutorialsPerWeek} onChange={e => setCourseForm(c => ({ ...c, requiredTutorialsPerWeek: Math.max(0, Number(e.target.value) || 0) }))} className={INPUT} />
+                <input type="number" min={0} max={40} placeholder="Lab / wk" aria-label="Lab hours per week" value={courseForm.requiredLabsPerWeek} onChange={e => setCourseForm(c => ({ ...c, requiredLabsPerWeek: Math.max(0, Number(e.target.value) || 0) }))} className={INPUT} />
               </div>
               <div className="flex justify-end gap-2 pt-2">
-                <button type="button" onClick={() => setShowAddCourse(false)} className="px-3 py-1 text-xs text-zinc-400">Cancel</button>
-                <button type="submit" className="px-3.5 py-1.5 bg-red-700 text-white rounded-lg text-xs font-semibold">Save Course</button>
+                <button type="button" onClick={() => setShowAddCourse(false)} className="px-3 py-1 text-xs text-stone-500">Cancel</button>
+                <button type="submit" disabled={saving} className={SAVE_BTN}>{saving ? 'Saving…' : 'Save Course'}</button>
               </div>
             </form>
           )}
         </div>
       )}
 
-      {/* TAB 6: FACULTY */}
+      {/* FACULTY */}
       {activeTab === 'faculty' && (
         <div className="p-5 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl space-y-4 shadow-xs">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#E5E2D9] dark:border-zinc-800 pb-3">
@@ -904,22 +837,23 @@ export function AcademicSetupHubView() {
                 <input
                   type="text"
                   placeholder="Search faculty..."
+                  aria-label="Search faculty"
                   value={facultySearch}
                   onChange={e => setFacultySearch(e.target.value)}
                   className="pl-8 pr-3 py-1.5 bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg text-xs text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E] w-44 shadow-2xs"
                 />
               </div>
-              <button
-                onClick={() => setShowAddFaculty(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-[#8C1B2E] hover:bg-[#721525] text-white rounded-lg text-xs font-semibold transition-all shadow-2xs"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                <span>Add Faculty</span>
-              </button>
+              {canEdit && (
+                <button onClick={() => setShowAddFaculty(true)} className={NEW_BTN}>
+                  <Plus className="h-3.5 w-3.5" />
+                  <span>Add Faculty</span>
+                </button>
+              )}
             </div>
           </div>
 
           <div className="border border-[#E5E2D9] dark:border-zinc-800 rounded-xl overflow-hidden divide-y divide-[#E5E2D9] dark:divide-zinc-800 shadow-2xs">
+            {facultyMembers.length === 0 && <div className="p-6 text-center text-xs text-stone-400 italic">No faculty yet.</div>}
             {facultyMembers
               .filter(f => f.name.toLowerCase().includes(facultySearch.toLowerCase()) || f.email.toLowerCase().includes(facultySearch.toLowerCase()))
               .map(fac => {
@@ -942,58 +876,56 @@ export function AcademicSetupHubView() {
                         }`}>
                           Load: {assignedHours}/{fac.maxDirectTeachingHours} hrs/wk
                         </span>
+                        {fac.status && fac.status !== 'Active' && (
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-stone-100 text-stone-600 dark:bg-zinc-800 dark:text-zinc-400">{fac.status}</span>
+                        )}
                       </div>
                       <div className="text-[11px] text-stone-500 dark:text-zinc-400 font-mono">{fac.email}</div>
                     </div>
 
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => toggleFacultyStatus(fac.id)}
-                        className="px-2.5 py-1 rounded bg-[#FAF9F5] dark:bg-zinc-900 hover:bg-stone-100 text-stone-700 dark:text-zinc-300 border border-[#E5E2D9] dark:border-zinc-800 text-[11px] transition-colors"
-                      >
-                        {fac.status === 'Active' ? 'On-Leave' : 'Active'}
-                      </button>
-                      <button onClick={() => deleteFaculty(fac.id)} className="p-1.5 text-stone-400 hover:text-[#8C1B2E] dark:hover:text-red-400 transition-colors">
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
+                    {canEdit && (
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => submit(() => toggleFacultyStatus(fac.id))}
+                          disabled={saving}
+                          className="px-2.5 py-1 rounded bg-[#FAF9F5] dark:bg-zinc-900 hover:bg-stone-100 text-stone-700 dark:text-zinc-300 border border-[#E5E2D9] dark:border-zinc-800 text-[11px] transition-colors disabled:opacity-50"
+                        >
+                          {fac.status === 'Inactive' ? 'Activate' : 'Deactivate'}
+                        </button>
+                        <button onClick={() => submit(() => deleteFaculty(fac.id))} disabled={saving} className={DELETE_BTN} aria-label={`Delete faculty ${fac.name}`} title="Delete">
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    )}
                   </div>
                 );
               })}
           </div>
 
-          {showAddFaculty && (
+          {showAddFaculty && canEdit && (
             <form
               onSubmit={e => {
                 e.preventDefault();
-                if (!facultyForm.name || !facultyForm.email) return;
-                addFaculty(facultyForm);
-                setShowAddFaculty(false);
+                submit(() => addFaculty(facultyForm), () => {
+                  setShowAddFaculty(false);
+                  setFacultyForm(EMPTY_FACULTY);
+                });
               }}
               className="p-4 bg-white dark:bg-zinc-950 border border-[#8C1B2E]/40 rounded-xl space-y-3 shadow-2xs"
             >
               <div className="text-xs font-semibold text-stone-900 dark:text-zinc-200">New Faculty Member</div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <input
-                  type="text"
-                  placeholder="Full Name"
-                  value={facultyForm.name}
-                  onChange={e => setFacultyForm(f => ({ ...f, name: e.target.value }))}
-                  className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2 text-xs text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
-                  required
-                />
-                <input
-                  type="email"
-                  placeholder="Email"
-                  value={facultyForm.email}
-                  onChange={e => setFacultyForm(f => ({ ...f, email: e.target.value }))}
-                  className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2 text-xs text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
-                  required
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <input type="text" placeholder="Full Name" aria-label="Full name" value={facultyForm.name} onChange={e => setFacultyForm(f => ({ ...f, name: e.target.value }))} className={INPUT} required />
+                <input type="email" placeholder="Email" aria-label="Email" value={facultyForm.email} onChange={e => setFacultyForm(f => ({ ...f, email: e.target.value }))} className={INPUT} required />
+                {departmentSelect(facultyForm.departmentId, id => setFacultyForm(f => ({ ...f, departmentId: id })))}
                 <select
                   value={facultyForm.designation}
-                  onChange={e => setFacultyForm(f => ({ ...f, designation: e.target.value as any }))}
-                  className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2 text-xs text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
+                  aria-label="Designation"
+                  onChange={e => {
+                    const designation = e.target.value as Faculty['designation'];
+                    setFacultyForm(f => ({ ...f, designation, maxDirectTeachingHours: designation === 'Assistant Professor' ? 16 : 14 }));
+                  }}
+                  className={INPUT}
                 >
                   <option value="Professor">Professor (14h cap)</option>
                   <option value="Associate Professor">Associate Professor (14h cap)</option>
@@ -1002,14 +934,14 @@ export function AcademicSetupHubView() {
               </div>
               <div className="flex justify-end gap-2 pt-2">
                 <button type="button" onClick={() => setShowAddFaculty(false)} className="px-3 py-1 text-xs text-stone-500">Cancel</button>
-                <button type="submit" className="px-3.5 py-1.5 bg-[#8C1B2E] text-white rounded-lg text-xs font-semibold">Save Faculty</button>
+                <button type="submit" disabled={saving} className={SAVE_BTN}>{saving ? 'Saving…' : 'Save Faculty'}</button>
               </div>
             </form>
           )}
         </div>
       )}
 
-      {/* TAB 7: ROOMS */}
+      {/* ROOMS */}
       {activeTab === 'rooms' && (
         <div className="p-5 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl space-y-4 shadow-xs">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#E5E2D9] dark:border-zinc-800 pb-3">
@@ -1017,15 +949,15 @@ export function AcademicSetupHubView() {
               <h3 className="text-base font-bold font-serif text-stone-900 dark:text-zinc-100">Physical Rooms & Labs</h3>
               <p className="text-xs text-stone-500 dark:text-zinc-400 mt-1">Manage lecture halls, computer labs, and capacities</p>
             </div>
-            <button
-              onClick={() => setShowAddRoom(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-[#8C1B2E] hover:bg-[#721525] text-white rounded-lg text-xs font-semibold transition-all self-start sm:self-auto shadow-2xs"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              <span>Add Facility</span>
-            </button>
+            {canEdit && (
+              <button onClick={() => setShowAddRoom(true)} className={`${NEW_BTN} self-start sm:self-auto`}>
+                <Plus className="h-3.5 w-3.5" />
+                <span>Add Facility</span>
+              </button>
+            )}
           </div>
 
+          {rooms.length === 0 && <div className="p-6 text-center text-xs text-stone-400 italic">No rooms yet.</div>}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {rooms.map(room => (
               <div key={room.id} className="p-3.5 bg-white dark:bg-zinc-950/70 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl space-y-2 shadow-2xs">
@@ -1034,14 +966,23 @@ export function AcademicSetupHubView() {
                     <div className="font-bold text-stone-900 dark:text-zinc-100 text-xs sm:text-sm">{room.name}</div>
                     <div className="text-[11px] text-stone-500 dark:text-zinc-400">{room.building}</div>
                   </div>
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[#FAF9F5] dark:bg-zinc-900 text-[#8C1B2E] dark:text-red-400 border border-[#E5E2D9] dark:border-zinc-800 font-semibold">
-                    {room.type}
-                  </span>
+                  <div className="flex items-center gap-1">
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[#FAF9F5] dark:bg-zinc-900 text-[#8C1B2E] dark:text-red-400 border border-[#E5E2D9] dark:border-zinc-800 font-semibold">
+                      {room.type}
+                    </span>
+                    {canEdit && (
+                      <button onClick={() => submit(() => deleteRoom(room.id))} disabled={saving} className={DELETE_BTN} aria-label={`Delete room ${room.name}`} title="Delete">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div className="flex items-center justify-between text-xs pt-1 border-t border-[#E5E2D9] dark:border-zinc-800/80">
                   <span className="text-stone-500 dark:text-zinc-400">Capacity: <strong className="font-mono text-stone-800 dark:text-zinc-200">{room.capacity}</strong></span>
                   <button
-                    onClick={() => toggleRoomAvailability(room.id)}
+                    onClick={() => submit(() => toggleRoomAvailability(room.id))}
+                    disabled={!canEdit || saving}
+                    title={canEdit ? 'Toggle availability' : undefined}
                     className={`text-[10px] font-mono px-2 py-0.5 rounded border ${
                       room.isAvailable ? 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20' : 'bg-rose-50 text-rose-800 border-rose-200 dark:bg-red-500/10 dark:text-red-400 dark:border-red-500/20'
                     }`}
@@ -1053,109 +994,99 @@ export function AcademicSetupHubView() {
             ))}
           </div>
 
-          {showAddRoom && (
+          {showAddRoom && canEdit && (
             <form
               onSubmit={e => {
                 e.preventDefault();
-                if (!roomForm.name) return;
-                addRoom(roomForm);
-                setShowAddRoom(false);
+                submit(() => addRoom(roomForm), () => {
+                  setShowAddRoom(false);
+                  setRoomForm(EMPTY_ROOM);
+                });
               }}
-              className="p-4 bg-zinc-950 border border-red-800/40 rounded-xl space-y-3"
+              className="p-4 bg-white dark:bg-zinc-950 border border-[#8C1B2E]/40 rounded-xl space-y-3 shadow-2xs"
             >
-              <div className="text-xs font-semibold text-zinc-200">New Physical Facility</div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <input
-                  type="text"
-                  placeholder="Facility Name (e.g. Lab 304)"
-                  value={roomForm.name}
-                  onChange={e => setRoomForm(r => ({ ...r, name: e.target.value }))}
-                  className="bg-zinc-900 border border-zinc-800 rounded-lg p-2 text-xs text-zinc-200 outline-none focus:border-red-600"
-                  required
-                />
-                <select
-                  value={roomForm.type}
-                  onChange={e => setRoomForm(r => ({ ...r, type: e.target.value as any }))}
-                  className="bg-zinc-900 border border-zinc-800 rounded-lg p-2 text-xs text-zinc-200 outline-none focus:border-red-600"
-                >
+              <div className="text-xs font-semibold text-stone-900 dark:text-zinc-200">New Physical Facility</div>
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                <input type="text" placeholder="Facility Name (e.g. Lab 304)" aria-label="Facility name" value={roomForm.name} onChange={e => setRoomForm(r => ({ ...r, name: e.target.value }))} className={INPUT} required maxLength={100} />
+                <input type="text" placeholder="Building" aria-label="Building" value={roomForm.building} onChange={e => setRoomForm(r => ({ ...r, building: e.target.value }))} className={INPUT} />
+                <select value={roomForm.type} aria-label="Facility type" onChange={e => setRoomForm(r => ({ ...r, type: e.target.value as Room['type'] }))} className={INPUT}>
                   <option value="LectureHall">Lecture Hall</option>
                   <option value="ComputerLab">Computer Lab</option>
                   <option value="HardwareLab">Hardware Lab</option>
+                  <option value="SeminarRoom">Seminar Room</option>
                   <option value="TutorialRoom">Tutorial Room</option>
                 </select>
-                <input
-                  type="number"
-                  placeholder="Capacity"
-                  value={roomForm.capacity}
-                  onChange={e => setRoomForm(r => ({ ...r, capacity: Number(e.target.value) || 60 }))}
-                  className="bg-zinc-900 border border-zinc-800 rounded-lg p-2 text-xs text-zinc-200 outline-none focus:border-red-600"
-                />
+                <input type="number" min={1} max={5000} placeholder="Capacity" aria-label="Capacity" value={roomForm.capacity} onChange={e => setRoomForm(r => ({ ...r, capacity: Number(e.target.value) || 1 }))} className={INPUT} required />
               </div>
               <div className="flex justify-end gap-2 pt-2">
-                <button type="button" onClick={() => setShowAddRoom(false)} className="px-3 py-1 text-xs text-zinc-400">Cancel</button>
-                <button type="submit" className="px-3.5 py-1.5 bg-red-700 text-white rounded-lg text-xs font-semibold">Save Facility</button>
+                <button type="button" onClick={() => setShowAddRoom(false)} className="px-3 py-1 text-xs text-stone-500">Cancel</button>
+                <button type="submit" disabled={saving} className={SAVE_BTN}>{saving ? 'Saving…' : 'Save Facility'}</button>
               </div>
             </form>
           )}
         </div>
       )}
 
-      {/* TAB 8: SECTIONS (GROUPS & SUBGROUPS) */}
-      {activeTab === 'sections' && <GroupsAndSubgroupsTab />}
+      {/* SECTIONS (GROUPS & SUBGROUPS) */}
+      {activeTab === 'sections' && <GroupsAndSubgroupsTab canEdit={canEdit} />}
 
-      {/* TAB 8B: STUDENTS ROSTER */}
+      {/* STUDENTS ROSTER */}
       {activeTab === 'students' && <StudentsTab />}
 
-      {/* TAB 9: ALLOCATIONS */}
-      {activeTab === 'allocations' && <CourseAllocationsTab />}
+      {/* ALLOCATIONS */}
+      {activeTab === 'allocations' && <CourseAllocationsTab canEdit={canEdit} />}
 
-      {/* TAB 10: CONSTRAINTS */}
+      {/* CONSTRAINTS */}
       {activeTab === 'constraints' && (
         <div className="p-5 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl space-y-4 shadow-xs">
           <div className="border-b border-[#E5E2D9] dark:border-zinc-800 pb-3">
             <h3 className="font-serif text-base font-semibold text-stone-900 dark:text-zinc-100">Timetabling Constraints</h3>
-            <p className="text-xs text-stone-500 dark:text-zinc-400 mt-0.5">Active constraint rules enforced by the scheduling solver</p>
+            <p className="text-xs text-stone-500 dark:text-zinc-400 mt-0.5">
+              Hard constraints are always enforced by the scheduler and cannot be switched off. Soft constraints can be enabled or disabled.
+            </p>
           </div>
 
           <div className="border border-[#E5E2D9] dark:border-zinc-800 rounded-lg overflow-hidden divide-y divide-[#E5E2D9] dark:divide-zinc-800">
-            {constraints.map(item => (
-              <div key={item.id} className="p-3.5 bg-white dark:bg-zinc-950/60 flex items-start justify-between gap-3 text-xs">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-stone-900 dark:text-zinc-100">{item.name}</span>
-                    <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
-                      item.type === 'Hard' ? 'bg-red-50 text-[#8C1B2E] dark:bg-red-500/10 dark:text-red-300 border border-red-200 dark:border-red-500/20 font-bold' : 'bg-stone-100 text-stone-600 dark:bg-zinc-900 dark:text-zinc-400 border border-[#E5E2D9] dark:border-zinc-800'
-                    }`}>
-                      {item.type}
-                    </span>
+            {constraints.length === 0 && <div className="p-6 text-center text-xs text-stone-400 italic">No constraints configured.</div>}
+            {constraints.map(item => {
+              const isHard = item.type === 'Hard';
+              return (
+                <div key={item.id} className="p-3.5 bg-white dark:bg-zinc-950/60 flex items-start justify-between gap-3 text-xs">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-stone-900 dark:text-zinc-100">{item.name}</span>
+                      <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
+                        isHard ? 'bg-red-50 text-[#8C1B2E] dark:bg-red-500/10 dark:text-red-300 border border-red-200 dark:border-red-500/20 font-bold' : 'bg-stone-100 text-stone-600 dark:bg-zinc-900 dark:text-zinc-400 border border-[#E5E2D9] dark:border-zinc-800'
+                      }`}>
+                        {item.type}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-stone-500 dark:text-zinc-400 mt-0.5">{item.description}</p>
                   </div>
-                  <p className="text-[11px] text-stone-500 dark:text-zinc-400 mt-0.5">{item.description}</p>
+                  <button
+                    onClick={() => submit(() => toggleConstraint(item.id))}
+                    disabled={isHard || !canEdit || saving}
+                    aria-pressed={isHard ? undefined : item.isActive}
+                    title={isHard ? 'Hard constraints are always enforced by the scheduler and cannot be switched off.' : undefined}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-medium shrink-0 transition-colors ${
+                      isHard || item.isActive ? 'bg-emerald-50 text-emerald-800 border border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20' : 'bg-stone-100 text-stone-500 dark:bg-zinc-900 dark:text-zinc-500 border border-[#E5E2D9] dark:border-zinc-800'
+                    } ${isHard ? 'cursor-not-allowed' : ''}`}
+                  >
+                    {isHard ? 'Always enforced' : item.isActive ? 'Active' : 'Disabled'}
+                  </button>
                 </div>
-                <button
-                  onClick={() => toggleConstraint(item.id)}
-                  className={`px-2.5 py-1 rounded-md text-[11px] font-medium shrink-0 transition-colors ${
-                    item.isActive ? 'bg-emerald-50 text-emerald-800 border border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20' : 'bg-stone-100 text-stone-500 dark:bg-zinc-900 dark:text-zinc-500 border border-[#E5E2D9] dark:border-zinc-800'
-                  }`}
-                >
-                  {item.isActive ? 'Active' : 'Disabled'}
-                </button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
 
-      {/* TAB 11: VALIDATION */}
-      {activeTab === 'validation' && (
-        <div className="p-5 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl space-y-4 shadow-xs">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#E5E2D9] dark:border-zinc-800 pb-3">
-            <div>
-              <h3 className="font-serif text-base font-semibold text-stone-900 dark:text-zinc-100">Pre-Generation Validation Report</h3>
-              <p className="text-xs text-stone-500 dark:text-zinc-400 mt-0.5">Automated readiness checks across all entities and constraint rules</p>
-            </div>
-            <button onClick={() => runValidation()} className="px-3 py-1.5 bg-stone-100 hover:bg-stone-200 dark:bg-zinc-800 dark:hover:bg-zinc-750 text-stone-800 dark:text-zinc-200 text-xs font-medium rounded-lg border border-[#E5E2D9] dark:border-zinc-700 transition-colors">
-              Re-Verify
-            </button>
+      {/* VALIDATE & GENERATE */}
+      {activeTab === 'generator' && (
+        <div className="p-5 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl space-y-5 shadow-xs">
+          <div className="border-b border-[#E5E2D9] dark:border-zinc-800 pb-3">
+            <h3 className="font-serif text-base font-semibold text-stone-900 dark:text-zinc-100">Validate & Generate</h3>
+            <p className="text-xs text-stone-500 dark:text-zinc-400 mt-0.5">Readiness checks on your configured data, then a solver run on the server. The first routine becomes the working draft.</p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -1190,23 +1121,13 @@ export function AcademicSetupHubView() {
                 {item.fixTab && item.status !== 'Passed' && (
                   <button
                     onClick={() => setActiveTab(item.fixTab as SetupSubTab)}
-                    className="px-2.5 py-1 rounded bg-[#FAF9F5] dark:bg-zinc-900 text-[#8C1B2E] dark:text-red-400 border border-[#E5E2D9] dark:border-zinc-800 text-[11px] font-medium hover:bg-stone-100 transition-colors"
+                    className="px-2.5 py-1 rounded bg-[#FAF9F5] dark:bg-zinc-900 text-[#8C1B2E] dark:text-red-400 border border-[#E5E2D9] dark:border-zinc-800 text-[11px] font-medium hover:bg-stone-100 transition-colors shrink-0"
                   >
                     Fix Issue →
                   </button>
                 )}
               </div>
             ))}
-          </div>
-        </div>
-      )}
-
-      {/* TAB 12: GENERATOR */}
-      {activeTab === 'generator' && (
-        <div className="p-5 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl space-y-5 shadow-xs">
-          <div className="border-b border-[#E5E2D9] dark:border-zinc-800 pb-3">
-            <h3 className="font-serif text-base font-semibold text-stone-900 dark:text-zinc-100">Schedule Solver & Generation Pipeline</h3>
-            <p className="text-xs text-stone-500 dark:text-zinc-400 mt-0.5">Executes constraint-satisfaction mapping on your real configured academic entities</p>
           </div>
 
           <div className="p-4 bg-white dark:bg-zinc-950/80 rounded-xl border border-[#E5E2D9] dark:border-zinc-800 space-y-3 shadow-xs">
@@ -1225,27 +1146,31 @@ export function AcademicSetupHubView() {
               Processing <strong className="text-stone-900 dark:text-zinc-200">{allocations.length} allocations</strong> across <strong className="text-stone-900 dark:text-zinc-200">{sections.length} sections</strong> and <strong className="text-stone-900 dark:text-zinc-200">{rooms.length} facilities</strong> over <strong className="text-stone-900 dark:text-zinc-200">{academicYear.workingDays.length} working days</strong>.
             </p>
 
-            <button
-              onClick={handleRunGeneration}
-              disabled={isGenerating || !validationReport.isReadyForGeneration}
-              className={`w-full py-3 rounded-lg font-bold text-xs flex items-center justify-center gap-2 shadow-xs transition-all ${
-                validationReport.isReadyForGeneration
-                  ? 'bg-[#8C1B2E] hover:bg-[#731625] text-white cursor-pointer active:scale-[0.99]'
-                  : 'bg-stone-200 text-stone-400 dark:bg-zinc-800 dark:text-zinc-500 cursor-not-allowed'
-              }`}
-            >
-              {isGenerating ? (
-                <>
-                  <Sparkles className="h-4 w-4 animate-spin" />
-                  <span>Computing Optimal Schedule Assignments...</span>
-                </>
-              ) : (
-                <>
-                  <Play className="h-4 w-4" />
-                  <span>Generate Draft Master Timetable</span>
-                </>
-              )}
-            </button>
+            {canEdit ? (
+              <button
+                onClick={handleRunGeneration}
+                disabled={isGenerating || !validationReport.isReadyForGeneration}
+                className={`w-full py-3 rounded-lg font-bold text-xs flex items-center justify-center gap-2 shadow-xs transition-all ${
+                  validationReport.isReadyForGeneration && !isGenerating
+                    ? 'bg-[#8C1B2E] hover:bg-[#731625] text-white cursor-pointer active:scale-[0.99]'
+                    : 'bg-stone-200 text-stone-400 dark:bg-zinc-800 dark:text-zinc-500 cursor-not-allowed'
+                }`}
+              >
+                {isGenerating ? (
+                  <>
+                    <Sparkles className="h-4 w-4 animate-spin" />
+                    <span>Generating timetable on the server...</span>
+                  </>
+                ) : (
+                  <>
+                    <Play className="h-4 w-4" />
+                    <span>Generate Draft Master Timetable</span>
+                  </>
+                )}
+              </button>
+            ) : (
+              <p className="text-[11px] text-stone-500 dark:text-zinc-400">Only coordinators and admins can run the generator.</p>
+            )}
           </div>
 
           {generationResult && (
@@ -1256,51 +1181,73 @@ export function AcademicSetupHubView() {
                 {generationResult.isSuccess ? <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" /> : <AlertCircle className="h-4 w-4 text-[#8C1B2E] dark:text-red-400" />}
                 <span>
                   {generationResult.isSuccess
-                    ? `Generated ${generationResult.sessionsGenerated} class sessions (${generationResult.scheduledHours} weekly hours) successfully!`
-                    : 'Generation encountered blocking constraint violations.'}
+                    ? `Generated ${generationResult.sessionsGenerated} class sessions (${generationResult.scheduledHours} of ${generationResult.totalHours} weekly hours scheduled). This is now the working draft.`
+                    : 'No timetable could be generated.'}
                 </span>
               </div>
+              {generationResult.conflicts.length > 0 && (
+                <ul className="list-disc pl-6 text-[11px] space-y-0.5">
+                  {generationResult.conflicts.slice(0, 10).map((c, i) => (
+                    <li key={i}>{c}</li>
+                  ))}
+                  {generationResult.conflicts.length > 10 && <li>…and {generationResult.conflicts.length - 10} more.</li>}
+                </ul>
+              )}
+              {generationResult.isSuccess && (
+                <button onClick={() => setActiveTab('review')} className="text-[11px] font-semibold underline">
+                  Review the draft →
+                </button>
+              )}
             </div>
           )}
         </div>
       )}
 
-      {/* TAB 13: REVIEW & PUBLISH */}
+      {/* REVIEW & PUBLISH */}
       {activeTab === 'review' && (
         <div className="p-5 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl space-y-5 shadow-xs">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#E5E2D9] dark:border-zinc-800 pb-3">
             <div>
               <h3 className="font-serif text-base font-semibold text-stone-900 dark:text-zinc-100">Timetable Review & Publish</h3>
-              <p className="text-xs text-stone-500 dark:text-zinc-400 mt-0.5">Inspect schedule matrices across Sections, Faculty, and Facilities</p>
+              <p className="text-xs text-stone-500 dark:text-zinc-400 mt-0.5">Inspect the working draft across Sections, Faculty, and Facilities</p>
             </div>
 
             <div className="flex items-center gap-2">
-              {publishStatus === 'Draft' && (
+              {publishStatus === 'Draft' && canEdit && (
                 <button
-                  onClick={() => updatePublishStatus('Review', 'Coordinator Submission')}
-                  className="px-3 py-1.5 bg-stone-100 hover:bg-stone-200 dark:bg-zinc-800 text-stone-800 dark:text-zinc-200 rounded-lg text-xs font-medium border border-[#E5E2D9] dark:border-zinc-700 transition-colors"
+                  onClick={() => submit(() => updatePublishStatus('Review'))}
+                  disabled={saving || sessions.length === 0}
+                  className="px-3 py-1.5 bg-stone-100 hover:bg-stone-200 dark:bg-zinc-800 text-stone-800 dark:text-zinc-200 rounded-lg text-xs font-medium border border-[#E5E2D9] dark:border-zinc-700 transition-colors disabled:opacity-50"
                 >
                   Submit for Approval
                 </button>
               )}
 
-              {publishStatus === 'Review' && (
-                <button
-                  onClick={() => updatePublishStatus('Approved', 'Dean Academic Affairs')}
-                  className="px-3 py-1.5 bg-sky-700 hover:bg-sky-800 text-white rounded-lg text-xs font-semibold shadow-xs"
-                >
-                  Approve Schedule
-                </button>
-              )}
+              {publishStatus === 'Review' &&
+                (isAdmin ? (
+                  <button
+                    onClick={() => submit(() => updatePublishStatus('Approved'))}
+                    disabled={saving}
+                    className="px-3 py-1.5 bg-sky-700 hover:bg-sky-800 text-white rounded-lg text-xs font-semibold shadow-xs disabled:opacity-50"
+                  >
+                    Approve Schedule
+                  </button>
+                ) : (
+                  <span className="text-[11px] text-stone-500 dark:text-zinc-400">Awaiting admin approval</span>
+                ))}
 
-              {publishStatus === 'Approved' && (
-                <button
-                  onClick={() => updatePublishStatus('Published', 'Institutional Release')}
-                  className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-semibold shadow-xs"
-                >
-                  Publish to Campus
-                </button>
-              )}
+              {publishStatus === 'Approved' &&
+                (isAdmin ? (
+                  <button
+                    onClick={() => submit(publishMasterTimetable)}
+                    disabled={saving}
+                    className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-semibold shadow-xs disabled:opacity-50"
+                  >
+                    Publish to Campus
+                  </button>
+                ) : (
+                  <span className="text-[11px] text-stone-500 dark:text-zinc-400">Approved · awaiting publication by an admin</span>
+                ))}
 
               {publishStatus === 'Published' && (
                 <span className="text-[11px] font-mono px-2.5 py-1 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20 font-bold flex items-center gap-1">
@@ -1310,195 +1257,144 @@ export function AcademicSetupHubView() {
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex bg-[#F7F6F2] dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 p-0.5 rounded-lg text-xs">
-              <button
-                onClick={() => setReviewAngle('section')}
-                className={`px-3 py-1 rounded-md transition-colors ${
-                  reviewAngle === 'section' ? 'bg-[#8C1B2E] text-white font-semibold shadow-xs' : 'text-stone-600 dark:text-zinc-400 hover:text-stone-900 dark:hover:text-zinc-200'
-                }`}
-              >
-                By Section
-              </button>
-              <button
-                onClick={() => setReviewAngle('faculty')}
-                className={`px-3 py-1 rounded-md transition-colors ${
-                  reviewAngle === 'faculty' ? 'bg-[#8C1B2E] text-white font-semibold shadow-xs' : 'text-stone-600 dark:text-zinc-400 hover:text-stone-900 dark:hover:text-zinc-200'
-                }`}
-              >
-                By Faculty
-              </button>
-              <button
-                onClick={() => setReviewAngle('room')}
-                className={`px-3 py-1 rounded-md transition-colors ${
-                  reviewAngle === 'room' ? 'bg-[#8C1B2E] text-white font-semibold shadow-xs' : 'text-stone-600 dark:text-zinc-400 hover:text-stone-900 dark:hover:text-zinc-200'
-                }`}
-              >
-                By Room/Lab
-              </button>
+          {sessions.length === 0 ? (
+            <div className="p-8 text-center text-xs text-stone-400 italic border border-dashed border-[#E5E2D9] dark:border-zinc-800 rounded-lg">
+              No draft timetable yet. Generate one in Validate & Generate.
             </div>
-
-            {reviewAngle === 'section' && (
-              <select
-                value={selectedSectionId}
-                onChange={e => setSelectedSectionId(e.target.value)}
-                className="bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 text-xs rounded-lg px-3 py-1.5 text-stone-800 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
-              >
-                {sections.map(s => (
-                  <option key={s.id} value={s.id}>Section: {s.name} ({s.studentCount} Students)</option>
-                ))}
-              </select>
-            )}
-
-            {reviewAngle === 'faculty' && (
-              <select
-                value={selectedFacultyId}
-                onChange={e => setSelectedFacultyId(e.target.value)}
-                className="bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 text-xs rounded-lg px-3 py-1.5 text-stone-800 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
-              >
-                {facultyMembers.map(f => (
-                  <option key={f.id} value={f.id}>{f.name}</option>
-                ))}
-              </select>
-            )}
-
-            {reviewAngle === 'room' && (
-              <select
-                value={selectedRoomId}
-                onChange={e => setSelectedRoomId(e.target.value)}
-                className="bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 text-xs rounded-lg px-3 py-1.5 text-stone-800 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
-              >
-                {rooms.map(r => (
-                  <option key={r.id} value={r.id}>{r.name} ({r.type})</option>
-                ))}
-              </select>
-            )}
-          </div>
-
-          <div className="flex bg-[#F7F6F2] dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 p-1 rounded-lg text-xs gap-1">
-            {daysList.map(d => (
-              <button
-                key={d}
-                onClick={() => setReviewDay(d)}
-                className={`flex-1 py-1.5 rounded-md text-center font-medium transition-colors ${
-                  reviewDay === d ? 'bg-[#8C1B2E] text-white font-semibold shadow-xs' : 'text-stone-600 dark:text-zinc-400 hover:text-stone-900 dark:hover:text-zinc-200'
-                }`}
-              >
-                {d}
-              </button>
-            ))}
-          </div>
-
-          <div className="border border-[#E5E2D9] dark:border-zinc-800 rounded-lg overflow-hidden divide-y divide-[#E5E2D9] dark:divide-zinc-800">
-            {academicYear.timeSlots.map(slot => {
-              if (slot.isLunch) {
-                return (
-                  <div key={slot.id} className="p-3 bg-stone-100/70 dark:bg-zinc-950/40 flex items-center justify-between text-xs text-stone-500 dark:text-zinc-500 font-mono">
-                    <span>{slot.label}</span>
-                    <span>Campus Lunch Break</span>
-                    <span>Protected</span>
-                  </div>
-                );
-              }
-
-              let matchingSession = sessions.find(s => {
-                if (s.day !== reviewDay || s.timeSlotId !== slot.id) return false;
-                if (reviewAngle === 'section') return s.sectionId === selectedSectionId;
-                if (reviewAngle === 'faculty') return s.facultyId === selectedFacultyId;
-                if (reviewAngle === 'room') return s.roomId === selectedRoomId;
-                return false;
-              });
-
-              const course = matchingSession ? courses.find(c => c.id === matchingSession?.courseId) : null;
-              const faculty = matchingSession ? facultyMembers.find(f => f.id === matchingSession?.facultyId) : null;
-              const room = matchingSession ? rooms.find(r => r.id === matchingSession?.roomId) : null;
-
-              return (
-                <div key={slot.id} className="p-3 bg-white dark:bg-zinc-950/60 flex items-center justify-between text-xs">
-                  <span className="font-mono text-stone-500 dark:text-zinc-400 w-28 shrink-0">{slot.label}</span>
-                  {matchingSession ? (
-                    <div className="flex-1 flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-3">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-stone-900 dark:text-zinc-100">{course?.name || matchingSession.courseId}</span>
-                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-red-50 text-[#8C1B2E] dark:bg-zinc-900 dark:text-red-400 border border-red-200 dark:border-zinc-800">
-                            {course?.code}
-                          </span>
-                        </div>
-                        <div className="text-[11px] text-stone-500 dark:text-zinc-400">
-                          {reviewAngle !== 'faculty' && <span>{faculty?.name} · </span>}
-                          {reviewAngle !== 'room' && <span>{room?.name}</span>}
-                        </div>
-                      </div>
-                      <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 dark:bg-emerald-500/10 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/20">
-                        {matchingSession.type}
-                      </span>
-                    </div>
-                  ) : (
-                    <span className="text-stone-400 dark:text-zinc-600 italic">Free Slot</span>
-                  )}
+          ) : (
+            <>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex bg-[#F7F6F2] dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 p-0.5 rounded-lg text-xs">
+                  {([['section', 'By Section'], ['faculty', 'By Faculty'], ['room', 'By Room/Lab']] as const).map(([angle, label]) => (
+                    <button
+                      key={angle}
+                      onClick={() => setReviewAngle(angle)}
+                      aria-pressed={reviewAngle === angle}
+                      className={`px-3 py-1 rounded-md transition-colors ${
+                        reviewAngle === angle ? 'bg-[#8C1B2E] text-white font-semibold shadow-xs' : 'text-stone-600 dark:text-zinc-400 hover:text-stone-900 dark:hover:text-zinc-200'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
                 </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
 
-      {/* TAB 14: BULK IMPORT */}
-      {activeTab === 'bulk_import' && (
-        <div className="p-5 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl space-y-4 shadow-xs">
-          <div className="border-b border-[#E5E2D9] dark:border-zinc-800 pb-3">
-            <h3 className="font-serif text-base font-semibold text-stone-900 dark:text-zinc-100">Structured Bulk Import</h3>
-            <p className="text-xs text-stone-500 dark:text-zinc-400 mt-0.5">Import Faculty, Courses, Rooms, or Sections via CSV or JSON</p>
-          </div>
+                {reviewAngle === 'section' && (
+                  <select
+                    aria-label="Section"
+                    value={selectedSectionId}
+                    onChange={e => setSelectedSectionId(e.target.value)}
+                    className="bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 text-xs rounded-lg px-3 py-1.5 text-stone-800 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
+                  >
+                    {sections.map(s => (
+                      <option key={s.id} value={s.id}>Section: {s.name} ({s.studentCount} Students)</option>
+                    ))}
+                  </select>
+                )}
 
-          <div className="flex flex-wrap gap-2">
-            {(['faculty', 'courses', 'rooms', 'sections', 'allocations'] as const).map(type => (
-              <button
-                key={type}
-                onClick={() => {
-                  setImportType(type);
-                  setImportFeedback(null);
-                }}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold capitalize transition-all ${
-                  importType === type ? 'bg-[#8C1B2E] text-white shadow-xs' : 'bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 text-stone-600 dark:text-zinc-400 hover:text-stone-900'
-                }`}
-              >
-                {type}
-              </button>
-            ))}
-          </div>
+                {reviewAngle === 'faculty' && (
+                  <select
+                    aria-label="Faculty"
+                    value={selectedFacultyId}
+                    onChange={e => setSelectedFacultyId(e.target.value)}
+                    className="bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 text-xs rounded-lg px-3 py-1.5 text-stone-800 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
+                  >
+                    {facultyMembers.map(f => (
+                      <option key={f.id} value={f.id}>{f.name}</option>
+                    ))}
+                  </select>
+                )}
 
-          <div className="space-y-1">
-            <textarea
-              rows={6}
-              value={importRaw}
-              onChange={e => setImportRaw(e.target.value)}
-              placeholder={
-                importType === 'faculty'
-                  ? 'name, email, designation\nDr. Maya Sengupta, maya.s@thapar.edu, Associate Professor'
-                  : 'Paste JSON array or CSV records'
-              }
-              className="w-full bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-3 font-mono text-xs text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
-            />
-          </div>
+                {reviewAngle === 'room' && (
+                  <select
+                    aria-label="Room"
+                    value={selectedRoomId}
+                    onChange={e => setSelectedRoomId(e.target.value)}
+                    className="bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 text-xs rounded-lg px-3 py-1.5 text-stone-800 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
+                  >
+                    {rooms.map(r => (
+                      <option key={r.id} value={r.id}>{r.name} ({r.type})</option>
+                    ))}
+                  </select>
+                )}
+              </div>
 
-          <button
-            onClick={handleBulkImport}
-            className="px-4 py-2 bg-[#8C1B2E] hover:bg-[#731625] text-white rounded-lg text-xs font-semibold shadow-xs transition-colors"
-          >
-            Validate & Commit Import
-          </button>
+              <div className="flex bg-[#F7F6F2] dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 p-1 rounded-lg text-xs gap-1">
+                {academicYear.workingDays.map(d => (
+                  <button
+                    key={d}
+                    onClick={() => setReviewDay(d)}
+                    aria-pressed={activeReviewDay === d}
+                    className={`flex-1 py-1.5 rounded-md text-center font-medium transition-colors ${
+                      activeReviewDay === d ? 'bg-[#8C1B2E] text-white font-semibold shadow-xs' : 'text-stone-600 dark:text-zinc-400 hover:text-stone-900 dark:hover:text-zinc-200'
+                    }`}
+                  >
+                    {d}
+                  </button>
+                ))}
+              </div>
 
-          {importFeedback && (
-            <div className={`p-4 rounded-xl border space-y-1 text-xs ${
-              importFeedback.errors.length === 0 ? 'bg-emerald-50 border-emerald-200 text-emerald-900 dark:bg-emerald-950/20 dark:border-emerald-800/40 dark:text-emerald-300' : 'bg-amber-50 border-amber-200 text-amber-900 dark:bg-amber-950/20 dark:border-amber-800/40 dark:text-amber-300'
-            }`}>
-              <div className="font-bold">Imported {importFeedback.successCount} record(s).</div>
-              {importFeedback.errors.map((err, i) => (
-                <div key={i} className="text-[#8C1B2E] dark:text-red-300 font-mono text-[11px]">• {err}</div>
-              ))}
-            </div>
+              <div className="border border-[#E5E2D9] dark:border-zinc-800 rounded-lg overflow-hidden divide-y divide-[#E5E2D9] dark:divide-zinc-800">
+                {academicYear.timeSlots.map(slot => {
+                  if (isBreakSlot(slot)) {
+                    return (
+                      <div key={slot.id} className="p-3 bg-stone-100/70 dark:bg-zinc-950/40 flex items-center justify-between text-xs text-stone-500 dark:text-zinc-500 font-mono">
+                        <span>{slot.label}</span>
+                        <span>{slot.isBreak && !slot.isLunch ? 'Break' : 'Campus Lunch Break'}</span>
+                        <span>Protected</span>
+                      </div>
+                    );
+                  }
+
+                  const matching = sessions.filter(s => {
+                    if (s.day !== activeReviewDay || s.timeSlotId !== slot.id) return false;
+                    if (reviewAngle === 'section') return s.sectionId === selectedSectionId;
+                    if (reviewAngle === 'faculty') return s.facultyId === selectedFacultyId;
+                    return s.roomId === selectedRoomId;
+                  });
+
+                  return (
+                    <div key={slot.id} className="p-3 bg-white dark:bg-zinc-950/60 flex items-center justify-between text-xs">
+                      <span className="font-mono text-stone-500 dark:text-zinc-400 w-28 shrink-0">{slot.label}</span>
+                      {matching.length > 0 ? (
+                        <div className="flex-1 space-y-2 px-3">
+                          {matching.map(m => {
+                            const course = courses.find(c => c.id === m.courseId);
+                            const faculty = facultyMembers.find(f => f.id === m.facultyId);
+                            const room = rooms.find(r => r.id === m.roomId);
+                            const section = sections.find(s => s.id === m.sectionId);
+                            const sub = section?.subSections?.find(x => x.id === m.subSectionId);
+                            return (
+                              <div key={m.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-bold text-stone-900 dark:text-zinc-100">{course?.name || m.courseId}</span>
+                                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-red-50 text-[#8C1B2E] dark:bg-zinc-900 dark:text-red-400 border border-red-200 dark:border-zinc-800">
+                                      {course?.code}
+                                    </span>
+                                  </div>
+                                  <div className="text-[11px] text-stone-500 dark:text-zinc-400">
+                                    {reviewAngle !== 'section' && <span>{section?.name}{sub ? ` · ${sub.name}` : ''} · </span>}
+                                    {reviewAngle === 'section' && sub && <span>Subgroup {sub.name} · </span>}
+                                    {reviewAngle !== 'faculty' && <span>{faculty?.name} · </span>}
+                                    {reviewAngle !== 'room' && <span>{room?.name}</span>}
+                                  </div>
+                                </div>
+                                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 dark:bg-emerald-500/10 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/20">
+                                  {m.type}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <span className="text-stone-400 dark:text-zinc-600 italic">Free Slot</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </>
           )}
         </div>
       )}

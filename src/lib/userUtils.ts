@@ -31,10 +31,10 @@ export function getUserInitials(name?: string): string {
  * E.g., "Oct 4, 2026 at 09:15 AM"
  */
 export function formatFormattedDateTime(isoString?: string): string {
-  if (!isoString) return 'Today at 09:15 AM';
+  if (!isoString) return '—';
   try {
     const d = new Date(isoString);
-    if (isNaN(d.getTime())) return 'Today at 09:15 AM';
+    if (isNaN(d.getTime())) return '—';
     
     const datePart = d.toLocaleDateString('en-US', {
       month: 'short',
@@ -48,6 +48,6 @@ export function formatFormattedDateTime(isoString?: string): string {
     });
     return `${datePart} at ${timePart}`;
   } catch {
-    return 'Today at 09:15 AM';
+    return '—';
   }
 }

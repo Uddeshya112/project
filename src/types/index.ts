@@ -395,11 +395,7 @@ export interface AuthUser {
   ipAddress?: string;
   authorizedWorkspaces?: WorkspaceType[];
   isDemoUser?: boolean;
-  notificationPreferences?: {
-    email: boolean;
-    inApp: boolean;
-    urgentSms: boolean;
-  };
+  notificationPreferences?: Record<string, boolean>;
 }
 
 export interface Role {

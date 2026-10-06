@@ -12,11 +12,10 @@ import {
   CourseAllocation,
   DayOfWeek,
 } from '../src/types';
-import {
-  INITIAL_ACADEMIC_YEAR,
-  DEPARTMENTS,
-  PROGRAMS,
-} from '../src/lib/initialData';
+import { INITIAL_ACADEMIC_YEAR } from '../src/lib/initialData';
+import { buildDemoDataset } from '../src/server/demoData';
+
+const { departments: DEPARTMENTS, programs: PROGRAMS } = buildDemoDataset();
 
 function build500StudentWorkbook() {
   const wb = XLSX.utils.book_new();

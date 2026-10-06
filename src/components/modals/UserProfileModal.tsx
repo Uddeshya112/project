@@ -1,20 +1,8 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useTimetable } from '../../context/TimetableContext';
-import {
-  User,
-  Building,
-  Mail,
-  Phone,
-  MapPin,
-  Clock,
-  KeyRound,
-  X,
-  Edit3,
-  CheckCircle2,
-  Lock,
-  BookOpen
-} from 'lucide-react';
+import { evaluatePasswordPolicy } from '../../lib/passwordUtils';
+import { Building, X, Edit3, CheckCircle2, Lock, AlertCircle } from 'lucide-react';
 
 interface UserProfileModalProps {
   isOpen: boolean;
@@ -22,364 +10,205 @@ interface UserProfileModalProps {
   onOpenSwitchAccount?: () => void;
 }
 
+const fieldInput = 'w-full px-3 py-1.5 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 bg-white dark:bg-zinc-950 text-stone-900 dark:text-zinc-100 text-xs';
+
 export function UserProfileModal({ isOpen, onClose }: UserProfileModalProps) {
-  const {
-    currentUser,
-    currentInstitution,
-    currentRole,
-    updateUserProfile,
-    currentWorkspace,
-  } = useAuth();
+  const { currentUser, currentInstitution, currentRole, roster, updateUserProfile, changePassword } = useAuth();
+  const { sections, departments } = useTimetable();
 
   const [isEditing, setIsEditing] = useState(false);
+  const [phoneInput, setPhoneInput] = useState(currentUser?.phone ?? '');
+  const [officeLocationInput, setOfficeLocationInput] = useState(currentUser?.officeLocation ?? '');
+  const [officeHoursInput, setOfficeHoursInput] = useState(currentUser?.officeHours ?? '');
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  // Form states
-  const [phoneInput, setPhoneInput] = useState(currentUser?.phone || '+91 98123 45678');
-  const [officeLocationInput, setOfficeLocationInput] = useState(currentUser?.officeLocation || 'Academic Block C, Room 204');
-  const [officeHoursInput, setOfficeHoursInput] = useState(currentUser?.officeHours || 'Mon–Fri 10:00 AM – 12:00 PM');
-  
   const [showPasswordForm, setShowPasswordForm] = useState(false);
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [passwordMessage, setPasswordMessage] = useState<{ success: boolean; text: string } | null>(null);
-
-  const [saveSuccess, setSaveSuccess] = useState(false);
 
   if (!isOpen || !currentUser) return null;
 
-  const handleSaveProfile = (e: React.FormEvent) => {
+  const section = sections.find((s) => s.id === roster?.sectionId);
+  const subSection = section?.subSections?.find((s) => s.id === roster?.subSectionId);
+  const isStudent = currentUser.roleCode === 'STUDENT' || currentUser.roleCode === 'CLASS_REPRESENTATIVE';
+  const department = currentUser.department || departments.find((d) => d.id === section?.departmentId)?.name || '—';
+
+  const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    updateUserProfile(currentUser.id, {
-      phone: phoneInput.trim(),
-      officeLocation: officeLocationInput.trim(),
-      officeHours: officeHoursInput.trim(),
-    });
-    setIsEditing(false);
-    setSaveSuccess(true);
-    setTimeout(() => setSaveSuccess(false), 2500);
+    setBusy(true);
+    const r = await updateUserProfile({ phone: phoneInput.trim(), officeLocation: officeLocationInput.trim(), officeHours: officeHoursInput.trim() });
+    setBusy(false);
+    setMessage({ ok: r.success, text: r.success ? 'Contact details saved.' : r.message ?? 'Could not save.' });
+    if (r.success) setIsEditing(false);
   };
 
-  const handleChangePassword = (e: React.FormEvent) => {
+  const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newPassword || newPassword.length < 12) {
-      setPasswordMessage({ success: false, text: 'Password must be at least 12 characters long.' });
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      setPasswordMessage({ success: false, text: 'New passwords do not match.' });
-      return;
-    }
-
-    setPasswordMessage({ success: true, text: 'Password updated successfully.' });
-    setOldPassword('');
-    setNewPassword('');
-    setConfirmPassword('');
-    setTimeout(() => {
+    const policy = evaluatePasswordPolicy(newPassword);
+    if (!policy.isValid) return setMessage({ ok: false, text: `New password needs: ${policy.errors.join(', ')}.` });
+    if (newPassword !== confirmPassword) return setMessage({ ok: false, text: 'New passwords do not match.' });
+    setBusy(true);
+    const r = await changePassword(oldPassword, newPassword);
+    setBusy(false);
+    setMessage({ ok: r.success, text: r.message ?? (r.success ? 'Password changed.' : 'Could not change password.') });
+    if (r.success) {
+      setOldPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
       setShowPasswordForm(false);
-      setPasswordMessage(null);
-    }, 2000);
+    }
   };
-
-  const isStudentUser = currentWorkspace === 'Student' || currentWorkspace === 'CR' || !!currentUser?.rollNumber;
-
-  if (isStudentUser) {
-    const studentDisplayName = currentUser.name.replace(/\s*\(Student\)/i, '').replace(/\s*\(CR\)/i, '');
-
-    return (
-      <div className="fixed inset-0 bg-stone-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-5 overflow-y-auto animate-in fade-in duration-150 font-sans">
-        <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl max-w-xl w-full shadow-lg relative overflow-hidden my-auto max-h-[92vh] flex flex-col text-stone-900 dark:text-zinc-100">
-          
-          {/* Header */}
-          <div className="p-6 border-b border-[#E5E2D9] dark:border-zinc-800 bg-[#F4F2EC] dark:bg-zinc-950/70 flex items-start justify-between">
-            <div className="flex items-center gap-4">
-              <div className="w-14 h-14 rounded-full bg-[#8C1B2E]/10 border border-[#8C1B2E]/30 text-[#8C1B2E] flex items-center justify-center font-bold text-xl shadow-xs">
-                {studentDisplayName.charAt(0)}
-              </div>
-
-              <div className="space-y-0.5">
-                <h2 className="text-xl font-bold tracking-tight text-stone-900 dark:text-zinc-100 font-serif">
-                  {studentDisplayName}
-                </h2>
-                <p className="text-xs text-stone-600 dark:text-zinc-400">
-                  B.Tech Computer Science & Engineering
-                </p>
-                <div className="text-[11px] text-stone-500 dark:text-zinc-400 flex items-center gap-2 pt-0.5">
-                  <span>Semester 5 · CSE-A</span>
-                  <span>·</span>
-                  <span className="font-mono text-stone-700 dark:text-zinc-300">Roll No. {currentUser.rollNumber || '102303999'}</span>
-                </div>
-              </div>
-            </div>
-
-            <button
-              onClick={onClose}
-              className="p-1 rounded-md text-stone-400 hover:text-stone-700 dark:hover:text-zinc-200 transition-colors"
-              aria-label="Close profile"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-
-          {/* Body */}
-          <div className="p-6 overflow-y-auto space-y-5 text-xs">
-            <div className="space-y-3">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-stone-500 border-b border-[#E5E2D9] dark:border-zinc-800 pb-1.5">
-                Academic Profile
-              </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                <div>
-                  <span className="text-stone-500 block">Program</span>
-                  <span className="font-semibold text-stone-900 dark:text-zinc-100">B.Tech Computer Science</span>
-                </div>
-                <div>
-                  <span className="text-stone-500 block">Department</span>
-                  <span className="font-semibold text-stone-900 dark:text-zinc-100">Computer Science & Engineering</span>
-                </div>
-                <div>
-                  <span className="text-stone-500 block">Institutional Email</span>
-                  <span className="font-mono text-stone-800 dark:text-zinc-200">{currentUser.email}</span>
-                </div>
-                <div>
-                  <span className="text-stone-500 block">Contact Phone</span>
-                  <span className="font-mono text-stone-800 dark:text-zinc-200">{phoneInput}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Footer */}
-          <div className="p-4 border-t border-[#E5E2D9] dark:border-zinc-800 bg-[#F4F2EC] dark:bg-zinc-950/70 flex items-center justify-between text-xs">
-            <span className="text-stone-500">Thapar Institute of Engineering & Technology</span>
-            <button
-              onClick={onClose}
-              className="px-4 py-1.5 rounded-lg border border-[#E5E2D9] dark:border-zinc-700 bg-white dark:bg-zinc-800 text-stone-700 dark:text-zinc-200 font-semibold"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
-    <div className="fixed inset-0 bg-stone-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-5 overflow-y-auto animate-in fade-in duration-150 font-sans">
-      <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl max-w-xl w-full shadow-lg relative overflow-hidden my-auto max-h-[92vh] flex flex-col text-stone-900 dark:text-zinc-100">
-        
-        {/* Header */}
+    <div className="fixed inset-0 bg-stone-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-5 overflow-y-auto font-sans" onClick={onClose}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="profile-title"
+        onClick={(e) => e.stopPropagation()}
+        className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl max-w-xl w-full shadow-lg relative overflow-hidden my-auto max-h-[92vh] flex flex-col text-stone-900 dark:text-zinc-100"
+      >
         <div className="p-6 border-b border-[#E5E2D9] dark:border-zinc-800 bg-[#F4F2EC] dark:bg-zinc-950/70 flex items-start justify-between">
           <div className="flex items-center gap-4">
-            <div className="w-14 h-14 rounded-full bg-[#8C1B2E]/10 text-[#8C1B2E] flex items-center justify-center font-bold text-xl border border-[#8C1B2E]/30 shadow-xs shrink-0">
+            <div className="w-14 h-14 rounded-full bg-[#8C1B2E]/10 text-[#8C1B2E] flex items-center justify-center font-bold text-xl border border-[#8C1B2E]/30 shrink-0" aria-hidden="true">
               {currentUser.name.charAt(0)}
             </div>
-
             <div>
-              <h2 className="text-xl font-bold text-stone-900 dark:text-zinc-100 tracking-tight font-serif">
-                {currentUser.name}
-              </h2>
+              <h2 id="profile-title" className="text-xl font-bold tracking-tight font-serif">{currentUser.name}</h2>
               <p className="text-xs text-stone-600 dark:text-zinc-400 mt-0.5">
-                {currentRole?.name || 'Timetable Coordinator'} · Computer Science & Engineering
+                {currentRole?.name ?? currentUser.roleName} · {department}
               </p>
-              <div className="text-[11px] text-stone-500 dark:text-zinc-400 mt-1 flex items-center gap-2">
-                <Building className="h-3.5 w-3.5 text-[#8C1B2E]" />
-                <span>{currentInstitution.name} ({currentInstitution.code})</span>
-              </div>
+              {isStudent ? (
+                <div className="text-[11px] text-stone-500 dark:text-zinc-400 mt-1">
+                  {section ? `Semester ${section.semester} · ${section.name}${subSection ? ` / ${subSection.name}` : ''}` : 'Not linked to a section yet'}
+                  {roster?.rollNumber && <span className="font-mono"> · Roll No. {roster.rollNumber}</span>}
+                </div>
+              ) : (
+                <div className="text-[11px] text-stone-500 dark:text-zinc-400 mt-1 flex items-center gap-2">
+                  <Building className="h-3.5 w-3.5 text-[#8C1B2E]" aria-hidden="true" />
+                  <span>{currentInstitution.name} ({currentInstitution.code})</span>
+                </div>
+              )}
             </div>
           </div>
-
-          <button
-            onClick={onClose}
-            className="p-1 rounded-md text-stone-400 hover:text-stone-700 dark:hover:text-zinc-200 transition-colors"
-            aria-label="Close profile"
-          >
+          <button onClick={onClose} className="p-1 rounded-md text-stone-400 hover:text-stone-700 dark:hover:text-zinc-200" aria-label="Close profile">
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        {/* Content Body */}
         <div className="p-6 overflow-y-auto space-y-6 flex-1 text-xs">
-          {saveSuccess && (
-            <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-xl text-emerald-800 dark:text-emerald-300 text-xs flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-              <span>Contact details updated successfully.</span>
+          {message && (
+            <div role={message.ok ? 'status' : 'alert'} className={`p-3 rounded-xl border flex items-center gap-2 ${message.ok ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300' : 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-300'}`}>
+              {message.ok ? <CheckCircle2 className="h-4 w-4" aria-hidden="true" /> : <AlertCircle className="h-4 w-4" aria-hidden="true" />}
+              <span>{message.text}</span>
             </div>
           )}
 
-          {/* Profile & Contact Details */}
+          {isStudent && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Info label="Program" value={section?.program || '—'} />
+              <Info label="Batch" value={section ? String(section.batchYear) : '—'} />
+            </div>
+          )}
+
           <div className="space-y-4">
             <div className="flex items-center justify-between border-b border-[#E5E2D9] dark:border-zinc-800 pb-2">
-              <h3 className="font-bold uppercase tracking-wider text-stone-500 text-[11px]">
-                Profile & Contact Information
-              </h3>
-
-              {!isEditing ? (
-                <button
-                  onClick={() => setIsEditing(true)}
-                  className="flex items-center gap-1.5 text-xs text-[#8C1B2E] dark:text-red-400 font-semibold hover:underline"
-                >
-                  <Edit3 className="h-3.5 w-3.5" />
-                  <span>Edit Contact</span>
-                </button>
-              ) : (
-                <button
-                  onClick={() => setIsEditing(false)}
-                  className="text-xs text-stone-500 hover:underline"
-                >
-                  Cancel
-                </button>
-              )}
+              <h3 className="font-bold uppercase tracking-wider text-stone-500 text-[11px]">Contact information</h3>
+              <button onClick={() => setIsEditing(!isEditing)} className="flex items-center gap-1.5 text-xs text-[#8C1B2E] dark:text-red-400 font-semibold hover:underline">
+                {!isEditing && <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />}
+                <span>{isEditing ? 'Cancel' : 'Edit contact'}</span>
+              </button>
             </div>
 
             {isEditing ? (
-              <form onSubmit={handleSaveProfile} className="space-y-3 pt-1">
-                <div>
-                  <label className="block text-stone-600 dark:text-zinc-400 mb-1">Phone Number</label>
-                  <input
-                    type="text"
-                    value={phoneInput}
-                    onChange={e => setPhoneInput(e.target.value)}
-                    className="w-full px-3 py-1.5 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 bg-white dark:bg-zinc-950 text-stone-900 dark:text-zinc-100 text-xs"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-stone-600 dark:text-zinc-400 mb-1">Office Location</label>
-                  <input
-                    type="text"
-                    value={officeLocationInput}
-                    onChange={e => setOfficeLocationInput(e.target.value)}
-                    className="w-full px-3 py-1.5 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 bg-white dark:bg-zinc-950 text-stone-900 dark:text-zinc-100 text-xs"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-stone-600 dark:text-zinc-400 mb-1">Office Hours</label>
-                  <input
-                    type="text"
-                    value={officeHoursInput}
-                    onChange={e => setOfficeHoursInput(e.target.value)}
-                    className="w-full px-3 py-1.5 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 bg-white dark:bg-zinc-950 text-stone-900 dark:text-zinc-100 text-xs"
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  className="px-4 py-2 bg-[#8C1B2E] text-white font-semibold text-xs rounded-lg shadow-xs hover:bg-[#721525]"
-                >
-                  Save Changes
+              <form onSubmit={handleSaveProfile} className="space-y-3">
+                <Labeled id="profile-phone" label="Phone number">
+                  <input id="profile-phone" type="tel" value={phoneInput} onChange={(e) => setPhoneInput(e.target.value)} className={fieldInput} />
+                </Labeled>
+                {!isStudent && (
+                  <>
+                    <Labeled id="profile-office" label="Office location">
+                      <input id="profile-office" value={officeLocationInput} onChange={(e) => setOfficeLocationInput(e.target.value)} className={fieldInput} />
+                    </Labeled>
+                    <Labeled id="profile-hours" label="Office hours">
+                      <input id="profile-hours" value={officeHoursInput} onChange={(e) => setOfficeHoursInput(e.target.value)} className={fieldInput} />
+                    </Labeled>
+                  </>
+                )}
+                <button type="submit" disabled={busy} className="px-4 py-2 bg-[#8C1B2E] text-white font-semibold text-xs rounded-lg hover:bg-[#721525] disabled:opacity-60">
+                  {busy ? 'Saving…' : 'Save changes'}
                 </button>
               </form>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 pt-1">
-                <div>
-                  <span className="text-stone-500 block mb-0.5">Institutional Email</span>
-                  <span className="font-mono font-medium text-stone-900 dark:text-zinc-100">{currentUser.email}</span>
-                </div>
-
-                <div>
-                  <span className="text-stone-500 block mb-0.5">Phone Number</span>
-                  <span className="font-mono text-stone-900 dark:text-zinc-100">{phoneInput}</span>
-                </div>
-
-                <div>
-                  <span className="text-stone-500 block mb-0.5">Department</span>
-                  <span className="font-medium text-stone-900 dark:text-zinc-100">Computer Science & Engineering</span>
-                </div>
-
-                <div>
-                  <span className="text-stone-500 block mb-0.5">Office Location</span>
-                  <span className="font-medium text-stone-900 dark:text-zinc-100">{officeLocationInput}</span>
-                </div>
-
-                <div className="sm:col-span-2">
-                  <span className="text-stone-500 block mb-0.5">Office Hours</span>
-                  <span className="font-medium text-stone-900 dark:text-zinc-100">{officeHoursInput}</span>
-                </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
+                <Info label="Institutional email" value={currentUser.email} mono />
+                <Info label="Phone number" value={currentUser.phone || '—'} mono />
+                {!isStudent && <Info label="Office location" value={currentUser.officeLocation || '—'} />}
+                {!isStudent && <Info label="Office hours" value={currentUser.officeHours || '—'} />}
+                <Info label="Sign-in method" value={currentUser.ssoProvider ?? '—'} />
               </div>
             )}
           </div>
 
-          {/* Change Password */}
-          <div className="space-y-3 pt-2 border-t border-[#E5E2D9] dark:border-zinc-800">
-            <div className="flex items-center justify-between">
-              <span className="font-bold text-stone-900 dark:text-zinc-100 flex items-center gap-1.5">
-                <Lock className="h-3.5 w-3.5 text-[#8C1B2E]" />
-                <span>Account Password</span>
-              </span>
-
-              <button
-                type="button"
-                onClick={() => setShowPasswordForm(!showPasswordForm)}
-                className="text-xs text-[#8C1B2E] dark:text-red-400 font-semibold hover:underline"
-              >
-                {showPasswordForm ? 'Cancel' : 'Change Password'}
-              </button>
-            </div>
-
-            {showPasswordForm && (
-              <form onSubmit={handleChangePassword} className="p-3.5 bg-white dark:bg-zinc-950 rounded-xl border border-[#E5E2D9] dark:border-zinc-800 space-y-3">
-                {passwordMessage && (
-                  <div className={`p-2 rounded text-xs ${passwordMessage.success ? 'bg-emerald-50 text-emerald-800' : 'bg-rose-50 text-rose-800'}`}>
-                    {passwordMessage.text}
-                  </div>
-                )}
-
-                <div>
-                  <label className="block text-stone-600 mb-0.5">Current Password</label>
-                  <input
-                    type="password"
-                    value={oldPassword}
-                    onChange={e => setOldPassword(e.target.value)}
-                    className="w-full px-2.5 py-1.5 rounded border border-[#E5E2D9] dark:border-zinc-800 bg-white dark:bg-zinc-900 text-xs"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-stone-600 mb-0.5">New Password (12+ chars)</label>
-                  <input
-                    type="password"
-                    value={newPassword}
-                    onChange={e => setNewPassword(e.target.value)}
-                    className="w-full px-2.5 py-1.5 rounded border border-[#E5E2D9] dark:border-zinc-800 bg-white dark:bg-zinc-900 text-xs"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-stone-600 mb-0.5">Confirm New Password</label>
-                  <input
-                    type="password"
-                    value={confirmPassword}
-                    onChange={e => setConfirmPassword(e.target.value)}
-                    className="w-full px-2.5 py-1.5 rounded border border-[#E5E2D9] dark:border-zinc-800 bg-white dark:bg-zinc-900 text-xs"
-                    required
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  className="px-4 py-2 bg-[#8C1B2E] text-white font-semibold text-xs rounded-lg shadow-xs"
-                >
-                  Update Password
+          {currentUser.hasPassword && (
+            <div className="space-y-3 pt-2 border-t border-[#E5E2D9] dark:border-zinc-800">
+              <div className="flex items-center justify-between">
+                <span className="font-bold flex items-center gap-1.5">
+                  <Lock className="h-3.5 w-3.5 text-[#8C1B2E]" aria-hidden="true" />
+                  <span>Account password</span>
+                </span>
+                <button type="button" onClick={() => setShowPasswordForm(!showPasswordForm)} className="text-xs text-[#8C1B2E] dark:text-red-400 font-semibold hover:underline">
+                  {showPasswordForm ? 'Cancel' : 'Change password'}
                 </button>
-              </form>
-            )}
-          </div>
+              </div>
+              {showPasswordForm && (
+                <form onSubmit={handleChangePassword} className="p-3.5 bg-white dark:bg-zinc-950 rounded-xl border border-[#E5E2D9] dark:border-zinc-800 space-y-3">
+                  <Labeled id="pw-current" label="Current password">
+                    <input id="pw-current" type="password" autoComplete="current-password" value={oldPassword} onChange={(e) => setOldPassword(e.target.value)} className={fieldInput} required />
+                  </Labeled>
+                  <Labeled id="pw-new" label="New password (12+ characters, upper, lower, number, symbol)">
+                    <input id="pw-new" type="password" autoComplete="new-password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className={fieldInput} required />
+                  </Labeled>
+                  <Labeled id="pw-confirm" label="Confirm new password">
+                    <input id="pw-confirm" type="password" autoComplete="new-password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} className={fieldInput} required />
+                  </Labeled>
+                  <button type="submit" disabled={busy} className="px-4 py-2 bg-[#8C1B2E] text-white font-semibold text-xs rounded-lg disabled:opacity-60">
+                    {busy ? 'Updating…' : 'Update password'}
+                  </button>
+                  <p className="text-[11px] text-stone-500">Changing your password signs you out on other devices.</p>
+                </form>
+              )}
+            </div>
+          )}
         </div>
 
-        {/* Footer */}
         <div className="p-4 border-t border-[#E5E2D9] dark:border-zinc-800 bg-[#F4F2EC] dark:bg-zinc-950/70 flex items-center justify-between text-xs">
           <span className="text-stone-500">Thapar Institute of Engineering & Technology</span>
-          <button
-            onClick={onClose}
-            className="px-4 py-1.5 rounded-lg border border-[#E5E2D9] dark:border-zinc-700 bg-white dark:bg-zinc-800 text-stone-700 dark:text-zinc-200 font-semibold hover:bg-stone-100"
-          >
+          <button onClick={onClose} className="px-4 py-1.5 rounded-lg border border-[#E5E2D9] dark:border-zinc-700 bg-white dark:bg-zinc-800 font-semibold hover:bg-stone-100">
             Close
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function Info({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div>
+      <span className="text-stone-500 block mb-0.5">{label}</span>
+      <span className={`${mono ? 'font-mono' : 'font-medium'} text-stone-900 dark:text-zinc-100 break-all`}>{value}</span>
+    </div>
+  );
+}
+
+function Labeled({ id, label, children }: { id: string; label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label htmlFor={id} className="block text-stone-600 dark:text-zinc-400 mb-1">{label}</label>
+      {children}
     </div>
   );
 }

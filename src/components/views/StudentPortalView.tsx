@@ -1,8 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useTimetable } from '../../context/TimetableContext';
 import { useAuth } from '../../context/AuthContext';
-import { TIME_SLOTS } from '../../lib/initialData';
-import { DayOfWeek, ClassSession, Course } from '../../types';
+import { DayOfWeek, ClassSession, Course, TimeSlot } from '../../types';
 import {
   Calendar,
   Clock,
@@ -12,32 +11,70 @@ import {
   Users,
   AlertTriangle,
   CheckCircle2,
-  ThumbsUp,
   X,
   ChevronRight,
   Printer,
-  Vote,
-  GraduationCap
 } from 'lucide-react';
 
+// Sample content shown until real data exists — edit freely.
+const SAMPLE_MENTOR = 'Prof. Arvind Sharma';
+// Sample roll-number range per lab batch, in batch order — edit freely.
+const SAMPLE_BATCH_ROLL_RANGES = ['102303001–102303026', '102303027–102303052'];
+const SAMPLE_ANNOUNCEMENTS = [
+  {
+    title: 'DBMS Lab Practical Assignment Submission',
+    when: 'Yesterday',
+    body: 'Batch A1 practical scheduled for Thursday 13:00 will take place in Turing Lab 301. Bring your completed Lab 3 queries.',
+  },
+  {
+    title: 'Rescheduled DBMS Lecture Consensus Vote',
+    when: '2 days ago',
+    body: "Voting for Monday's cancelled DBMS class is currently live on your student dashboard. Please submit your preferred time.",
+  },
+];
+const SAMPLE_SYLLABUS_TEXT =
+  'Relational Algebra, SQL DDL/DML, Normalization (1NF to BCNF), Transaction Processing (ACID), Concurrency Control, and Indexing with B+ Trees.';
+
+function SampleBadge() {
+  return (
+    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-stone-100 dark:bg-zinc-800 text-stone-500 dark:text-zinc-400 border border-[#E5E2D9] dark:border-zinc-700">
+      Sample
+    </span>
+  );
+}
+
+const dayName = (d: Date) => d.toLocaleDateString('en-US', { weekday: 'long' });
+
 export function StudentPortalView() {
-  const { currentUser } = useAuth();
+  const { currentUser, roster } = useAuth();
   const {
+    academicYear,
     sections,
     sessions,
+    publishedSessions,
     courses,
+    departments,
     facultyMembers,
     rooms,
     polls,
     votePoll,
     activeView,
-    setActiveView
+    setActiveView,
+    isLoading,
   } = useTimetable();
+  const { workingDays: days, timeSlots } = academicYear;
 
-  // Student Identity & Section resolution
-  const studentName = (currentUser?.name || 'Rohan Sharma').replace(/\s*\(Student\)/i, '').replace(/\s*\(CR\)/i, '');
-  const studentRollNo = currentUser?.rollNumber || '102303999';
-  const currentSection = sections.find(s => s.id === (currentUser?.sectionId || 'sec-cse-a')) || sections[0];
+  // Identity & section come from the signed-in user's roster record.
+  const studentName = (currentUser?.name ?? '').replace(/\s*\(Student\)/i, '').replace(/\s*\(CR\)/i, '');
+  const firstName = studentName.split(' ')[0];
+  const studentRollNo = roster?.rollNumber ?? currentUser?.rollNumber;
+  const currentSection = sections.find(s => s.id === roster?.sectionId);
+  const subSectionId = roster?.subSectionId ?? null;
+
+  const now = new Date();
+  const todayName = dayName(now);
+  const nowTime = now.toTimeString().slice(0, 5); // "HH:MM", local time
+  const isWorkingDay = days.includes(todayName as DayOfWeek);
 
   // Tab State: sync with activeView or default to overview
   const currentTab = useMemo(() => {
@@ -54,80 +91,134 @@ export function StudentPortalView() {
     else setActiveView('overview');
   };
 
-  // Day filter for mobile timetable
-  const days: DayOfWeek[] = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
-  const [selectedMobileDay, setSelectedMobileDay] = useState<DayOfWeek>('Monday');
+  const [selectedMobileDay, setSelectedMobileDay] = useState<DayOfWeek>(
+    isWorkingDay ? (todayName as DayOfWeek) : days[0] ?? 'Monday',
+  );
   const [timetableMode, setTimetableMode] = useState<'grid' | 'agenda'>('grid');
 
   // Selected session detail modal
   const [selectedSession, setSelectedSession] = useState<ClassSession | null>(null);
   const [selectedCourseDetail, setSelectedCourseDetail] = useState<Course | null>(null);
 
-  // Voting state
-  const activePoll = polls[0];
-  const [hasVotedLocally, setHasVotedLocally] = useState(false);
+  const [votingPollId, setVotingPollId] = useState<string | null>(null);
 
-  // Section sessions
-  const sectionSessions = useMemo(() => {
-    return sessions.filter(s => s.sectionId === currentSection.id);
-  }, [sessions, currentSection.id]);
+  // Whole-section sessions plus the student's own lab subgroup (every subgroup if not assigned to one).
+  const sectionSessions = useMemo(
+    () =>
+      sessions.filter(
+        s => s.sectionId === currentSection?.id && (!subSectionId || !s.subSectionId || s.subSectionId === subSectionId),
+      ),
+    [sessions, currentSection?.id, subSectionId],
+  );
 
-  // Today (Monday) sessions
-  const mondaySessions = useMemo(() => {
-    return sectionSessions.filter(s => s.day === 'Monday');
-  }, [sectionSessions]);
-
-  // Next upcoming class for today
-  const nextSession = useMemo(() => {
-    return mondaySessions.find(s => s.timeSlotId === 'ts-3' && s.status !== 'Cancelled') ||
-      mondaySessions.find(s => s.status !== 'Cancelled');
-  }, [mondaySessions]);
-
-  const nextCourse = nextSession ? courses.find(c => c.id === nextSession.courseId) : null;
-  const nextFaculty = nextSession ? facultyMembers.find(f => f.id === nextSession.facultyId) : null;
-  const nextRoom = nextSession ? rooms.find(r => r.id === nextSession.roomId) : null;
-
-  // Enrolled courses for this section
   const enrolledCourses = useMemo(() => {
-    const courseIds = Array.from(new Set(sectionSessions.map(s => s.courseId)));
-    return courses.filter(c => courseIds.includes(c.id));
+    const ids = new Set(sectionSessions.map(s => s.courseId));
+    return courses.filter(c => ids.has(c.id));
   }, [sectionSessions, courses]);
-
-  // Total credits
-  const totalCredits = enrolledCourses.reduce((sum, c) => sum + (c.credits || 4), 0);
 
   // Time greeting helper
   const getGreeting = () => {
-    const hour = new Date().getHours();
+    const hour = now.getHours();
     if (hour < 12) return 'Good morning';
     if (hour < 17) return 'Good afternoon';
     return 'Good evening';
+  };
+
+  const emptyMessage = isLoading
+    ? 'Loading your timetable…'
+    : !currentSection
+    ? "Your account isn't linked to a section yet — ask the coordinator."
+    : publishedSessions.length === 0
+    ? 'No timetable published yet. It will appear here once the coordinator publishes it.'
+    : null;
+
+  if (emptyMessage || !currentSection) {
+    return (
+      <div className="space-y-6 max-w-6xl mx-auto font-sans">
+        <div className="border-b border-[#E5E2D9] dark:border-zinc-800 pb-4">
+          <h1 className="text-2xl sm:text-3xl font-bold font-serif text-stone-900 dark:text-zinc-100 tracking-tight">
+            {getGreeting()}{firstName ? `, ${firstName}` : ''}
+          </h1>
+        </div>
+        <div className="p-6 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl text-sm text-stone-600 dark:text-zinc-400">
+          {emptyMessage}
+        </div>
+      </div>
+    );
+  }
+
+  const slotById = (id: string) => timeSlots.find(t => t.id === id);
+  const slotTime = (id: string) => {
+    const t = slotById(id);
+    return t ? `${t.startTime}–${t.endTime}` : id;
+  };
+  const slotOrder = (id: string) => timeSlots.findIndex(t => t.id === id);
+  const isLunchSlot = (t: TimeSlot) => Boolean(t.isLunch || t.id === academicYear.lunchPeriodId);
+  const isBreakSlot = (t: TimeSlot) => Boolean(t.isBreak || isLunchSlot(t));
+  const sessionsAt = (day: string, slotId: string) => sectionSessions.filter(s => s.day === day && s.timeSlotId === slotId);
+  const courseOf = (id: string) => courses.find(c => c.id === id);
+  const facultyName = (id: string) => facultyMembers.find(f => f.id === id)?.name ?? '—';
+  const roomOf = (id: string) => rooms.find(r => r.id === id);
+  const subName = (id?: string) => (id ? currentSection.subSections?.find(x => x.id === id)?.name : undefined);
+  const isNowSlot = (day: string, t: TimeSlot) => day === todayName && t.startTime <= nowTime && nowTime < t.endTime;
+  const homeRoom = currentSection.homeRoomId ? roomOf(currentSection.homeRoomId) : undefined;
+
+  // Today
+  const todaySessions = isWorkingDay ? sectionSessions.filter(s => s.day === todayName) : [];
+  const todayCancelled = todaySessions.filter(s => s.status === 'Cancelled').length;
+  const todayScheduled = todaySessions.length - todayCancelled;
+
+  // Next class: the first not-yet-finished class today, else the first class on the following days.
+  let nextClass: { session: ClassSession; when: string } | null = null;
+  for (let offset = 0; offset < 7 && !nextClass; offset++) {
+    const d = new Date(now);
+    d.setDate(now.getDate() + offset);
+    const day = dayName(d);
+    const upcoming = sectionSessions
+      .filter(s => s.day === day && s.status !== 'Cancelled' && (offset > 0 || (slotById(s.timeSlotId)?.endTime ?? '') > nowTime))
+      .sort((a, b) => slotOrder(a.timeSlotId) - slotOrder(b.timeSlotId));
+    if (upcoming[0]) nextClass = { session: upcoming[0], when: offset === 0 ? 'Today' : offset === 1 ? 'Tomorrow' : day };
+  }
+  const nextCourse = nextClass ? courseOf(nextClass.session.courseId) : undefined;
+  const nextRoom = nextClass ? roomOf(nextClass.session.roomId) : undefined;
+
+  const cancelledSessions = sectionSessions.filter(s => s.status === 'Cancelled');
+  const sectionPolls = polls.filter(p => p.sectionId === currentSection.id && p.isActive);
+
+  const handleVote = async (pollId: string, optionId: string) => {
+    setVotingPollId(pollId);
+    await votePoll(pollId, optionId);
+    setVotingPollId(null);
   };
 
   const handlePrint = () => {
     window.print();
   };
 
+  const selectedRoom = selectedSession ? roomOf(selectedSession.roomId) : undefined;
+
   return (
     <div className="space-y-6 max-w-6xl mx-auto font-sans">
-      
+
       {/* 1. Academic Header & Sub-Navigation */}
       <div className="border-b border-[#E5E2D9] dark:border-zinc-800 pb-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <h1 className="text-2xl sm:text-3xl font-bold font-serif text-stone-900 dark:text-zinc-100 tracking-tight">
-              {getGreeting()}, {studentName.split(' ')[0]}
+              {getGreeting()}{firstName ? `, ${firstName}` : ''}
             </h1>
             <p className="text-xs sm:text-sm text-stone-500 dark:text-zinc-400 mt-1">
-              B.Tech Computer Science & Engineering · Semester {currentSection.semester} · {currentSection.name}
+              {currentSection.program} · Semester {currentSection.semester} · {currentSection.name}
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
-            <span className="text-xs px-2.5 py-1 rounded-md bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 font-mono text-stone-700 dark:text-zinc-300">
-              Roll No. {studentRollNo}
-            </span>
-          </div>
+          {studentRollNo && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs px-2.5 py-1 rounded-md bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 font-mono text-stone-700 dark:text-zinc-300">
+                Roll No. {studentRollNo}
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Clean Student Navigation Bar */}
@@ -187,10 +278,10 @@ export function StudentPortalView() {
       {/* ============================================================ */}
       {currentTab === 'dashboard' && (
         <div className="space-y-6 animate-in fade-in duration-150">
-          
+
           {/* Top Row: Next Class Section & Today Schedule Summary */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            
+
             {/* NEXT CLASS COMPACT SECTION */}
             <div className="md:col-span-2 p-5 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div className="space-y-1">
@@ -198,24 +289,36 @@ export function StudentPortalView() {
                   <span className="text-[11px] font-bold uppercase tracking-wider text-[#8C1B2E] dark:text-red-400">
                     Next Class
                   </span>
-                  <span className="text-stone-300 dark:text-zinc-600">·</span>
-                  <span className="text-xs text-stone-500 dark:text-zinc-400 font-mono">10:00–11:00</span>
+                  {nextClass && (
+                    <>
+                      <span className="text-stone-300 dark:text-zinc-600">·</span>
+                      <span className="text-xs text-stone-500 dark:text-zinc-400 font-mono">
+                        {nextClass.when} · {slotTime(nextClass.session.timeSlotId)}
+                      </span>
+                    </>
+                  )}
                 </div>
 
                 <div className="text-base sm:text-lg font-bold text-stone-900 dark:text-zinc-100 font-serif">
-                  {nextCourse ? `${nextCourse.code} · ${nextCourse.name}` : 'MA501 · Discrete Mathematics & Graph Theory'}
+                  {nextClass
+                    ? nextCourse
+                      ? `${nextCourse.code} · ${nextCourse.name}`
+                      : nextClass.session.courseId
+                    : 'No upcoming classes this week'}
                 </div>
 
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-stone-600 dark:text-zinc-400 pt-0.5">
-                  <span className="flex items-center gap-1">
-                    <MapPin className="h-3.5 w-3.5 text-stone-400" />
-                    <span>{nextRoom ? `${nextRoom.name} · ${nextRoom.building}` : 'Room 204 · Turing Block'}</span>
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <User className="h-3.5 w-3.5 text-stone-400" />
-                    <span>{nextFaculty ? nextFaculty.name : 'Prof. Sunita Roy'}</span>
-                  </span>
-                </div>
+                {nextClass && (
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-stone-600 dark:text-zinc-400 pt-0.5">
+                    <span className="flex items-center gap-1">
+                      <MapPin className="h-3.5 w-3.5 text-stone-400" />
+                      <span>{nextRoom ? `${nextRoom.name} · ${nextRoom.building}` : '—'}</span>
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <User className="h-3.5 w-3.5 text-stone-400" />
+                      <span>{facultyName(nextClass.session.facultyId)}</span>
+                    </span>
+                  </div>
+                )}
               </div>
 
               <div className="shrink-0">
@@ -236,46 +339,67 @@ export function StudentPortalView() {
                   Today's Schedule
                 </span>
                 <div className="text-base font-bold text-stone-900 dark:text-zinc-100 font-serif">
-                  Monday, 04 October
+                  {now.toLocaleDateString('en-GB', { weekday: 'long', day: '2-digit', month: 'long' })}
                 </div>
                 <div className="text-xs text-stone-500 dark:text-zinc-400 mt-1">
-                  4 scheduled classes · 1 cancelled
+                  {isWorkingDay
+                    ? `${todayScheduled} scheduled class${todayScheduled === 1 ? '' : 'es'} · ${todayCancelled} cancelled`
+                    : `${todayName} isn't a working day — no classes today`}
                 </div>
               </div>
 
               <div className="mt-3 pt-3 border-t border-[#E5E2D9] dark:border-zinc-800 flex items-center justify-between text-xs">
                 <span className="text-stone-500 dark:text-zinc-400">Class Section</span>
-                <span className="font-semibold text-stone-800 dark:text-zinc-200">{currentSection.name}</span>
+                <span className="font-semibold text-stone-800 dark:text-zinc-200">
+                  {currentSection.name}{subName(subSectionId ?? undefined) ? ` · ${subName(subSectionId ?? undefined)}` : ''}
+                </span>
               </div>
             </div>
           </div>
 
-          {/* Academic Alert: Cancelled Class */}
-          <div className="p-4 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-            <div className="flex items-start gap-3">
-              <div className="w-6 h-6 rounded-md bg-[#8C1B2E]/10 text-[#8C1B2E] dark:text-red-400 flex items-center justify-center shrink-0 font-bold mt-0.5">
-                <AlertTriangle className="h-3.5 w-3.5" />
-              </div>
-              <div>
-                <div className="font-semibold text-stone-900 dark:text-zinc-100">
-                  Monday · 08:00–09:00 · CS501 Database Management Systems cancelled
+          {/* Academic Alert: Cancelled Classes */}
+          {cancelledSessions.length > 0 && (
+            <div className="p-4 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+              <div className="flex items-start gap-3">
+                <div className="w-6 h-6 rounded-md bg-[#8C1B2E]/10 text-[#8C1B2E] dark:text-red-400 flex items-center justify-center shrink-0 font-bold mt-0.5">
+                  <AlertTriangle className="h-3.5 w-3.5" />
                 </div>
-                <div className="text-stone-500 dark:text-zinc-400 mt-0.5">
-                  Replacement class times are available. Please select the time that works best for your section.
+                <div className="space-y-0.5">
+                  {cancelledSessions.map(s => {
+                    const c = courseOf(s.courseId);
+                    const makeup = sectionSessions.find(m => m.originalSessionId === s.id && m.status !== 'Cancelled');
+                    return (
+                      <div key={s.id} className="font-semibold text-stone-900 dark:text-zinc-100">
+                        {s.day} · {slotTime(s.timeSlotId)} · {c ? `${c.code} ${c.name}` : s.courseId} cancelled
+                        {makeup && (
+                          <span className="font-normal text-stone-500 dark:text-zinc-400">
+                            {' '}— replacement on {makeup.day} {slotTime(makeup.timeSlotId)}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {sectionPolls.length > 0 && (
+                    <div className="text-stone-500 dark:text-zinc-400 mt-0.5">
+                      Replacement class times are available. Please select the time that works best for your section.
+                    </div>
+                  )}
                 </div>
               </div>
-            </div>
 
-            <div className="shrink-0">
-              <a
-                href="#replacement-vote-section"
-                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-[#8C1B2E] hover:bg-[#721525] text-white font-medium text-xs shadow-xs transition-colors"
-              >
-                <span>View options</span>
-                <ChevronRight className="h-3 w-3" />
-              </a>
+              {sectionPolls.length > 0 && (
+                <div className="shrink-0">
+                  <a
+                    href="#replacement-vote-section"
+                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-[#8C1B2E] hover:bg-[#721525] text-white font-medium text-xs shadow-xs transition-colors"
+                  >
+                    <span>View options</span>
+                    <ChevronRight className="h-3 w-3" />
+                  </a>
+                </div>
+              )}
             </div>
-          </div>
+          )}
 
           {/* Today's Classes List (Clean Academic Preview) */}
           <div className="space-y-3">
@@ -284,172 +408,182 @@ export function StudentPortalView() {
                 Today's Classes
               </h2>
               <span className="text-xs text-stone-500 dark:text-zinc-400 font-mono">
-                Monday · Room 204
+                {todayName}{homeRoom ? ` · ${homeRoom.name}` : ''}
               </span>
             </div>
 
             <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl overflow-hidden divide-y divide-[#E5E2D9] dark:divide-zinc-800 text-xs">
-              {TIME_SLOTS.slice(0, 7).map(slot => {
-                const isLunch = slot.id === 'ts-5';
-                const session = mondaySessions.find(s => s.timeSlotId === slot.id);
-                const course = session ? courses.find(c => c.id === session.courseId) : null;
-                const faculty = session ? facultyMembers.find(f => f.id === session.facultyId) : null;
-                const room = session ? rooms.find(r => r.id === session.roomId) : null;
-                const isNow = slot.id === 'ts-3';
-
-                if (isLunch) {
-                  return (
-                    <div key={slot.id} className="p-3 bg-[#F4F2EC] dark:bg-zinc-950/40 flex items-center justify-between text-stone-500 dark:text-zinc-400">
-                      <div className="flex items-center gap-2 w-32 shrink-0 font-mono text-[11px]">
-                        <span>{slot.startTime}–{slot.endTime}</span>
+              {!isWorkingDay ? (
+                <div className="p-4 text-stone-500 dark:text-zinc-400 italic">
+                  No classes today — {todayName} isn't a working day.
+                </div>
+              ) : (
+                timeSlots.map(slot => {
+                  if (isBreakSlot(slot)) {
+                    return (
+                      <div key={slot.id} className="p-3 bg-[#F4F2EC] dark:bg-zinc-950/40 flex items-center justify-between text-stone-500 dark:text-zinc-400">
+                        <div className="flex items-center gap-2 w-32 shrink-0 font-mono text-[11px]">
+                          <span>{slot.startTime}–{slot.endTime}</span>
+                        </div>
+                        <span className="font-medium text-stone-700 dark:text-zinc-300">{isLunchSlot(slot) ? 'Lunch Break' : 'Break'}</span>
+                        <span className="text-[11px] text-stone-400">No classes</span>
                       </div>
-                      <span className="font-medium text-stone-700 dark:text-zinc-300">Lunch Break</span>
-                      <span className="text-[11px] text-stone-400">No classes</span>
+                    );
+                  }
+
+                  const slotSessions = sessionsAt(todayName, slot.id);
+                  const isNow = isNowSlot(todayName, slot);
+
+                  return (
+                    <div
+                      key={slot.id}
+                      className={`p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-colors ${
+                        slotSessions.some(s => s.status === 'Cancelled')
+                          ? 'bg-rose-50/30 dark:bg-rose-950/10'
+                          : isNow
+                          ? 'bg-[#8C1B2E]/5 dark:bg-red-950/20'
+                          : ''
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 text-stone-500 dark:text-zinc-400 w-32 shrink-0 font-mono text-[11px]">
+                        <span>{slot.startTime}–{slot.endTime}</span>
+                        {isNow && (
+                          <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-[#8C1B2E] text-white">
+                            Now
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex-1 space-y-2">
+                        {slotSessions.length === 0 ? (
+                          <span className="text-stone-400 dark:text-zinc-500 italic">Free period</span>
+                        ) : (
+                          slotSessions.map(session => {
+                            const course = courseOf(session.courseId);
+                            return (
+                              <div
+                                key={session.id}
+                                onClick={() => setSelectedSession(session)}
+                                className="cursor-pointer rounded hover:bg-white dark:hover:bg-zinc-800/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+                              >
+                                <div>
+                                  <div className="flex items-center gap-2 font-medium text-stone-900 dark:text-zinc-100">
+                                    <span className="font-mono font-semibold text-[#8C1B2E] dark:text-red-400">{course?.code ?? '—'}</span>
+                                    <span className="text-stone-300">·</span>
+                                    <span>{course?.name ?? session.courseId}</span>
+                                    {session.status === 'Cancelled' && (
+                                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-100 dark:bg-rose-950 text-rose-800 dark:text-rose-300 border border-rose-200 dark:border-rose-900 font-medium">
+                                        Cancelled
+                                      </span>
+                                    )}
+                                    {session.type === 'Lab' && (
+                                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-950 text-blue-800 dark:text-blue-300 border border-blue-200 dark:border-blue-900 font-medium">
+                                        Lab{subName(session.subSectionId) ? ` · ${subName(session.subSectionId)}` : ''}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-[11px] text-stone-500 dark:text-zinc-400 mt-0.5 flex items-center gap-3">
+                                    <span>{facultyName(session.facultyId)}</span>
+                                    <span>·</span>
+                                    <span>{roomOf(session.roomId)?.name ?? '—'}</span>
+                                  </div>
+                                </div>
+
+                                <span className="text-[11px] text-stone-400 dark:text-zinc-500 hidden sm:inline">
+                                  Details →
+                                </span>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
                     </div>
                   );
-                }
+                })
+              )}
+            </div>
+          </div>
 
+          {/* Replacement Time Voting (polls for this section) */}
+          {sectionPolls.length > 0 && (
+            <div id="replacement-vote-section" className="space-y-3 pt-2">
+              <div>
+                <h2 className="text-base font-bold text-stone-900 dark:text-zinc-100 font-serif">
+                  Choose a replacement class time
+                </h2>
+                <p className="text-xs text-stone-500 dark:text-zinc-400 mt-0.5">
+                  Select the time that works best for your section.
+                </p>
+              </div>
+
+              {sectionPolls.map(poll => {
+                const pollCourse = courseOf(poll.courseId);
+                const totalVotes = poll.options.reduce((sum, o) => sum + o.votes, 0) || 1;
                 return (
-                  <div
-                    key={slot.id}
-                    onClick={() => session && setSelectedSession(session)}
-                    className={`p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-colors ${
-                      session ? 'cursor-pointer hover:bg-white dark:hover:bg-zinc-800/60' : ''
-                    } ${
-                      session?.status === 'Cancelled'
-                        ? 'bg-rose-50/30 dark:bg-rose-950/10'
-                        : isNow
-                        ? 'bg-[#8C1B2E]/5 dark:bg-red-950/20'
-                        : ''
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 text-stone-500 dark:text-zinc-400 w-32 shrink-0 font-mono text-[11px]">
-                      <span>{slot.startTime}–{slot.endTime}</span>
-                      {isNow && (
-                        <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-[#8C1B2E] text-white">
-                          Now
-                        </span>
-                      )}
+                  <div key={poll.id} className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl p-5 space-y-4 text-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-[#E5E2D9] dark:border-zinc-800">
+                      <div className="font-semibold text-stone-900 dark:text-zinc-100">
+                        {pollCourse ? `${pollCourse.code} · ${pollCourse.name} — ` : ''}{poll.question}
+                      </div>
+                      <div className="text-stone-500 dark:text-zinc-400 text-[11px]">
+                        {poll.votedStudentsCount} responses recorded
+                      </div>
                     </div>
 
-                    <div className="flex-1">
-                      {session && course ? (
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                          <div>
-                            <div className="flex items-center gap-2 font-medium text-stone-900 dark:text-zinc-100">
-                              <span className="font-mono font-semibold text-[#8C1B2E] dark:text-red-400">{course.code}</span>
-                              <span className="text-stone-300">·</span>
-                              <span>{course.name}</span>
-                              {session.status === 'Cancelled' && (
-                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-100 dark:bg-rose-950 text-rose-800 dark:text-rose-300 border border-rose-200 dark:border-rose-900 font-medium">
-                                  Cancelled
-                                </span>
-                              )}
-                              {session.type === 'Lab' && (
-                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-950 text-blue-800 dark:text-blue-300 border border-blue-200 dark:border-blue-900 font-medium">
-                                  Lab
-                                </span>
-                              )}
-                            </div>
-                            <div className="text-[11px] text-stone-500 dark:text-zinc-400 mt-0.5 flex items-center gap-3">
-                              <span>{faculty?.name || 'Assigned Faculty'}</span>
-                              <span>·</span>
-                              <span>{room?.name || 'Room 204'}</span>
+                    <div className="space-y-3">
+                      {poll.options.map(opt => {
+                        const percentage = Math.round((opt.votes / totalVotes) * 100);
+                        const isSelected = poll.userVotedOptionId === opt.id;
+
+                        return (
+                          <div
+                            key={opt.id}
+                            className={`p-4 rounded-xl border transition-all ${
+                              isSelected
+                                ? 'bg-white dark:bg-zinc-950 border-[#8C1B2E]/40 dark:border-red-900/60 shadow-xs'
+                                : 'bg-white dark:bg-zinc-900/80 border-[#E5E2D9] dark:border-zinc-800'
+                            }`}
+                          >
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                              <div className="space-y-1">
+                                <div className="font-bold text-stone-900 dark:text-zinc-100 text-sm">
+                                  {opt.timeSlotLabel}
+                                </div>
+                                <div className="text-xs text-stone-500 dark:text-zinc-400">
+                                  {percentage}% of students selected this option
+                                </div>
+                              </div>
+
+                              <div className="shrink-0">
+                                <button
+                                  onClick={() => handleVote(poll.id, opt.id)}
+                                  disabled={poll.userHasVoted || votingPollId === poll.id}
+                                  className={`px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                                    isSelected
+                                      ? 'bg-[#8C1B2E] text-white cursor-default'
+                                      : 'bg-white dark:bg-zinc-800 border border-[#E5E2D9] dark:border-zinc-700 hover:bg-[#8C1B2E] hover:text-white text-stone-800 dark:text-zinc-200 disabled:opacity-50 disabled:pointer-events-none'
+                                  }`}
+                                >
+                                  {isSelected ? 'Selected' : 'Select this time'}
+                                </button>
+                              </div>
                             </div>
                           </div>
-
-                          <span className="text-[11px] text-stone-400 dark:text-zinc-500 hidden sm:inline">
-                            Details →
-                          </span>
-                        </div>
-                      ) : (
-                        <span className="text-stone-400 dark:text-zinc-500 italic">Free period</span>
-                      )}
+                        );
+                      })}
                     </div>
+
+                    {poll.userHasVoted && (
+                      <div className="p-3 rounded-lg bg-[#F4F2EC] dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 text-stone-700 dark:text-zinc-300 text-xs flex items-center gap-2">
+                        <CheckCircle2 className="h-4 w-4 text-[#8C1B2E] shrink-0" />
+                        <span>Your choice has been recorded.</span>
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
-          </div>
-
-          {/* Replacement Time Voting Component */}
-          <div id="replacement-vote-section" className="space-y-3 pt-2">
-            <div>
-              <h2 className="text-base font-bold text-stone-900 dark:text-zinc-100 font-serif">
-                Choose a replacement class time
-              </h2>
-              <p className="text-xs text-stone-500 dark:text-zinc-400 mt-0.5">
-                Select the time that works best for your section.
-              </p>
-            </div>
-
-            {activePoll && (
-              <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl p-5 space-y-4 text-xs">
-                <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-[#E5E2D9] dark:border-zinc-800">
-                  <div className="font-semibold text-stone-900 dark:text-zinc-100">
-                    CS501 · Database Management Systems (Replacement for Monday 08:00)
-                  </div>
-                  <div className="text-stone-500 dark:text-zinc-400 text-[11px]">
-                    {activePoll.votedStudentsCount} responses recorded
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  {activePoll.options.map(opt => {
-                    const totalVotes = activePoll.options.reduce((sum, o) => sum + o.votes, 0) || 1;
-                    const percentage = Math.round((opt.votes / totalVotes) * 100);
-                    const isSelected = activePoll.userVotedOptionId === opt.id || hasVotedLocally;
-
-                    return (
-                      <div
-                        key={opt.id}
-                        className={`p-4 rounded-xl border transition-all ${
-                          isSelected
-                            ? 'bg-white dark:bg-zinc-950 border-[#8C1B2E]/40 dark:border-red-900/60 shadow-xs'
-                            : 'bg-white dark:bg-zinc-900/80 border-[#E5E2D9] dark:border-zinc-800'
-                        }`}
-                      >
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                          <div className="space-y-1">
-                            <div className="font-bold text-stone-900 dark:text-zinc-100 text-sm">
-                              {opt.timeSlotLabel}
-                            </div>
-                            <div className="text-xs text-stone-500 dark:text-zinc-400">
-                              {percentage}% of students selected this option
-                            </div>
-                          </div>
-
-                          <div className="shrink-0">
-                            <button
-                              onClick={() => {
-                                votePoll(activePoll.id, opt.id);
-                                setHasVotedLocally(true);
-                              }}
-                              disabled={activePoll.userHasVoted || hasVotedLocally}
-                              className={`px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                                isSelected
-                                  ? 'bg-[#8C1B2E] text-white cursor-default'
-                                  : 'bg-white dark:bg-zinc-800 border border-[#E5E2D9] dark:border-zinc-700 hover:bg-[#8C1B2E] hover:text-white text-stone-800 dark:text-zinc-200'
-                              }`}
-                            >
-                              {isSelected ? 'Selected' : 'Select this time'}
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {(activePoll.userHasVoted || hasVotedLocally) && (
-                  <div className="p-3 rounded-lg bg-[#F4F2EC] dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 text-stone-700 dark:text-zinc-300 text-xs flex items-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-[#8C1B2E] shrink-0" />
-                    <span>Your choice has been recorded.</span>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+          )}
         </div>
       )}
 
@@ -458,7 +592,7 @@ export function StudentPortalView() {
       {/* ============================================================ */}
       {currentTab === 'timetable' && (
         <div className="space-y-4 animate-in fade-in duration-150">
-          
+
           {/* Timetable Header & Controls */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
@@ -466,7 +600,7 @@ export function StudentPortalView() {
                 Weekly Academic Schedule
               </h2>
               <p className="text-xs text-stone-500 dark:text-zinc-400 mt-0.5">
-                Semester 5 · Section {currentSection.name} · Room 204
+                Semester {currentSection.semester} · Section {currentSection.name}{homeRoom ? ` · ${homeRoom.name}` : ''}
               </p>
             </div>
 
@@ -521,31 +655,29 @@ export function StudentPortalView() {
                         <th
                           key={d}
                           className={`p-3 font-semibold text-center border-r border-[#E5E2D9] dark:border-zinc-800 last:border-r-0 ${
-                            d === 'Monday'
+                            d === todayName
                               ? 'bg-[#8C1B2E]/5 dark:bg-red-950/20 text-[#8C1B2E] dark:text-red-300'
                               : ''
                           }`}
                         >
                           <div className="uppercase tracking-wider text-[11px] font-bold">{d}</div>
                           <div className="text-[10px] text-stone-400 dark:text-zinc-500 font-normal">
-                            {d === 'Monday' ? 'Today' : ''}
+                            {d === todayName ? 'Today' : ''}
                           </div>
                         </th>
                       ))}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#E5E2D9] dark:divide-zinc-800">
-                    {TIME_SLOTS.map(slot => {
-                      const isLunch = slot.id === 'ts-5';
-
-                      if (isLunch) {
+                    {timeSlots.map(slot => {
+                      if (isBreakSlot(slot)) {
                         return (
                           <tr key={slot.id} className="bg-[#F4F2EC] dark:bg-zinc-950/60">
                             <td className="p-2.5 font-mono text-[11px] text-stone-500 dark:text-zinc-400 border-r border-[#E5E2D9] dark:border-zinc-800 whitespace-nowrap">
                               {slot.startTime}–{slot.endTime}
                             </td>
-                            <td colSpan={5} className="p-2.5 text-center text-xs font-medium text-stone-500 dark:text-zinc-400 tracking-wide">
-                              Lunch Break
+                            <td colSpan={days.length} className="p-2.5 text-center text-xs font-medium text-stone-500 dark:text-zinc-400 tracking-wide">
+                              {isLunchSlot(slot) ? 'Lunch Break' : 'Break'}
                             </td>
                           </tr>
                         );
@@ -558,70 +690,71 @@ export function StudentPortalView() {
                             {slot.startTime}–{slot.endTime}
                           </td>
 
-                          {/* Days Mon-Fri */}
+                          {/* Working days */}
                           {days.map(d => {
-                            const session = sectionSessions.find(
-                              s => s.day === d && s.timeSlotId === slot.id
-                            );
-                            const course = session ? courses.find(c => c.id === session.courseId) : null;
-                            const faculty = session ? facultyMembers.find(f => f.id === session.facultyId) : null;
-                            const room = session ? rooms.find(r => r.id === session.roomId) : null;
-                            const isNow = d === 'Monday' && slot.id === 'ts-3';
+                            const cellSessions = sessionsAt(d, slot.id);
+                            const isNow = isNowSlot(d, slot);
 
                             return (
                               <td
                                 key={d}
-                                className={`p-1.5 border-r border-[#E5E2D9] dark:border-zinc-800 last:border-r-0 align-top ${
-                                  d === 'Monday' ? 'bg-[#8C1B2E]/3 dark:bg-red-950/10' : ''
+                                className={`p-1.5 border-r border-[#E5E2D9] dark:border-zinc-800 last:border-r-0 align-top space-y-1 ${
+                                  d === todayName ? 'bg-[#8C1B2E]/3 dark:bg-red-950/10' : ''
                                 }`}
                               >
-                                {session && course ? (
-                                  <div
-                                    onClick={() => setSelectedSession(session)}
-                                    className={`p-2.5 rounded-lg border text-left cursor-pointer transition-all hover:-translate-y-0.5 ${
-                                      session.status === 'Cancelled'
-                                        ? 'bg-rose-50/50 dark:bg-rose-950/20 border-rose-200 dark:border-rose-900/50'
-                                        : session.type === 'Lab'
-                                        ? 'bg-blue-50/40 dark:bg-blue-950/20 border-blue-200 dark:border-blue-900/40'
-                                        : isNow
-                                        ? 'bg-white dark:bg-zinc-800 border-[#8C1B2E] shadow-xs'
-                                        : 'bg-white dark:bg-zinc-800/80 border-[#E5E2D9] dark:border-zinc-700/80 hover:border-stone-400'
-                                    }`}
-                                  >
-                                    <div className="flex items-center justify-between gap-1 mb-1">
-                                      <span className="font-mono font-bold text-[#8C1B2E] dark:text-red-400 text-xs">
-                                        {course.code}
-                                      </span>
-                                      {isNow && (
-                                        <span className="text-[9px] font-bold px-1 rounded bg-[#8C1B2E] text-white">
-                                          Now
-                                        </span>
-                                      )}
-                                      {session.status === 'Cancelled' && (
-                                        <span className="text-[9px] font-medium text-rose-700 dark:text-rose-400">
-                                          Cancelled
-                                        </span>
-                                      )}
-                                      {session.type === 'Lab' && (
-                                        <span className="text-[9px] font-medium text-blue-700 dark:text-blue-400">
-                                          Lab
-                                        </span>
-                                      )}
-                                    </div>
-
-                                    <div className="text-xs font-semibold text-stone-900 dark:text-zinc-100 line-clamp-1">
-                                      {course.name}
-                                    </div>
-
-                                    <div className="text-[11px] text-stone-500 dark:text-zinc-400 mt-1 flex items-center justify-between">
-                                      <span className="truncate">{faculty?.name.split(' ').pop()}</span>
-                                      <span className="font-mono">{room?.name || '204'}</span>
-                                    </div>
-                                  </div>
-                                ) : (
+                                {cellSessions.length === 0 ? (
                                   <div className="h-full min-h-[56px] rounded flex items-center justify-center text-[10px] text-stone-300 dark:text-zinc-700">
                                     —
                                   </div>
+                                ) : (
+                                  cellSessions.map(session => {
+                                    const course = courseOf(session.courseId);
+                                    return (
+                                      <div
+                                        key={session.id}
+                                        onClick={() => setSelectedSession(session)}
+                                        className={`p-2.5 rounded-lg border text-left cursor-pointer transition-all hover:-translate-y-0.5 ${
+                                          session.status === 'Cancelled'
+                                            ? 'bg-rose-50/50 dark:bg-rose-950/20 border-rose-200 dark:border-rose-900/50'
+                                            : session.type === 'Lab'
+                                            ? 'bg-blue-50/40 dark:bg-blue-950/20 border-blue-200 dark:border-blue-900/40'
+                                            : isNow
+                                            ? 'bg-white dark:bg-zinc-800 border-[#8C1B2E] shadow-xs'
+                                            : 'bg-white dark:bg-zinc-800/80 border-[#E5E2D9] dark:border-zinc-700/80 hover:border-stone-400'
+                                        }`}
+                                      >
+                                        <div className="flex items-center justify-between gap-1 mb-1">
+                                          <span className="font-mono font-bold text-[#8C1B2E] dark:text-red-400 text-xs">
+                                            {course?.code ?? '—'}
+                                          </span>
+                                          {isNow && (
+                                            <span className="text-[9px] font-bold px-1 rounded bg-[#8C1B2E] text-white">
+                                              Now
+                                            </span>
+                                          )}
+                                          {session.status === 'Cancelled' && (
+                                            <span className="text-[9px] font-medium text-rose-700 dark:text-rose-400">
+                                              Cancelled
+                                            </span>
+                                          )}
+                                          {session.type === 'Lab' && (
+                                            <span className="text-[9px] font-medium text-blue-700 dark:text-blue-400">
+                                              Lab{subName(session.subSectionId) ? ` · ${subName(session.subSectionId)}` : ''}
+                                            </span>
+                                          )}
+                                        </div>
+
+                                        <div className="text-xs font-semibold text-stone-900 dark:text-zinc-100 line-clamp-1">
+                                          {course?.name ?? session.courseId}
+                                        </div>
+
+                                        <div className="text-[11px] text-stone-500 dark:text-zinc-400 mt-1 flex items-center justify-between">
+                                          <span className="truncate">{facultyName(session.facultyId).split(' ').pop()}</span>
+                                          <span className="font-mono">{roomOf(session.roomId)?.name ?? '—'}</span>
+                                        </div>
+                                      </div>
+                                    );
+                                  })
                                 )}
                               </td>
                             );
@@ -657,56 +790,57 @@ export function StudentPortalView() {
 
               {/* Day Agenda Cards */}
               <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl overflow-hidden divide-y divide-[#E5E2D9] dark:divide-zinc-800 text-xs">
-                {TIME_SLOTS.map(slot => {
-                  const isLunch = slot.id === 'ts-5';
-                  const session = sectionSessions.find(
-                    s => s.day === selectedMobileDay && s.timeSlotId === slot.id
-                  );
-                  const course = session ? courses.find(c => c.id === session.courseId) : null;
-                  const faculty = session ? facultyMembers.find(f => f.id === session.facultyId) : null;
-                  const room = session ? rooms.find(r => r.id === session.roomId) : null;
-
-                  if (isLunch) {
+                {timeSlots.map(slot => {
+                  if (isBreakSlot(slot)) {
                     return (
                       <div key={slot.id} className="p-3 bg-[#F4F2EC] dark:bg-zinc-950 flex items-center justify-between text-stone-500">
                         <span className="font-mono text-[11px]">{slot.startTime}–{slot.endTime}</span>
-                        <span className="font-medium">Lunch Break</span>
+                        <span className="font-medium">{isLunchSlot(slot) ? 'Lunch Break' : 'Break'}</span>
                         <span>—</span>
                       </div>
                     );
                   }
 
+                  const slotSessions = sessionsAt(selectedMobileDay, slot.id);
+
                   return (
                     <div
                       key={slot.id}
-                      onClick={() => session && setSelectedSession(session)}
-                      className={`p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${
-                        session ? 'cursor-pointer hover:bg-white dark:hover:bg-zinc-800/60' : ''
-                      }`}
+                      className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
                     >
                       <div className="font-mono text-stone-500 dark:text-zinc-400 w-28 shrink-0 text-[11px]">
                         {slot.startTime}–{slot.endTime}
                       </div>
 
-                      <div className="flex-1">
-                        {session && course ? (
-                          <div>
-                            <div className="font-medium text-stone-900 dark:text-zinc-100 flex items-center gap-2">
-                              <span className="font-mono font-bold text-[#8C1B2E]">{course.code}</span>
-                              <span>·</span>
-                              <span>{course.name}</span>
-                              {session.status === 'Cancelled' && (
-                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-100 dark:bg-rose-950 text-rose-800 dark:text-rose-300 font-medium">
-                                  Cancelled
-                                </span>
-                              )}
-                            </div>
-                            <div className="text-[11px] text-stone-500 dark:text-zinc-400 mt-0.5">
-                              {faculty?.name} · {room?.name || 'Room 204'}
-                            </div>
-                          </div>
-                        ) : (
+                      <div className="flex-1 space-y-2">
+                        {slotSessions.length === 0 ? (
                           <span className="text-stone-400 dark:text-zinc-600 italic">Free period</span>
+                        ) : (
+                          slotSessions.map(session => {
+                            const course = courseOf(session.courseId);
+                            return (
+                              <div
+                                key={session.id}
+                                onClick={() => setSelectedSession(session)}
+                                className="cursor-pointer rounded hover:bg-white dark:hover:bg-zinc-800/60"
+                              >
+                                <div className="font-medium text-stone-900 dark:text-zinc-100 flex items-center gap-2">
+                                  <span className="font-mono font-bold text-[#8C1B2E]">{course?.code ?? '—'}</span>
+                                  <span>·</span>
+                                  <span>{course?.name ?? session.courseId}</span>
+                                  {session.status === 'Cancelled' && (
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-100 dark:bg-rose-950 text-rose-800 dark:text-rose-300 font-medium">
+                                      Cancelled
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[11px] text-stone-500 dark:text-zinc-400 mt-0.5">
+                                  {facultyName(session.facultyId)} · {roomOf(session.roomId)?.name ?? '—'}
+                                  {subName(session.subSectionId) ? ` · ${subName(session.subSectionId)}` : ''}
+                                </div>
+                              </div>
+                            );
+                          })
                         )}
                       </div>
                     </div>
@@ -723,26 +857,37 @@ export function StudentPortalView() {
       {/* ============================================================ */}
       {currentTab === 'courses' && (
         <div className="space-y-4 animate-in fade-in duration-150">
-          
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
-              <h2 className="text-xl sm:text-2xl font-bold font-serif text-stone-900 dark:text-zinc-100 tracking-tight">
-                My Courses
-              </h2>
-              <p className="text-xs text-stone-500 dark:text-zinc-400 mt-0.5">
-                Semester 5 · Section {currentSection.name} · {enrolledCourses.length} Registered Courses ({totalCredits} Credits)
-              </p>
-            </div>
 
-            <div className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 text-stone-700 dark:text-zinc-300">
-              Total Enrolled Credits: {totalCredits}
-            </div>
-          </div>
+          {(() => {
+            const totalCredits = enrolledCourses.reduce((sum, c) => sum + c.credits, 0);
+            return (
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-xl sm:text-2xl font-bold font-serif text-stone-900 dark:text-zinc-100 tracking-tight">
+                    My Courses
+                  </h2>
+                  <p className="text-xs text-stone-500 dark:text-zinc-400 mt-0.5">
+                    Semester {currentSection.semester} · Section {currentSection.name} · {enrolledCourses.length} Registered Courses ({totalCredits} Credits)
+                  </p>
+                </div>
+
+                <div className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 text-stone-700 dark:text-zinc-300">
+                  Total Enrolled Credits: {totalCredits}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Courses List / Table */}
           <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl overflow-hidden divide-y divide-[#E5E2D9] dark:divide-zinc-800 text-xs">
+            {enrolledCourses.length === 0 && (
+              <div className="p-4 text-stone-500 dark:text-zinc-400 italic">No courses in your published timetable yet.</div>
+            )}
             {enrolledCourses.map(course => {
-              const primaryFac = facultyMembers.find(f => f.id === course.primaryFacultyId);
+              const courseSessions = sectionSessions.filter(s => s.courseId === course.id);
+              const facultyNames = [...new Set(courseSessions.map(s => facultyName(s.facultyId)))].join(', ');
+              const roomNames = [...new Set(courseSessions.map(s => roomOf(s.roomId)?.name).filter(Boolean))].join(' & ');
+              const types = [...new Set(courseSessions.map(s => s.type))].join(' + ');
 
               return (
                 <div key={course.id} className="p-4 hover:bg-white/60 dark:hover:bg-zinc-800/30 transition-colors">
@@ -764,14 +909,14 @@ export function StudentPortalView() {
                       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-stone-500 dark:text-zinc-400 text-xs">
                         <span className="flex items-center gap-1">
                           <User className="h-3.5 w-3.5 text-stone-400" />
-                          <span>Faculty: {primaryFac?.name || 'Department Faculty'}</span>
+                          <span>Faculty: {facultyNames || '—'}</span>
                         </span>
                         <span className="flex items-center gap-1">
                           <MapPin className="h-3.5 w-3.5 text-stone-400" />
-                          <span>Room: {course.requiresLab ? 'Room 204 & Lab 301' : 'Room 204'}</span>
+                          <span>Room: {roomNames || '—'}</span>
                         </span>
                         <span>
-                          Type: {course.requiresLab ? 'Lecture + Lab' : 'Lecture'}
+                          Type: {types || '—'}
                         </span>
                       </div>
                     </div>
@@ -793,17 +938,17 @@ export function StudentPortalView() {
       )}
 
       {/* ============================================================ */}
-      {/* 5. TAB 4: MY SECTION (CSE-A) */}
+      {/* 5. TAB 4: MY SECTION */}
       {/* ============================================================ */}
       {currentTab === 'section' && (
         <div className="space-y-6 animate-in fade-in duration-150">
-          
+
           <div>
             <h2 className="text-xl sm:text-2xl font-bold font-serif text-stone-900 dark:text-zinc-100 tracking-tight">
               Section {currentSection.name}
             </h2>
             <p className="text-xs text-stone-500 dark:text-zinc-400 mt-0.5">
-              B.Tech Computer Science & Engineering · Semester {currentSection.semester} · Batch 2024
+              {currentSection.program} · Semester {currentSection.semester} · Batch {currentSection.batchYear}
             </p>
           </div>
 
@@ -819,21 +964,23 @@ export function StudentPortalView() {
             <div className="p-4 rounded-xl bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800">
               <span className="text-[11px] text-stone-500 dark:text-zinc-400 block mb-0.5">Home Classroom</span>
               <span className="text-base font-bold text-stone-900 dark:text-zinc-100 font-serif">
-                Room 204
+                {homeRoom?.name ?? 'Not assigned'}
               </span>
             </div>
 
             <div className="p-4 rounded-xl bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800">
               <span className="text-[11px] text-stone-500 dark:text-zinc-400 block mb-0.5">Class Representative</span>
               <span className="text-xs font-semibold text-stone-900 dark:text-zinc-100 truncate block">
-                {currentSection.classRepresentative?.name || 'Aarav Mehta'}
+                {currentSection.classRepresentative?.name || 'Not assigned'}
               </span>
             </div>
 
             <div className="p-4 rounded-xl bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800">
-              <span className="text-[11px] text-stone-500 dark:text-zinc-400 block mb-0.5">Faculty Mentor</span>
+              <span className="text-[11px] text-stone-500 dark:text-zinc-400 mb-0.5 flex items-center gap-1.5">
+                Faculty Mentor <SampleBadge />
+              </span>
               <span className="text-xs font-semibold text-stone-900 dark:text-zinc-100 truncate block">
-                Prof. Arvind Sharma
+                {SAMPLE_MENTOR}
               </span>
             </div>
           </div>
@@ -843,57 +990,62 @@ export function StudentPortalView() {
             <h3 className="text-sm font-bold text-stone-900 dark:text-zinc-100 font-serif">
               Laboratory Batches
             </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-              <div className="p-4 rounded-xl bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800">
-                <div className="flex items-center justify-between font-semibold text-stone-900 dark:text-zinc-100 mb-1">
-                  <span>Batch A1 (Roll No 102303001–102303026)</span>
-                  <span className="text-[#8C1B2E] dark:text-red-400 text-[11px] font-bold">Your Batch</span>
-                </div>
-                <p className="text-stone-500 dark:text-zinc-400 text-[11px]">
-                  26 Students · Practical sessions in Computer Lab 301 (Turing Block)
-                </p>
+            {(currentSection.subSections ?? []).length === 0 ? (
+              <div className="p-4 rounded-xl bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 text-xs text-stone-500 dark:text-zinc-400 italic">
+                No lab batches defined for this section.
               </div>
-
-              <div className="p-4 rounded-xl bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800">
-                <div className="font-semibold text-stone-900 dark:text-zinc-100 mb-1">
-                  Batch A2 (Roll No 102303027–102303052)
-                </div>
-                <p className="text-stone-500 dark:text-zinc-400 text-[11px]">
-                  26 Students · Practical sessions in Computer Lab 302 (Turing Block)
-                </p>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                {(currentSection.subSections ?? []).map((sub, i) => {
+                  const labRooms = [
+                    ...new Set(sessions.filter(s => s.subSectionId === sub.id).map(s => roomOf(s.roomId)?.name).filter(Boolean)),
+                  ].join(', ');
+                  const rollRange = SAMPLE_BATCH_ROLL_RANGES[i];
+                  return (
+                    <div key={sub.id} className="p-4 rounded-xl bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800">
+                      <div className="flex items-center justify-between gap-2 font-semibold text-stone-900 dark:text-zinc-100 mb-1">
+                        <span className="flex flex-wrap items-center gap-1.5">
+                          <span>Batch {sub.name}</span>
+                          {rollRange && (
+                            <>
+                              <span className="font-normal text-stone-500 dark:text-zinc-400">(Roll No {rollRange})</span>
+                              <SampleBadge />
+                            </>
+                          )}
+                        </span>
+                        {sub.id === subSectionId && (
+                          <span className="text-[#8C1B2E] dark:text-red-400 text-[11px] font-bold shrink-0">Your Batch</span>
+                        )}
+                      </div>
+                      <p className="text-stone-500 dark:text-zinc-400 text-[11px]">
+                        {sub.studentCount} Students{labRooms ? ` · Practical sessions in ${labRooms}` : ''}
+                      </p>
+                    </div>
+                  );
+                })}
               </div>
-            </div>
+            )}
           </div>
 
           {/* Section Notices */}
           <div className="space-y-3">
-            <h3 className="text-sm font-bold text-stone-900 dark:text-zinc-100 font-serif">
-              Section Announcements
+            <h3 className="text-sm font-bold text-stone-900 dark:text-zinc-100 font-serif flex items-center gap-2">
+              Section Announcements <SampleBadge />
             </h3>
             <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl divide-y divide-[#E5E2D9] dark:divide-zinc-800 text-xs">
-              <div className="p-4 space-y-1">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-stone-900 dark:text-zinc-100">
-                    DBMS Lab Practical Assignment Submission
-                  </span>
-                  <span className="text-[10px] text-stone-400">Yesterday</span>
+              {SAMPLE_ANNOUNCEMENTS.map(a => (
+                <div key={a.title} className="p-4 space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-stone-900 dark:text-zinc-100">
+                      {a.title}
+                    </span>
+                    <span className="text-[10px] text-stone-400">{a.when}</span>
+                  </div>
+                  <p className="text-stone-600 dark:text-zinc-400 leading-relaxed">
+                    {a.body}
+                  </p>
                 </div>
-                <p className="text-stone-600 dark:text-zinc-400 leading-relaxed">
-                  Batch A1 practical scheduled for Thursday 13:00 will take place in Turing Lab 301. Bring your completed Lab 3 queries.
-                </p>
-              </div>
-
-              <div className="p-4 space-y-1">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-stone-900 dark:text-zinc-100">
-                    Rescheduled DBMS Lecture Consensus Vote
-                  </span>
-                  <span className="text-[10px] text-stone-400">2 days ago</span>
-                </div>
-                <p className="text-stone-600 dark:text-zinc-400 leading-relaxed">
-                  Voting for Monday's cancelled DBMS class is currently live on your student dashboard. Please submit your preferred time.
-                </p>
-              </div>
+              ))}
             </div>
           </div>
         </div>
@@ -904,18 +1056,24 @@ export function StudentPortalView() {
       {/* ============================================================ */}
       {selectedSession && (
         <div className="fixed inset-0 bg-stone-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
-          <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl max-w-md w-full p-6 shadow-xl space-y-4 text-stone-900 dark:text-zinc-100">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="student-session-dialog-title"
+            className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl max-w-md w-full p-6 shadow-xl space-y-4 text-stone-900 dark:text-zinc-100"
+          >
             <div className="flex items-start justify-between">
               <div>
                 <span className="text-[11px] font-mono font-bold text-[#8C1B2E] dark:text-red-400">
-                  {courses.find(c => c.id === selectedSession.courseId)?.code}
+                  {courseOf(selectedSession.courseId)?.code}
                 </span>
-                <h3 className="text-base font-bold font-serif mt-0.5">
-                  {courses.find(c => c.id === selectedSession.courseId)?.name}
+                <h3 id="student-session-dialog-title" className="text-base font-bold font-serif mt-0.5">
+                  {courseOf(selectedSession.courseId)?.name ?? selectedSession.courseId}
                 </h3>
               </div>
               <button
                 onClick={() => setSelectedSession(null)}
+                aria-label="Close"
                 className="p-1 rounded text-stone-400 hover:text-stone-700 dark:hover:text-zinc-200"
               >
                 <X className="h-4 w-4" />
@@ -925,19 +1083,21 @@ export function StudentPortalView() {
             <div className="space-y-2.5 text-xs bg-white dark:bg-zinc-950 p-4 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 divide-y divide-[#E5E2D9] dark:divide-zinc-800/60">
               <div className="flex justify-between py-1.5 first:pt-0">
                 <span className="text-stone-500 dark:text-zinc-400">Instructor:</span>
-                <span className="font-semibold text-stone-800 dark:text-zinc-200">{facultyMembers.find(f => f.id === selectedSession.facultyId)?.name}</span>
+                <span className="font-semibold text-stone-800 dark:text-zinc-200">{facultyName(selectedSession.facultyId)}</span>
               </div>
               <div className="flex justify-between py-1.5">
                 <span className="text-stone-500 dark:text-zinc-400">Room:</span>
-                <span className="font-semibold text-stone-800 dark:text-zinc-200">{rooms.find(r => r.id === selectedSession.roomId)?.name} ({rooms.find(r => r.id === selectedSession.roomId)?.building})</span>
+                <span className="font-semibold text-stone-800 dark:text-zinc-200">{selectedRoom ? `${selectedRoom.name} (${selectedRoom.building})` : '—'}</span>
               </div>
               <div className="flex justify-between py-1.5">
                 <span className="text-stone-500 dark:text-zinc-400">Scheduled Time:</span>
-                <span className="font-semibold text-stone-800 dark:text-zinc-200">{selectedSession.day} · {TIME_SLOTS.find(t => t.id === selectedSession.timeSlotId)?.startTime}–{TIME_SLOTS.find(t => t.id === selectedSession.timeSlotId)?.endTime}</span>
+                <span className="font-semibold text-stone-800 dark:text-zinc-200">{selectedSession.day} · {slotTime(selectedSession.timeSlotId)}</span>
               </div>
               <div className="flex justify-between py-1.5">
                 <span className="text-stone-500 dark:text-zinc-400">Section:</span>
-                <span className="font-semibold text-stone-800 dark:text-zinc-200">{currentSection.name}</span>
+                <span className="font-semibold text-stone-800 dark:text-zinc-200">
+                  {currentSection.name}{subName(selectedSession.subSectionId) ? ` · ${subName(selectedSession.subSectionId)}` : ''}
+                </span>
               </div>
               <div className="flex justify-between py-1.5">
                 <span className="text-stone-500 dark:text-zinc-400">Session Type:</span>
@@ -952,7 +1112,7 @@ export function StudentPortalView() {
 
               {selectedSession.status === 'Cancelled' && (
                 <div className="pt-2 text-rose-700 dark:text-rose-400 text-[11px] leading-relaxed">
-                  Reason: {selectedSession.cancellationReason || 'Faculty unavailable for scheduled session.'}
+                  Reason: {selectedSession.cancellationReason || 'No reason given.'}
                 </div>
               )}
             </div>
@@ -974,18 +1134,24 @@ export function StudentPortalView() {
       {/* ============================================================ */}
       {selectedCourseDetail && (
         <div className="fixed inset-0 bg-stone-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
-          <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl max-w-lg w-full p-6 shadow-xl space-y-4 text-stone-900 dark:text-zinc-100">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="student-course-dialog-title"
+            className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl max-w-lg w-full p-6 shadow-xl space-y-4 text-stone-900 dark:text-zinc-100"
+          >
             <div className="flex items-start justify-between">
               <div>
                 <span className="text-[11px] font-mono font-bold text-[#8C1B2E] dark:text-red-400">
                   {selectedCourseDetail.code}
                 </span>
-                <h3 className="text-base font-bold font-serif mt-0.5">
+                <h3 id="student-course-dialog-title" className="text-base font-bold font-serif mt-0.5">
                   {selectedCourseDetail.name}
                 </h3>
               </div>
               <button
                 onClick={() => setSelectedCourseDetail(null)}
+                aria-label="Close"
                 className="p-1 rounded text-stone-400 hover:text-stone-700 dark:hover:text-zinc-200"
               >
                 <X className="h-4 w-4" />
@@ -1000,22 +1166,26 @@ export function StudentPortalView() {
                 </div>
                 <div>
                   <span className="text-[10px] text-stone-400 block">Department</span>
-                  <span className="font-bold text-stone-900 dark:text-zinc-100">CSED</span>
+                  <span className="font-bold text-stone-900 dark:text-zinc-100">
+                    {departments.find(d => d.id === selectedCourseDetail.departmentId)?.code ?? '—'}
+                  </span>
                 </div>
                 <div>
                   <span className="text-[10px] text-stone-400 block">Weekly Lectures</span>
-                  <span className="font-bold text-stone-900 dark:text-zinc-100">{selectedCourseDetail.requiredLecturesPerWeek || 3} Hours</span>
+                  <span className="font-bold text-stone-900 dark:text-zinc-100">{selectedCourseDetail.requiredLecturesPerWeek} Hours</span>
                 </div>
                 <div>
                   <span className="text-[10px] text-stone-400 block">Weekly Labs</span>
-                  <span className="font-bold text-stone-900 dark:text-zinc-100">{selectedCourseDetail.requiredLabsPerWeek || 0} Hours</span>
+                  <span className="font-bold text-stone-900 dark:text-zinc-100">{selectedCourseDetail.requiredLabsPerWeek} Hours</span>
                 </div>
               </div>
 
               <div className="p-3 bg-white dark:bg-zinc-950 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 space-y-1">
-                <span className="text-[11px] font-semibold text-stone-900 dark:text-zinc-100 block">Course Syllabus Coverage</span>
+                <span className="text-[11px] font-semibold text-stone-900 dark:text-zinc-100 flex items-center gap-1.5">
+                  Course Syllabus Coverage <SampleBadge />
+                </span>
                 <p className="text-[11px] text-stone-500 dark:text-zinc-400 leading-relaxed">
-                  Relational Algebra, SQL DDL/DML, Normalization (1NF to BCNF), Transaction Processing (ACID), Concurrency Control, and Indexing with B+ Trees.
+                  {SAMPLE_SYLLABUS_TEXT}
                 </p>
               </div>
             </div>

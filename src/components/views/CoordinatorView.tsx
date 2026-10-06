@@ -4,16 +4,24 @@ import { useAuth } from '../../context/AuthContext';
 import {
   CheckCircle2,
   XCircle,
-  ArrowRight,
-  Clock,
   Sparkles,
-  Calendar,
   AlertTriangle
 } from 'lucide-react';
 
+// Sample content shown until real requests exist — edit freely.
+const SAMPLE_RECENT_REQUESTS = [
+  { id: 'req-1', type: 'Cancellation', section: 'CSE-A', requestedBy: 'Dr. Arvind Sharma', status: 'Pending', time: 'Today, 07:30 AM' },
+  { id: 'req-2', type: 'Faculty Swap', section: 'CSE-B', requestedBy: 'Dr. Arvind Sharma', status: 'Pending', time: 'Today, 08:15 AM' },
+  { id: 'req-3', type: 'Makeup Class', section: 'CSE-A', requestedBy: 'Prof. Rajesh Kumar', status: 'Approved', time: 'Yesterday, 04:20 PM' },
+];
+
+const formatDate = (iso?: string) =>
+  iso
+    ? new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : '—';
+
 export function CoordinatorView() {
   const {
-    courses,
     facultyMembers,
     rooms,
     sections,
@@ -21,11 +29,18 @@ export function CoordinatorView() {
     allocations,
     publishStatus,
     validationReport,
+    health,
+    versions,
+    activeVersionNumber,
+    academicYear,
+    studentsCount,
+    notifications,
     setActiveView,
     generateDualRoutinesAPI,
   } = useTimetable();
 
   const { currentUser } = useAuth();
+  const canEdit = ['COORDINATOR', 'COLLEGE_ADMIN', 'SUPER_ADMIN'].includes(currentUser?.roleCode ?? '');
   const [isGenerating, setIsGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
 
@@ -35,54 +50,52 @@ export function CoordinatorView() {
   const activeSectionsCount = sections.filter(s => s.status !== 'Inactive').length;
 
   // Real Timetable State Determination
-  const hardViolationsCount = validationReport.hardViolationsCount ?? validationReport.errorCount ?? 0;
+  const activeVersion = versions.find(v => v.versionNumber === activeVersionNumber);
+  // Hard violations of the working draft as measured by the server's validator when the version was saved.
+  const hardViolationsCount = activeVersion?.hardViolationsCount ?? health.hardConstraintViolations;
+  const requiredSessions = allocations.reduce((n, a) => n + a.hoursPerWeek, 0);
   const hasDraft = sessions.length > 0;
   const isPublished = publishStatus === 'Published';
 
-  // 4 Core Backend Readiness Checks
-  const isDataComplete = allocations.length > 0 && activeSectionsCount > 0 && activeFacultyCount > 0 && activeRoomsCount > 0 && (validationReport.errorCount ?? 0) === 0;
+  // 4 Core Readiness Checks
+  const isDataComplete = allocations.length > 0 && activeSectionsCount > 0 && activeFacultyCount > 0 && activeRoomsCount > 0 && validationReport.errorCount === 0;
   const noHardConflicts = hardViolationsCount === 0;
   const facultyConfigured = activeFacultyCount > 0;
   const roomsConfigured = activeRoomsCount > 0;
 
-  const generationAllowed = isDataComplete && noHardConflicts && facultyConfigured && roomsConfigured && validationReport.isReadyForGeneration;
-  const allChecksPassed = generationAllowed;
+  const generationAllowed = isDataComplete && validationReport.isReadyForGeneration;
+  const allChecksPassed = generationAllowed && noHardConflicts;
   const isValidated = hasDraft && noHardConflicts;
 
-  // Real Timestamps
-  const timestampStr = new Date().toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  const timestampStr = formatDate(isPublished ? academicYear.publishedAt : activeVersion?.createdAt);
 
   // Generation Handler
   const handleGenerate = async () => {
-    if (isGenerating || (!generationAllowed && !isPublished)) return;
+    if (isGenerating || !canEdit || (!generationAllowed && !isPublished)) return;
     setIsGenerating(true);
     setGenError(null);
     try {
       const res = await generateDualRoutinesAPI();
-      if (res.success) {
+      // Infeasible runs still return routines with diagnostics, which the generation page shows.
+      if (res.routines.length > 0) {
         setActiveView('generation_validator');
       } else {
         setGenError(res.error || res.message || 'Failed to generate timetable.');
       }
-    } catch (err: any) {
-      setGenError(err.message || 'Generation request failed.');
     } finally {
       setIsGenerating(false);
     }
   };
 
-  // Recent Requests (3 items max)
-  const recentRequests = [
-    { id: 'req-1', type: 'Cancellation', section: 'CSE-A', requestedBy: 'Dr. Arvind Sharma', status: 'Pending', time: 'Today, 07:30 AM' },
-    { id: 'req-2', type: 'Faculty Swap', section: 'CSE-B', requestedBy: 'Dr. Arvind Sharma', status: 'Pending', time: 'Today, 08:15 AM' },
-    { id: 'req-3', type: 'Makeup Class', section: 'CSE-A', requestedBy: 'Prof. Rajesh Kumar', status: 'Approved', time: 'Yesterday, 04:20 PM' },
-  ].slice(0, 3);
+  // Recent Requests (3 items max): real requests from notifications, else sample content.
+  const realRequests = notifications
+    .filter(n => n.type === 'makeup_request' || n.type === 'approval_needed')
+    .slice(0, 3)
+    .map(n => ({ id: n.id, title: n.title, detail: n.message, status: n.read ? 'Read' : 'New', time: formatDate(n.timestamp) }));
+  const isSampleRequests = realRequests.length === 0;
+  const recentRequests = isSampleRequests
+    ? SAMPLE_RECENT_REQUESTS.map(r => ({ id: r.id, title: `${r.type} — ${r.section}`, detail: `Requested by: ${r.requestedBy}`, status: r.status, time: r.time }))
+    : realRequests;
 
   // Workflow Stage Calculation
   let currentStage: 'DATA' | 'GENERATE' | 'REVIEW' | 'PUBLISH' = 'DATA';
@@ -167,7 +180,7 @@ export function CoordinatorView() {
           </div>
 
           <div className="text-left sm:text-right text-xs text-stone-500">
-            <div>{isPublished ? 'Last published:' : 'Last generated:'}</div>
+            <div>{isPublished ? 'Last published:' : 'Draft saved:'}</div>
             <div className="font-mono text-stone-800 dark:text-zinc-300 font-semibold">{timestampStr}</div>
           </div>
         </div>
@@ -176,7 +189,7 @@ export function CoordinatorView() {
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs pt-1">
           <div>
             <span className="text-[10px] text-stone-400 block font-medium">Scheduled Sessions</span>
-            <span className="font-mono font-bold text-stone-900 dark:text-zinc-100">{sessions.length} / 736</span>
+            <span className="font-mono font-bold text-stone-900 dark:text-zinc-100">{sessions.length} / {requiredSessions}</span>
           </div>
 
           <div>
@@ -189,7 +202,7 @@ export function CoordinatorView() {
           <div className="col-span-2">
             <span className="text-[10px] text-stone-400 block font-medium">Academic Dataset</span>
             <span className="font-sans text-stone-800 dark:text-zinc-200 font-semibold">
-              1,280 students · {activeFacultyCount} faculty · {activeSectionsCount} sections · {allocations.length} allocations
+              {studentsCount.toLocaleString()} students · {activeFacultyCount} faculty · {activeSectionsCount} sections · {allocations.length} allocations · {versions.length} versions
             </span>
           </div>
         </div>
@@ -250,7 +263,7 @@ export function CoordinatorView() {
               <XCircle className="h-4 w-4 text-rose-600 dark:text-rose-400 shrink-0" />
             )}
             <span className={facultyConfigured ? 'text-stone-800 dark:text-zinc-200' : 'text-rose-700 dark:text-rose-400 font-medium'}>
-              {facultyConfigured ? `Faculty availability configured (${activeFacultyCount} active faculty)` : 'Faculty availability unconfigured'}
+              {facultyConfigured ? `Faculty configured (${activeFacultyCount} active faculty)` : 'No active faculty configured'}
             </span>
           </div>
 
@@ -270,11 +283,11 @@ export function CoordinatorView() {
         <div className="space-y-3 pt-2 border-t border-[#E5E2D9] dark:border-zinc-800 text-xs">
           {hasDraft ? (
             <p className="text-stone-600 dark:text-zinc-300">
-              <strong className="text-stone-900 dark:text-zinc-100 font-semibold">{sessions.length} / 736</strong> sessions scheduled with <strong className="text-emerald-700 dark:text-emerald-400">{hardViolationsCount} hard conflicts</strong>. Ready for review or regeneration.
+              <strong className="text-stone-900 dark:text-zinc-100 font-semibold">{sessions.length} / {requiredSessions}</strong> sessions scheduled with <strong className={noHardConflicts ? 'text-emerald-700 dark:text-emerald-400' : 'text-rose-700 dark:text-rose-400'}>{hardViolationsCount} hard conflicts</strong>. Ready for review or regeneration.
             </p>
           ) : generationAllowed ? (
             <p className="text-stone-600 dark:text-zinc-300">
-              Academic data complete ({allocations.length} course allocations across {activeSectionsCount} sections). Ready to run the automated constraint solver.
+              Academic data complete ({allocations.length} course allocations across {activeSectionsCount} sections). Ready to run the timetable generator.
             </p>
           ) : (
             <p className="text-rose-700 dark:text-rose-400">
@@ -292,7 +305,7 @@ export function CoordinatorView() {
           {/* Action Buttons: Responsive full-width stacked on mobile, row on tablet/desktop */}
           <div className="flex flex-col sm:flex-row gap-2.5 pt-1">
             {/* Primary Action: Generate / Regenerate Timetable */}
-            {isPublished ? (
+            {!canEdit ? null : isPublished ? (
               <button
                 onClick={handleGenerate}
                 disabled={isGenerating}
@@ -349,7 +362,7 @@ export function CoordinatorView() {
             )}
 
             {/* If data incomplete and no draft exists, direct to setup */}
-            {!generationAllowed && !hasDraft && (
+            {canEdit && !generationAllowed && !hasDraft && (
               <button
                 onClick={() => setActiveView('academic_setup')}
                 className="w-full sm:w-auto flex-1 py-3 px-5 bg-[#8C1B2E] hover:bg-[#721525] text-white font-bold text-xs rounded-lg transition-all shadow-xs flex items-center justify-center gap-2 cursor-pointer"
@@ -364,8 +377,13 @@ export function CoordinatorView() {
       {/* 5. Recent Requests (3 items max) */}
       <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-4 space-y-2.5 shadow-2xs">
         <div className="flex items-center justify-between border-b border-[#E5E2D9] dark:border-zinc-800 pb-2">
-          <span className="font-serif font-bold text-xs text-stone-900 dark:text-zinc-100 uppercase tracking-wider">
+          <span className="font-serif font-bold text-xs text-stone-900 dark:text-zinc-100 uppercase tracking-wider flex items-center gap-2">
             Recent requests
+            {isSampleRequests && (
+              <span className="text-[10px] font-mono normal-case tracking-normal px-1.5 py-0.5 rounded bg-stone-100 text-stone-600 border border-[#E5E2D9] dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700">
+                Sample
+              </span>
+            )}
           </span>
           <button
             onClick={() => setActiveView('recovery')}
@@ -380,16 +398,16 @@ export function CoordinatorView() {
             <div key={req.id} className="py-2 first:pt-0 flex items-center justify-between gap-3">
               <div>
                 <div className="font-semibold text-stone-900 dark:text-zinc-100">
-                  {req.type} — {req.section}
+                  {req.title}
                 </div>
-                <div className="text-[11px] text-stone-500">
-                  Requested by: {req.requestedBy}
+                <div className="text-[11px] text-stone-500 line-clamp-1">
+                  {req.detail}
                 </div>
               </div>
 
               <div className="text-right">
                 <span className={`px-2 py-0.5 rounded text-[10px] font-semibold ${
-                  req.status === 'Approved'
+                  req.status === 'Approved' || req.status === 'Read'
                     ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'
                     : 'bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300'
                 }`}>
