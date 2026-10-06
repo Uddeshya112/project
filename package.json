@@ -15,7 +15,7 @@
     "test:demo": "tsx scripts/run_demo_tests.ts",
     "test:security": "tsx scripts/run_adversarial_tests.ts",
     "test:solver": "tsx scripts/run_solver_tests.ts",
-    "benchmark": "tsx scripts/run_e2e_tests.ts",
+    "benchmark": "tsx scripts/run_password_benchmarks.ts",
     "start": "tsx server.ts",
     "preview": "vite preview --port 3000 --host 0.0.0.0"
   },
@@ -38,7 +38,6 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "tailwind-merge": "^3.0.2",
-    "tsx": "^4.23.15",
     "xlsx": "^0.18.5",
     "zod": "^4.6.5"
   },
@@ -56,6 +55,10 @@
     "fast-check": "^4.10.2",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.0",
-    "vite": "^6.1.0"
+    "vite": "^6.1.0",
+    "tsx": "^4.23.15"
+  },
+  "overrides": {
+    "xlsx": "npm:@keep-lts/xlsx@^0.18.6"
   }
 }
