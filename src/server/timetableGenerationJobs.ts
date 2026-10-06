@@ -65,7 +65,6 @@ export function startTimetableGenerationJob(payload: JobPayload): TimetableGener
   };
 
   const worker = new Worker(new URL('./timetableGenerationWorker.ts', import.meta.url), {
-    type: 'module',
     execArgv: ['--import', 'tsx'],
     workerData: workerPayload,
   });
@@ -95,7 +94,7 @@ export function startTimetableGenerationJob(payload: JobPayload): TimetableGener
     }
     if (message.type === 'completed') {
       try {
-        const routines = (message.routines || []).map((r: any, index: number) => supabaseStore.persistGeneratedRoutine({
+        const routines = (message.routines as Array<Record<string, any>> || []).map((r: Record<string, any>, index: number) => supabaseStore.persistGeneratedRoutine({
           ...r,
           candidate: r.candidate,
         }, payload.userId, index === 0));
