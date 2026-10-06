@@ -1651,7 +1651,15 @@ export class TimetableStore {
 }
 
 function roleKeyOf(role: RoleCode) {
-  return role === 'COLLEGE_ADMIN' || role === 'SUPER_ADMIN' ? 'Admin' : role === 'CLASS_REPRESENTATIVE' ? 'Student' : role.charAt(0) + role.slice(1).toLowerCase();
+  switch (role) {
+    case 'COLLEGE_ADMIN':
+    case 'SUPER_ADMIN': return 'Admin';
+    case 'COORDINATOR': return 'Coordinator';
+    case 'FACULTY': return 'Faculty';
+    case 'HOD': return 'HOD';
+    case 'CLASS_REPRESENTATIVE': return 'Student';
+    case 'STUDENT': return 'Student';
+  }
 }
 
 function normalisePreferences(p: any): Faculty['preferences'] {
