@@ -136,7 +136,10 @@ async function runTestSuite() {
   // -------------------------------------------------------------
   console.log('\n--- 2. Testing Authentication & RBAC APIs ---');
   await fetch(`${BASE_URL}/api/test/reset-rate-limits`, { method: 'POST' }).catch(() => {});
-  const seedPassword = process.env.SEED_USER_PASSWORD || 'ThaparInstitute@2026!';
+  const seedPassword = process.env.SEED_USER_PASSWORD;
+  if (!seedPassword) {
+    throw new Error('SEED_USER_PASSWORD must be set when running the HTTP integration suite.');
+  }
 
   // Test 2.1: Missing Credentials
   try {
