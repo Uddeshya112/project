@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { Worker } from 'worker_threads';
 import { EngineResult } from '../lib/optimizationEngine';
 import { AcademicYearConfig, CourseAllocation, Faculty, Room, StudentSection, Course, AcademicConstraint } from '../types';
