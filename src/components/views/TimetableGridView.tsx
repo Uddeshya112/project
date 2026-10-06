@@ -59,12 +59,12 @@ export function TimetableGridView() {
   const hardViolationsCount = validationReport.hardViolationsCount ?? validationReport.errorCount;
   const canPublish = sessions.length > 0 && hardViolationsCount === 0;
 
-  const handlePublish = () => {
+  const handlePublish = async () => {
     if (!canPublish) {
       setPublishFeedback(`Publishing blocked: ${hardViolationsCount} hard violations exist.`);
       return;
     }
-    const res = publishMasterTimetable('Coordinator');
+    const res = await publishMasterTimetable('Coordinator');
     if (res.success) {
       setPublishFeedback('Timetable officially published!');
       setTimeout(() => setPublishFeedback(null), 3000);

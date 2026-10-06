@@ -1,4 +1,7 @@
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
+
+export const BCRYPT_SALT_ROUNDS = 12;
 
 // Password policy shared by the login page and the server. Hashing lives server-side (src/server/auth.ts).
 
@@ -44,18 +47,132 @@ export function evaluatePasswordPolicy(pwd: string): PasswordPolicyCheck {
   };
 }
 
-export function hashPasswordBcrypt(pwd: string): string {
-  return bcrypt.hashSync(pwd, 10);
+export async function hashPasswordBcrypt(pwd: string): Promise<string> {
+  return bcrypt.hash(pwd, BCRYPT_SALT_ROUNDS);
 }
 
-export function hashPasswordScrypt(pwd: string): string {
-  return bcrypt.hashSync(pwd, 10);
+export function hashPasswordBcryptSync(pwd: string): string {
+  return bcrypt.hashSync(pwd, BCRYPT_SALT_ROUNDS);
 }
 
-export function verifyPassword(pwd: string, hash: string): boolean {
-  return bcrypt.compareSync(pwd, hash);
+export async function hashPasswordScrypt(pwd: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const salt = crypto.randomBytes(16).toString('hex');
+    crypto.scrypt(pwd, salt, 64, (err, derivedKey) => {
+      if (err) reject(err);
+      resolve(`scrypt:${salt}:${derivedKey.toString('hex')}`);
+    });
+  });
 }
 
-export function hashPasswordLegacy(pwd: string): string {
-  return bcrypt.hashSync(pwd, 10);
+export async function hashPasswordLegacy(pwd: string): Promise<string> {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.createHash('sha256').update(salt + pwd).digest('hex');
+  return `sha256:${salt}:${hash}`;
+}
+
+export async function verifyPassword(
+  pwd: string,
+  hash: string
+): Promise<{ isValid: boolean; needsRehash: boolean }> {
+  if (!hash || typeof hash !== 'string') {
+    return { isValid: false, needsRehash: false };
+  }
+
+  // 1. Bcrypt verification
+  if (hash.startsWith('$2')) {
+    const isValid = await bcrypt.compare(pwd, hash);
+    if (!isValid) return { isValid: false, needsRehash: false };
+    const match = hash.match(/^\$2[aby]?\$(\d+)\$/);
+    const cost = match ? parseInt(match[1], 10) : BCRYPT_SALT_ROUNDS;
+    const needsRehash = cost < BCRYPT_SALT_ROUNDS;
+    return { isValid: true, needsRehash };
+  }
+
+  // 2. Scrypt verification
+  if (hash.startsWith('scrypt:')) {
+    const parts = hash.split(':');
+    if (parts.length === 3) {
+      const [, salt, expectedHex] = parts;
+      return new Promise((resolve) => {
+        crypto.scrypt(pwd, salt, 64, (err, derivedKey) => {
+          if (err) {
+            resolve({ isValid: false, needsRehash: false });
+            return;
+          }
+          const matches = crypto.timingSafeEqual(Buffer.from(expectedHex, 'hex'), derivedKey);
+          resolve({ isValid: matches, needsRehash: true });
+        });
+      });
+    }
+  }
+
+  // 3. Legacy SHA-256 verification
+  if (hash.startsWith('sha256:')) {
+    const parts = hash.split(':');
+    if (parts.length === 3) {
+      const [, salt, expectedHex] = parts;
+      const computed = crypto.createHash('sha256').update(salt + pwd).digest('hex');
+      const matches = crypto.timingSafeEqual(Buffer.from(expectedHex, 'hex'), Buffer.from(computed, 'hex'));
+      return { isValid: matches, needsRehash: true };
+    }
+  }
+
+  const fallbackComputed = crypto.createHash('sha256').update(pwd).digest('hex');
+  if (fallbackComputed === hash) {
+    return { isValid: true, needsRehash: true };
+  }
+
+  return { isValid: false, needsRehash: false };
+}
+
+export function hashPasswordScryptSync(pwd: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derivedKey = crypto.scryptSync(pwd, salt, 64);
+  return `scrypt:${salt}:${derivedKey.toString('hex')}`;
+}
+
+export function hashPasswordLegacySync(pwd: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.createHash('sha256').update(salt + pwd).digest('hex');
+  return `sha256:${salt}:${hash}`;
+}
+
+export function verifyPasswordSync(
+  pwd: string,
+  hash: string
+): { isValid: boolean; needsRehash: boolean; detectedAlgorithm?: string } {
+  if (!hash || typeof hash !== 'string') {
+    return { isValid: false, needsRehash: false, detectedAlgorithm: 'unknown' };
+  }
+  if (hash.startsWith('$2')) {
+    const isValid = bcrypt.compareSync(pwd, hash);
+    if (!isValid) return { isValid: false, needsRehash: false, detectedAlgorithm: 'bcrypt' };
+    const match = hash.match(/^\$2[aby]?\$(\d+)\$/);
+    const cost = match ? parseInt(match[1], 10) : BCRYPT_SALT_ROUNDS;
+    return { isValid: true, needsRehash: cost < BCRYPT_SALT_ROUNDS, detectedAlgorithm: 'bcrypt' };
+  }
+  if (hash.startsWith('scrypt:')) {
+    const parts = hash.split(':');
+    if (parts.length === 3) {
+      const [, salt, expectedHex] = parts;
+      try {
+        const derivedKey = crypto.scryptSync(pwd, salt, 64);
+        const matches = crypto.timingSafeEqual(Buffer.from(expectedHex, 'hex'), derivedKey);
+        return { isValid: matches, needsRehash: true, detectedAlgorithm: 'scrypt' };
+      } catch {
+        return { isValid: false, needsRehash: false, detectedAlgorithm: 'scrypt' };
+      }
+    }
+  }
+  if (hash.startsWith('sha256:')) {
+    const parts = hash.split(':');
+    if (parts.length === 3) {
+      const [, salt, expectedHex] = parts;
+      const computed = crypto.createHash('sha256').update(salt + pwd).digest('hex');
+      const matches = crypto.timingSafeEqual(Buffer.from(expectedHex, 'hex'), Buffer.from(computed, 'hex'));
+      return { isValid: matches, needsRehash: true, detectedAlgorithm: 'sha256' };
+    }
+  }
+  return { isValid: false, needsRehash: false, detectedAlgorithm: 'unknown' };
 }

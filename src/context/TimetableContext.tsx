@@ -144,54 +144,54 @@ interface TimetableContextType {
   studentsCount?: number;
 
   // Master Data CRUD Actions
-  updateAcademicYear: (updates: Partial<AcademicYearConfig>) => void;
+  updateAcademicYear: (updates: Partial<AcademicYearConfig>) => Promise<{ success: boolean; message?: string }>;
   
   // Departments
-  addDepartment: (dept: Omit<Department, 'id'>) => void;
-  updateDepartment: (id: string, updates: Partial<Department>) => void;
-  deleteDepartment: (id: string) => void;
-  toggleDepartmentStatus: (id: string) => void;
+  addDepartment: (dept: Omit<Department, 'id'>) => Promise<{ success: boolean; message?: string }>;
+  updateDepartment: (id: string, updates: Partial<Department>) => Promise<{ success: boolean; message?: string }>;
+  deleteDepartment: (id: string) => Promise<{ success: boolean; message?: string }>;
+  toggleDepartmentStatus: (id: string) => Promise<{ success: boolean; message?: string }>;
 
   // Programs
-  addProgram: (prog: Omit<Program, 'id'>) => void;
-  updateProgram: (id: string, updates: Partial<Program>) => void;
-  deleteProgram: (id: string) => void;
+  addProgram: (prog: Omit<Program, 'id'>) => Promise<{ success: boolean; message?: string }>;
+  updateProgram: (id: string, updates: Partial<Program>) => Promise<{ success: boolean; message?: string }>;
+  deleteProgram: (id: string) => Promise<{ success: boolean; message?: string }>;
 
   // Rooms & Labs
-  addRoom: (room: Omit<Room, 'id'>) => void;
-  updateRoom: (id: string, updates: Partial<Room>) => void;
-  deleteRoom: (id: string) => void;
-  toggleRoomAvailability: (id: string) => void;
+  addRoom: (room: Omit<Room, 'id'>) => Promise<{ success: boolean; message?: string }>;
+  updateRoom: (id: string, updates: Partial<Room>) => Promise<{ success: boolean; message?: string }>;
+  deleteRoom: (id: string) => Promise<{ success: boolean; message?: string }>;
+  toggleRoomAvailability: (id: string) => Promise<{ success: boolean; message?: string }>;
 
   // Faculty
-  addFaculty: (fac: Omit<Faculty, 'id'>) => void;
-  updateFaculty: (id: string, updates: Partial<Faculty>) => void;
-  deleteFaculty: (id: string) => void;
-  toggleFacultyStatus: (id: string) => void;
-  updateFacultyAvailability: (id: string, preferences: Faculty['preferences']) => void;
+  addFaculty: (fac: Omit<Faculty, 'id'>) => Promise<{ success: boolean; message?: string }>;
+  updateFaculty: (id: string, updates: Partial<Faculty>) => Promise<{ success: boolean; message?: string }>;
+  deleteFaculty: (id: string) => Promise<{ success: boolean; message?: string }>;
+  toggleFacultyStatus: (id: string) => Promise<{ success: boolean; message?: string }>;
+  updateFacultyAvailability: (id: string, preferences: Faculty['preferences']) => Promise<{ success: boolean; message?: string }>;
 
   // Sections & SubSections
-  addSection: (sec: Omit<StudentSection, 'id'>) => void;
-  updateSection: (id: string, updates: Partial<StudentSection>) => void;
-  deleteSection: (id: string) => void;
-  addSubSection: (sectionId: string, subSec: Omit<SubSection, 'id' | 'sectionId'>) => void;
-  deleteSubSection: (sectionId: string, subSecId: string) => void;
+  addSection: (sec: Omit<StudentSection, 'id'>) => Promise<{ success: boolean; message?: string }>;
+  updateSection: (id: string, updates: Partial<StudentSection>) => Promise<{ success: boolean; message?: string }>;
+  deleteSection: (id: string) => Promise<{ success: boolean; message?: string }>;
+  addSubSection: (sectionId: string, subSec: Omit<SubSection, 'id' | 'sectionId'>) => Promise<{ success: boolean; message?: string }>;
+  deleteSubSection: (sectionId: string, subSecId: string) => Promise<{ success: boolean; message?: string }>;
 
   // Courses
-  addCourse: (course: Omit<Course, 'id'>) => void;
-  updateCourse: (id: string, updates: Partial<Course>) => void;
-  deleteCourse: (id: string) => void;
-  toggleCourseStatus: (id: string) => void;
+  addCourse: (course: Omit<Course, 'id'>) => Promise<{ success: boolean; message?: string }>;
+  updateCourse: (id: string, updates: Partial<Course>) => Promise<{ success: boolean; message?: string }>;
+  deleteCourse: (id: string) => Promise<{ success: boolean; message?: string }>;
+  toggleCourseStatus: (id: string) => Promise<{ success: boolean; message?: string }>;
 
   // Allocations
-  addAllocation: (alloc: Omit<CourseAllocation, 'id' | 'status'>) => void;
-  updateAllocation: (id: string, updates: Partial<CourseAllocation>) => void;
-  deleteAllocation: (id: string) => void;
+  addAllocation: (alloc: Omit<CourseAllocation, 'id' | 'status'>) => Promise<{ success: boolean; message?: string }>;
+  updateAllocation: (id: string, updates: Partial<CourseAllocation>) => Promise<{ success: boolean; message?: string }>;
+  deleteAllocation: (id: string) => Promise<{ success: boolean; message?: string }>;
 
   // Constraints
-  addConstraint: (constraint: Omit<AcademicConstraint, 'id'>) => void;
-  updateConstraint: (id: string, updates: Partial<AcademicConstraint>) => void;
-  toggleConstraint: (id: string) => void;
+  addConstraint: (constraint: Omit<AcademicConstraint, 'id'>) => Promise<{ success: boolean; message?: string }>;
+  updateConstraint: (id: string, updates: Partial<AcademicConstraint>) => Promise<{ success: boolean; message?: string }>;
+  toggleConstraint: (id: string) => Promise<{ success: boolean; message?: string }>;
 
   // Validation & Generation Engine
   runValidation: () => ValidationReport;
@@ -261,8 +261,8 @@ interface TimetableContextType {
   latestGeneratedRoutines: GenerationRoutine[] | null;
   setLatestGeneratedRoutines: (routines: GenerationRoutine[] | null) => void;
   applyCandidateAsDraft: (candidate: GeneratedCandidate) => void;
-  publishMasterTimetable: (reviewerName?: string) => { success: boolean; error?: string };
-  unpublishMasterTimetable: () => { success: boolean };
+  publishMasterTimetable: (reviewerName?: string) => Promise<{ success: boolean; error?: string }>;
+  unpublishMasterTimetable: () => Promise<{ success: boolean }>;
   compareTimetableVersions: (versionNumberA: number, versionNumberB: number) => Array<{
     courseCode: string;
     courseName: string;
@@ -421,7 +421,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
   }, [sessions, rooms, facultyMembers, sections, courses]);
 
   // CRUD: Academic Year
-  const updateAcademicYear = (updates: Partial<AcademicYearConfig>) => {
+  const updateAcademicYear = async (updates: Partial<AcademicYearConfig>) => {
     setAcademicYear(prev => ({ ...prev, ...updates }));
     setAuditLogs(prev => [
       {
@@ -436,10 +436,11 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       },
       ...prev,
     ]);
+    return { success: true, message: 'Success' };
   };
 
   // CRUD: Departments
-  const addDepartment = (dept: Omit<Department, 'id'>) => {
+  const addDepartment = async (dept: Omit<Department, 'id'>) => {
     const newId = `dept-${dept.code.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
     const newDept: Department = { ...dept, id: newId };
     setDepartments(prev => [...prev, newDept]);
@@ -449,9 +450,10 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       headers: getAuthHeaders(),
       body: JSON.stringify(dept),
     }).catch(err => console.warn('[SUPABASE_API] Department persistence notice:', err));
+    return { success: true, message: 'Success' };
   };
 
-  const updateDepartment = (id: string, updates: Partial<Department>) => {
+  const updateDepartment = async (id: string, updates: Partial<Department>) => {
     setDepartments(prev => prev.map(d => (d.id === id ? { ...d, ...updates } : d)));
 
     fetch(`/api/academic/departments/${encodeURIComponent(id)}`, {
@@ -459,26 +461,29 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       headers: getAuthHeaders(),
       body: JSON.stringify(updates),
     }).catch(err => console.warn('[SUPABASE_API] Department update notice:', err));
+    return { success: true, message: 'Success' };
   };
 
-  const deleteDepartment = (id: string) => {
+  const deleteDepartment = async (id: string) => {
     setDepartments(prev => prev.filter(d => d.id !== id));
 
     fetch(`/api/academic/departments/${encodeURIComponent(id)}`, {
       method: 'DELETE',
       headers: getAuthHeaders(),
     }).catch(err => console.warn('[SUPABASE_API] Department deletion notice:', err));
+    return { success: true, message: 'Success' };
   };
 
-  const toggleDepartmentStatus = (id: string) => {
+  const toggleDepartmentStatus = async (id: string) => {
     const dept = departments.find(d => d.id === id);
-    if (!dept) return;
+    if (!dept) return { success: false, error: 'Department not found' };
     const nextStatus = dept.status === 'Active' ? 'Inactive' : 'Active';
-    updateDepartment(id, { status: nextStatus });
+    await updateDepartment(id, { status: nextStatus });
+    return { success: true, message: 'Success' };
   };
 
   // CRUD: Programs
-  const addProgram = (prog: Omit<Program, 'id'>) => {
+  const addProgram = async (prog: Omit<Program, 'id'>) => {
     const newId = `prog-${prog.code.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
     const newProg: Program = { ...prog, id: newId };
     setPrograms(prev => [...prev, newProg]);
@@ -488,9 +493,10 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       headers: getAuthHeaders(),
       body: JSON.stringify(prog),
     }).catch(err => console.warn('[SUPABASE_API] Program persistence notice:', err));
+    return { success: true, message: 'Success' };
   };
 
-  const updateProgram = (id: string, updates: Partial<Program>) => {
+  const updateProgram = async (id: string, updates: Partial<Program>) => {
     setPrograms(prev => prev.map(p => (p.id === id ? { ...p, ...updates } : p)));
 
     fetch(`/api/academic/programs/${encodeURIComponent(id)}`, {
@@ -498,19 +504,21 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       headers: getAuthHeaders(),
       body: JSON.stringify(updates),
     }).catch(err => console.warn('[SUPABASE_API] Program update notice:', err));
+    return { success: true, message: 'Success' };
   };
 
-  const deleteProgram = (id: string) => {
+  const deleteProgram = async (id: string) => {
     setPrograms(prev => prev.filter(p => p.id !== id));
 
     fetch(`/api/academic/programs/${encodeURIComponent(id)}`, {
       method: 'DELETE',
       headers: getAuthHeaders(),
     }).catch(err => console.warn('[SUPABASE_API] Program deletion notice:', err));
+    return { success: true, message: 'Success' };
   };
 
   // CRUD: Rooms & Labs
-  const addRoom = (room: Omit<Room, 'id'>) => {
+  const addRoom = async (room: Omit<Room, 'id'>) => {
     const newId = `room-${room.name.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
     const newRoom: Room = { ...room, id: newId };
     setRooms(prev => [...prev, newRoom]);
@@ -520,9 +528,10 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       headers: getAuthHeaders(),
       body: JSON.stringify(room),
     }).catch(err => console.warn('[SUPABASE_API] Room persistence notice:', err));
+    return { success: true, message: 'Success' };
   };
 
-  const updateRoom = (id: string, updates: Partial<Room>) => {
+  const updateRoom = async (id: string, updates: Partial<Room>) => {
     setRooms(prev => prev.map(r => (r.id === id ? { ...r, ...updates } : r)));
 
     fetch(`/api/academic/rooms/${encodeURIComponent(id)}`, {
@@ -530,25 +539,28 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       headers: getAuthHeaders(),
       body: JSON.stringify(updates),
     }).catch(err => console.warn('[SUPABASE_API] Room update notice:', err));
+    return { success: true, message: 'Success' };
   };
 
-  const deleteRoom = (id: string) => {
+  const deleteRoom = async (id: string) => {
     setRooms(prev => prev.filter(r => r.id !== id));
 
     fetch(`/api/academic/rooms/${encodeURIComponent(id)}`, {
       method: 'DELETE',
       headers: getAuthHeaders(),
     }).catch(err => console.warn('[SUPABASE_API] Room deletion notice:', err));
+    return { success: true, message: 'Success' };
   };
 
-  const toggleRoomAvailability = (id: string) => {
+  const toggleRoomAvailability = async (id: string) => {
     const rm = rooms.find(r => r.id === id);
-    if (!rm) return;
-    updateRoom(id, { isAvailable: !rm.isAvailable });
+    if (!rm) return { success: false, error: 'Room not found' };
+    await updateRoom(id, { isAvailable: !rm.isAvailable });
+    return { success: true, message: 'Success' };
   };
 
   // CRUD: Faculty
-  const addFaculty = (fac: Omit<Faculty, 'id'>) => {
+  const addFaculty = async (fac: Omit<Faculty, 'id'>) => {
     const newId = `fac-${fac.email.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '')}`;
     const newFac: Faculty = { ...fac, id: newId };
     setFacultyMembers(prev => [...prev, newFac]);
@@ -558,9 +570,10 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       headers: getAuthHeaders(),
       body: JSON.stringify(fac),
     }).catch(err => console.warn('[SUPABASE_API] Faculty persistence notice:', err));
+    return { success: true, message: 'Success' };
   };
 
-  const updateFaculty = (id: string, updates: Partial<Faculty>) => {
+  const updateFaculty = async (id: string, updates: Partial<Faculty>) => {
     setFacultyMembers(prev => prev.map(f => (f.id === id ? { ...f, ...updates } : f)));
 
     fetch(`/api/academic/faculty/${encodeURIComponent(id)}`, {
@@ -568,18 +581,20 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       headers: getAuthHeaders(),
       body: JSON.stringify(updates),
     }).catch(err => console.warn('[SUPABASE_API] Faculty update notice:', err));
+    return { success: true, message: 'Success' };
   };
 
-  const deleteFaculty = (id: string) => {
+  const deleteFaculty = async (id: string) => {
     setFacultyMembers(prev => prev.filter(f => f.id !== id));
 
     fetch(`/api/academic/faculty/${encodeURIComponent(id)}`, {
       method: 'DELETE',
       headers: getAuthHeaders(),
     }).catch(err => console.warn('[SUPABASE_API] Faculty deletion notice:', err));
+    return { success: true, message: 'Success' };
   };
 
-  const toggleFacultyStatus = (id: string) => {
+  const toggleFacultyStatus = async (id: string) => {
     setFacultyMembers(prev =>
       prev.map(f => {
         if (f.id !== id) return f;
@@ -588,14 +603,16 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         return { ...f, status: nextStatus };
       })
     );
+    return { success: true, message: 'Success' };
   };
 
-  const updateFacultyAvailability = (id: string, preferences: Faculty['preferences']) => {
-    updateFaculty(id, { preferences });
+  const updateFacultyAvailability = async (id: string, preferences: Faculty['preferences']) => {
+    await updateFaculty(id, { preferences });
+    return { success: true, message: 'Success' };
   };
 
   // CRUD: Sections
-  const addSection = (sec: Omit<StudentSection, 'id'>) => {
+  const addSection = async (sec: Omit<StudentSection, 'id'>) => {
     const newId = `sec-${sec.name.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
     const newSec: StudentSection = {
       ...sec,
@@ -612,9 +629,10 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       headers: getAuthHeaders(),
       body: JSON.stringify(sec),
     }).catch(err => console.warn('[SUPABASE_API] Cohort persistence notice:', err));
+    return { success: true, message: 'Success' };
   };
 
-  const updateSection = (id: string, updates: Partial<StudentSection>) => {
+  const updateSection = async (id: string, updates: Partial<StudentSection>) => {
     setSections(prev => prev.map(s => (s.id === id ? { ...s, ...updates } : s)));
 
     fetch(`/api/academic/groups/${encodeURIComponent(id)}`, {
@@ -622,18 +640,20 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       headers: getAuthHeaders(),
       body: JSON.stringify(updates),
     }).catch(err => console.warn('[SUPABASE_API] Cohort update notice:', err));
+    return { success: true, message: 'Success' };
   };
 
-  const deleteSection = (id: string) => {
+  const deleteSection = async (id: string) => {
     setSections(prev => prev.filter(s => s.id !== id));
 
     fetch(`/api/academic/groups/${encodeURIComponent(id)}`, {
       method: 'DELETE',
       headers: getAuthHeaders(),
     }).catch(err => console.warn('[SUPABASE_API] Cohort deletion notice:', err));
+    return { success: true, message: 'Success' };
   };
 
-  const addSubSection = (sectionId: string, subSec: Omit<SubSection, 'id' | 'sectionId'>) => {
+  const addSubSection = async (sectionId: string, subSec: Omit<SubSection, 'id' | 'sectionId'>) => {
     const subId = `sub-${sectionId}-${subSec.name.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
     const newSub: SubSection = {
       ...subSec,
@@ -655,9 +675,10 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       headers: getAuthHeaders(),
       body: JSON.stringify({ groupId: sectionId, name: subSec.name, studentCount: subSec.studentCount, type: subSec.type }),
     }).catch(err => console.warn('[SUPABASE_API] Subgroup persistence notice:', err));
+    return { success: true, message: 'Success' };
   };
 
-  const deleteSubSection = (sectionId: string, subSecId: string) => {
+  const deleteSubSection = async (sectionId: string, subSecId: string) => {
     setSections(prev =>
       prev.map(s => {
         if (s.id !== sectionId) return s;
@@ -672,10 +693,11 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       method: 'DELETE',
       headers: getAuthHeaders(),
     }).catch(err => console.warn('[SUPABASE_API] Subgroup deletion notice:', err));
+    return { success: true, message: 'Success' };
   };
 
   // CRUD: Courses
-  const addCourse = (course: Omit<Course, 'id'>) => {
+  const addCourse = async (course: Omit<Course, 'id'>) => {
     const newId = `course-${course.code.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
     const newCourse: Course = {
       ...course,
@@ -688,9 +710,10 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       headers: getAuthHeaders(),
       body: JSON.stringify(course),
     }).catch(err => console.warn('[SUPABASE_API] Course persistence notice:', err));
+    return { success: true, message: 'Success' };
   };
 
-  const updateCourse = (id: string, updates: Partial<Course>) => {
+  const updateCourse = async (id: string, updates: Partial<Course>) => {
     setCourses(prev => prev.map(c => (c.id === id ? { ...c, ...updates } : c)));
 
     fetch(`/api/academic/courses/${encodeURIComponent(id)}`, {
@@ -698,26 +721,29 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       headers: getAuthHeaders(),
       body: JSON.stringify(updates),
     }).catch(err => console.warn('[SUPABASE_API] Course update notice:', err));
+    return { success: true, message: 'Success' };
   };
 
-  const deleteCourse = (id: string) => {
+  const deleteCourse = async (id: string) => {
     setCourses(prev => prev.filter(c => c.id !== id));
 
     fetch(`/api/academic/courses/${encodeURIComponent(id)}`, {
       method: 'DELETE',
       headers: getAuthHeaders(),
     }).catch(err => console.warn('[SUPABASE_API] Course deletion notice:', err));
+    return { success: true, message: 'Success' };
   };
 
-  const toggleCourseStatus = (id: string) => {
+  const toggleCourseStatus = async (id: string) => {
     const crs = courses.find(c => c.id === id);
-    if (!crs) return;
+    if (!crs) return { success: false, error: 'Course not found' };
     const nextStatus = crs.status === 'Active' ? 'Archived' : 'Active';
-    updateCourse(id, { status: nextStatus });
+    await updateCourse(id, { status: nextStatus });
+    return { success: true, message: 'Success' };
   };
 
   // CRUD: Course Allocations
-  const addAllocation = (alloc: Omit<CourseAllocation, 'id' | 'status'>) => {
+  const addAllocation = async (alloc: Omit<CourseAllocation, 'id' | 'status'>) => {
     const allocId = `alloc-${alloc.courseId}-${alloc.sectionId}${alloc.subSectionId ? `-${alloc.subSectionId}` : ''}-${alloc.sessionType.toLowerCase()}`;
     const newAlloc: CourseAllocation = {
       ...alloc,
@@ -731,9 +757,10 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       headers: getAuthHeaders(),
       body: JSON.stringify(alloc),
     }).catch(err => console.warn('[SUPABASE_API] Allocation persistence notice:', err));
+    return { success: true, message: 'Success' };
   };
 
-  const updateAllocation = (id: string, updates: Partial<CourseAllocation>) => {
+  const updateAllocation = async (id: string, updates: Partial<CourseAllocation>) => {
     setAllocations(prev => prev.map(a => (a.id === id ? { ...a, ...updates } : a)));
 
     fetch(`/api/academic/allocations/${encodeURIComponent(id)}`, {
@@ -741,32 +768,37 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       headers: getAuthHeaders(),
       body: JSON.stringify(updates),
     }).catch(err => console.warn('[SUPABASE_API] Allocation update notice:', err));
+    return { success: true, message: 'Success' };
   };
 
-  const deleteAllocation = (id: string) => {
+  const deleteAllocation = async (id: string) => {
     setAllocations(prev => prev.filter(a => a.id !== id));
 
     fetch(`/api/academic/allocations/${encodeURIComponent(id)}`, {
       method: 'DELETE',
       headers: getAuthHeaders(),
     }).catch(err => console.warn('[SUPABASE_API] Allocation deletion notice:', err));
+    return { success: true, message: 'Success' };
   };
 
   // CRUD: Constraints
-  const addConstraint = (constraint: Omit<AcademicConstraint, 'id'>) => {
+  const addConstraint = async (constraint: Omit<AcademicConstraint, 'id'>) => {
     const newConst: AcademicConstraint = {
       ...constraint,
       id: `const-${Date.now().toString().slice(-4)}`,
     };
     setConstraints(prev => [...prev, newConst]);
+    return { success: true, message: 'Success' };
   };
 
-  const updateConstraint = (id: string, updates: Partial<AcademicConstraint>) => {
+  const updateConstraint = async (id: string, updates: Partial<AcademicConstraint>) => {
     setConstraints(prev => prev.map(c => (c.id === id ? { ...c, ...updates } : c)));
+    return { success: true, message: 'Success' };
   };
 
-  const toggleConstraint = (id: string) => {
+  const toggleConstraint = async (id: string) => {
     setConstraints(prev => prev.map(c => (c.id === id ? { ...c, isActive: !c.isActive } : c)));
+    return { success: true, message: 'Success' };
   };
 
   // Pre-generation Validation Run
@@ -1254,7 +1286,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     ]);
   };
 
-  const publishMasterTimetable = (reviewerName = 'Dean Academic Affairs'): { success: boolean; error?: string } => {
+  const publishMasterTimetable = async (reviewerName = 'Dean Academic Affairs'): Promise<{ success: boolean; error?: string }> => {
     const report = runIndependentValidation(sessions);
     if (!report.canPublish) {
       return {
@@ -1306,7 +1338,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     return { success: true };
   };
 
-  const unpublishMasterTimetable = (): { success: boolean } => {
+  const unpublishMasterTimetable = async (): Promise<{ success: boolean }> => {
     setPublishStatus('Draft');
     setAcademicYear(prev => ({
       ...prev,

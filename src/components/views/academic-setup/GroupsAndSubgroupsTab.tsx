@@ -107,7 +107,8 @@ export function GroupsAndSubgroupsTab({ canEdit = true }: { canEdit?: boolean })
   const handleRunBulkGenerator = (e: React.FormEvent) => {
     e.preventDefault();
     if (!bulkForm.departmentId) return;
-    run(() => bulkGenerateGroups(bulkForm), () => setShowBulkGenerator(false));
+    bulkGenerateGroups(bulkForm);
+    setShowBulkGenerator(false);
   };
 
   // Filter sections by name

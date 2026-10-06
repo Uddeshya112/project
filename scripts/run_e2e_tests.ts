@@ -1,10 +1,10 @@
 import { generateTimetableFromConfiguration, validateAcademicSetup } from '../src/lib/timetableGenerator';
 import { checkHardConstraints } from '../src/lib/recoveryEngine';
 import {
-  hashPasswordBcrypt,
-  hashPasswordScrypt,
-  verifyPassword,
-  hashPasswordLegacy
+  hashPasswordBcryptSync,
+  hashPasswordScryptSync,
+  verifyPasswordSync,
+  hashPasswordLegacySync
 } from '../src/lib/passwordUtils';
 import {
   INITIAL_ACADEMIC_YEAR,
@@ -90,7 +90,7 @@ async function runTestSuite() {
   console.log('\n--- 1. Testing Bcrypt/Scrypt KDF & Password Migration Security ---');
 
   // Test 1.1: Bcrypt Format ($2b$ cost 12)
-  const bcryptHash = hashPasswordBcrypt('TestSecurePassword123!', 12);
+  const bcryptHash = hashPasswordBcryptSync('TestSecurePassword123!');
   assert(
     bcryptHash.startsWith('$2b$12$') || bcryptHash.startsWith('$2a$12$'),
     'Password Hashing',
@@ -98,7 +98,7 @@ async function runTestSuite() {
   );
 
   // Test 1.2: Bcrypt Verification
-  const bcryptVerify = verifyPassword('TestSecurePassword123!', bcryptHash);
+  const bcryptVerify = verifyPasswordSync('TestSecurePassword123!', bcryptHash);
   assert(
     bcryptVerify.isValid === true && bcryptVerify.needsRehash === false && bcryptVerify.detectedAlgorithm === 'bcrypt',
     'Password Hashing',
@@ -106,8 +106,8 @@ async function runTestSuite() {
   );
 
   // Test 1.3: Scrypt Verification with Upgrade Flag
-  const scryptHash = hashPasswordScrypt('TestSecurePassword123!');
-  const scryptVerify = verifyPassword('TestSecurePassword123!', scryptHash);
+  const scryptHash = hashPasswordScryptSync('TestSecurePassword123!');
+  const scryptVerify = verifyPasswordSync('TestSecurePassword123!', scryptHash);
   assert(
     scryptVerify.isValid === true && scryptVerify.needsRehash === true && scryptVerify.detectedAlgorithm === 'scrypt',
     'Password Hashing',
@@ -115,7 +115,7 @@ async function runTestSuite() {
   );
 
   // Test 1.4: Invalid Password Rejection under Bcrypt
-  const bcryptWrongVerify = verifyPassword('WrongPassword!', bcryptHash);
+  const bcryptWrongVerify = verifyPasswordSync('WrongPassword!', bcryptHash);
   assert(
     bcryptWrongVerify.isValid === false,
     'Password Hashing',
@@ -123,8 +123,8 @@ async function runTestSuite() {
   );
 
   // Test 1.5: Legacy SHA-256 Backward Compatibility & Transparent Rehash Detection
-  const legacyHash = hashPasswordLegacy('OldLegacyPassword2025!');
-  const legacyVerify = verifyPassword('OldLegacyPassword2025!', legacyHash);
+  const legacyHash = hashPasswordLegacySync('OldLegacyPassword2025!');
+  const legacyVerify = verifyPasswordSync('OldLegacyPassword2025!', legacyHash);
   assert(
     legacyVerify.isValid === true && legacyVerify.needsRehash === true && legacyVerify.detectedAlgorithm === 'sha256',
     'Password Hashing',

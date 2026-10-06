@@ -209,8 +209,8 @@ export function GenerateTimetablePage() {
     await selectRoutineAPI(idx + 1);
   };
 
-  const handlePublishCurrent = () => {
-    const res = publishMasterTimetable('Dean Academic Affairs');
+  const handlePublishCurrent = async () => {
+    const res = await publishMasterTimetable('Dean Academic Affairs');
     if (res.success) {
       setPublishFeedback({
         success: true,

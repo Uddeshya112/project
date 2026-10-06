@@ -71,7 +71,7 @@ export function RecoveryEngineView() {
         activeTask.cancelledDay,
         activeTask.cancelledTimeSlot,
         facultyMembers,
-        publishedSessions.length ? publishedSessions : sessions,
+        (publishedSessions?.length ? publishedSessions : sessions),
         activeCourse?.code
       ).filter(s => s.faculty.id !== activeTask.facultyId)
     : [];

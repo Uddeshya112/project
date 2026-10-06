@@ -91,7 +91,7 @@ interface AuthContextType {
   logout: () => void;
   switchUser: (userId: string) => void;
   updateUserRole: (userId: string, newRoleId: string, reason: string) => void;
-  updateUserProfile: (userId: string, updates: Partial<AuthUser>) => void;
+  updateUserProfile: (userIdOrUpdates: string | Partial<AuthUser>, maybeUpdates?: Partial<AuthUser>) => Promise<{ success: boolean; message?: string }>;
   addRoleAssignment: (email: string, roleId: string, notes?: string) => void;
   revokeSession: (sessionId: string) => void;
 
@@ -104,7 +104,7 @@ interface AuthContextType {
   allPermissions: Permission[];
   allSessions: AuthSession[];
   passwordResetTokens: PasswordResetToken[];
-  roster?: any[];
+  roster?: any;
   [key: string]: any;
 }
 
@@ -892,10 +892,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     );
   };
 
-  const updateUserProfile = (userId: string, updates: Partial<AuthUser>) => {
+  const updateUserProfile = async (userIdOrUpdates: string | Partial<AuthUser>, maybeUpdates?: Partial<AuthUser>) => {
+    let targetUserId = currentUserId;
+    let updates = maybeUpdates;
+    if (typeof userIdOrUpdates === 'string') {
+      targetUserId = userIdOrUpdates;
+    } else {
+      updates = userIdOrUpdates;
+    }
+    if (!targetUserId) return { success: false, message: 'No active user' };
     setAllUsers(prev =>
-      prev.map(u => (u.id === userId ? { ...u, ...updates, updatedAt: new Date().toISOString() } : u))
+      prev.map(u => (u.id === targetUserId ? { ...u, ...updates, updatedAt: new Date().toISOString() } : u))
     );
+    return { success: true, message: 'Profile updated' };
   };
 
   const addRoleAssignment = (email: string, roleId: string, notes?: string) => {
@@ -955,7 +964,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         allPermissions,
         allSessions,
         passwordResetTokens,
-        roster: [],
+        roster: currentUser ? {
+          rollNumber: currentUser.rollNumber ?? '102303999',
+          sectionId: currentUser.sectionId ?? 'sec-csea',
+          subSectionId: currentUser.subSectionId ?? 'sub-sec-csea-1'
+        } : {
+          rollNumber: '102303999',
+          sectionId: 'sec-csea',
+          subSectionId: 'sub-sec-csea-1'
+        },
       }}
     >
       {children}

@@ -106,7 +106,7 @@ export function DashboardLayout({
   // Toasts disappear on their own after a few seconds.
   useEffect(() => {
     if (!notice) return;
-    const t = setTimeout(dismissNotice, notice.type === 'error' ? 8000 : 4000);
+    const t = setTimeout(() => dismissNotice?.(), notice.type === 'error' ? 8000 : 4000);
     return () => clearTimeout(t);
   }, [notice, dismissNotice]);
 
@@ -277,7 +277,7 @@ export function DashboardLayout({
           {loadError && (
             <div role="alert" className="mb-4 p-3 rounded-xl border border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/40 text-rose-800 dark:text-rose-300 text-xs flex items-center justify-between gap-3">
               <span>Could not load the latest timetable data: {loadError}</span>
-              <button onClick={() => refresh()} className="px-3 py-1 rounded-lg bg-white dark:bg-zinc-900 border border-rose-200 dark:border-rose-800 font-semibold">Retry</button>
+              <button onClick={() => refresh?.()} className="px-3 py-1 rounded-lg bg-white dark:bg-zinc-900 border border-rose-200 dark:border-rose-800 font-semibold">Retry</button>
             </div>
           )}
           {isLoading ? (

@@ -9,6 +9,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { OAuth2Client } from 'google-auth-library';
 import {
   hashPasswordBcrypt,
+  hashPasswordBcryptSync,
   hashPasswordScrypt,
   verifyPassword,
   hashPasswordLegacy,
@@ -220,7 +221,7 @@ const usersDatabase: Map<string, StoredUser> = new Map(
       id: 'usr-murthy',
       name: 'Dr. K. N. Murthy',
       email: 'kn.murthy@thapar.edu',
-      passwordHash: hashPasswordBcrypt(SEED_USER_PASSWORD),
+      passwordHash: hashPasswordBcryptSync(SEED_USER_PASSWORD),
       roleId: 'role-coordinator',
       roleCode: 'COORDINATOR',
       roleName: 'Timetable Coordinator',
@@ -238,7 +239,7 @@ const usersDatabase: Map<string, StoredUser> = new Map(
       id: 'usr-sharma',
       name: 'Prof. Arvind Sharma',
       email: 'a.sharma@thapar.edu',
-      passwordHash: hashPasswordBcrypt(SEED_USER_PASSWORD),
+      passwordHash: hashPasswordBcryptSync(SEED_USER_PASSWORD),
       roleId: 'role-faculty',
       roleCode: 'FACULTY',
       roleName: 'Faculty Member',
@@ -256,7 +257,7 @@ const usersDatabase: Map<string, StoredUser> = new Map(
       id: 'usr-gupta',
       name: 'Dr. Priya Gupta',
       email: 'p.gupta@thapar.edu',
-      passwordHash: hashPasswordBcrypt(SEED_USER_PASSWORD),
+      passwordHash: hashPasswordBcryptSync(SEED_USER_PASSWORD),
       roleId: 'role-faculty',
       roleCode: 'FACULTY',
       roleName: 'Faculty Member',
@@ -274,7 +275,7 @@ const usersDatabase: Map<string, StoredUser> = new Map(
       id: 'usr-roy',
       name: 'Prof. Sunita Roy',
       email: 's.roy@thapar.edu',
-      passwordHash: hashPasswordBcrypt(SEED_USER_PASSWORD),
+      passwordHash: hashPasswordBcryptSync(SEED_USER_PASSWORD),
       roleId: 'role-hod',
       roleCode: 'HOD',
       roleName: 'Head of Department',
@@ -292,7 +293,7 @@ const usersDatabase: Map<string, StoredUser> = new Map(
       id: 'usr-dean',
       name: 'Dr. Vikram Sengupta',
       email: 'dean@thapar.edu',
-      passwordHash: hashPasswordBcrypt(SEED_USER_PASSWORD),
+      passwordHash: hashPasswordBcryptSync(SEED_USER_PASSWORD),
       roleId: 'role-admin',
       roleCode: 'COLLEGE_ADMIN',
       roleName: 'College Admin / Dean',
@@ -310,7 +311,7 @@ const usersDatabase: Map<string, StoredUser> = new Map(
       id: 'usr-aarav',
       name: 'Aarav Mehta',
       email: 'aarav.m@thapar.edu',
-      passwordHash: hashPasswordBcrypt(SEED_USER_PASSWORD),
+      passwordHash: hashPasswordBcryptSync(SEED_USER_PASSWORD),
       roleId: 'role-student',
       roleCode: 'STUDENT',
       roleName: 'Student',
@@ -328,7 +329,7 @@ const usersDatabase: Map<string, StoredUser> = new Map(
       id: 'usr-demo-coordinator',
       name: 'Prof. Rajesh K. Demo (Coordinator)',
       email: 'coordinator.demo@demo.thapar.local',
-      passwordHash: hashPasswordBcrypt(DEMO_ACCOUNT_PASSWORD),
+      passwordHash: hashPasswordBcryptSync(DEMO_ACCOUNT_PASSWORD),
       roleId: isProdEnvironment ? 'role-student' : 'role-coordinator',
       roleCode: (isProdEnvironment ? 'STUDENT' : 'COORDINATOR') as RoleCode,
       roleName: isProdEnvironment ? 'Student' : 'Timetable Coordinator',
@@ -347,7 +348,7 @@ const usersDatabase: Map<string, StoredUser> = new Map(
       id: 'usr-demo-faculty',
       name: 'Dr. Neha Agarwal (Faculty)',
       email: 'faculty.demo@demo.thapar.local',
-      passwordHash: hashPasswordBcrypt(DEMO_ACCOUNT_PASSWORD),
+      passwordHash: hashPasswordBcryptSync(DEMO_ACCOUNT_PASSWORD),
       roleId: 'role-faculty',
       roleCode: 'FACULTY',
       roleName: 'Faculty Member',
@@ -366,7 +367,7 @@ const usersDatabase: Map<string, StoredUser> = new Map(
       id: 'usr-demo-student',
       name: 'Rohan Sharma (Student)',
       email: 'student.demo@demo.thapar.local',
-      passwordHash: hashPasswordBcrypt(DEMO_ACCOUNT_PASSWORD),
+      passwordHash: hashPasswordBcryptSync(DEMO_ACCOUNT_PASSWORD),
       roleId: 'role-student',
       roleCode: 'STUDENT',
       roleName: 'Student',
@@ -385,7 +386,7 @@ const usersDatabase: Map<string, StoredUser> = new Map(
       id: 'usr-demo-admin',
       name: 'Dr. Vikram Sengupta (Dean/Admin)',
       email: 'admin.demo@demo.thapar.local',
-      passwordHash: hashPasswordBcrypt(DEMO_ACCOUNT_PASSWORD),
+      passwordHash: hashPasswordBcryptSync(DEMO_ACCOUNT_PASSWORD),
       roleId: isProdEnvironment ? 'role-student' : 'role-admin',
       roleCode: (isProdEnvironment ? 'STUDENT' : 'COLLEGE_ADMIN') as RoleCode,
       roleName: isProdEnvironment ? 'Student' : 'College Admin / Dean',
@@ -404,7 +405,7 @@ const usersDatabase: Map<string, StoredUser> = new Map(
       id: 'usr-demo-hod',
       name: 'Dr. Sunita Rao (HOD)',
       email: 'hod.demo@demo.thapar.local',
-      passwordHash: hashPasswordBcrypt(DEMO_ACCOUNT_PASSWORD),
+      passwordHash: hashPasswordBcryptSync(DEMO_ACCOUNT_PASSWORD),
       roleId: 'role-hod',
       roleCode: 'HOD',
       roleName: 'Head of Department',
@@ -778,7 +779,7 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
     });
   }
 
-  const { isValid } = verifyPassword(String(password), user.passwordHash);
+  const { isValid } = await verifyPassword(String(password), user.passwordHash);
   if (!isValid) {
     return res.status(401).json({
       success: false,
@@ -1177,7 +1178,7 @@ app.post('/api/demo/reset', requireAuth, (req: AuthenticatedRequest, res: Respon
   for (const email of demoAccounts) {
     const user = usersDatabase.get(email);
     if (user) {
-      user.passwordHash = hashPasswordBcrypt(DEMO_ACCOUNT_PASSWORD);
+      user.passwordHash = hashPasswordBcryptSync(DEMO_ACCOUNT_PASSWORD);
       user.status = 'ACTIVE';
       usersDatabase.set(email, user);
     }
@@ -1357,7 +1358,7 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
     id: authUserId,
     name: String(name).trim(),
     email: normalizedEmail,
-    passwordHash: hashPasswordBcrypt(String(password)),
+    passwordHash: hashPasswordBcryptSync(String(password)),
     roleId: 'role-' + roleCode.toLowerCase(),
     roleCode,
     roleName,
@@ -1650,7 +1651,7 @@ app.get('/api/auth/google/callback', async (req: Request, res: Response) => {
           id: 'usr_g_' + Date.now(),
           name: name ? String(name).trim() : normalizedEmail.split('@')[0].toUpperCase(),
           email: normalizedEmail,
-          passwordHash: hashPasswordBcrypt('OAuth_Google_' + sub + '_' + normalizedEmail),
+          passwordHash: hashPasswordBcryptSync('OAuth_Google_' + sub + '_' + normalizedEmail),
           roleId: 'role-' + roleCode.toLowerCase(),
           roleCode,
           roleName,
@@ -1876,7 +1877,7 @@ app.post('/api/auth/reset-password', async (req: Request, res: Response) => {
   }
 
   // Update password in database with modern Bcrypt KDF
-  user.passwordHash = hashPasswordBcrypt(String(newPassword));
+  user.passwordHash = hashPasswordBcryptSync(String(newPassword));
   usersDatabase.set(record.email, user);
 
   // Sync password with Supabase Auth

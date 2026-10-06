@@ -128,7 +128,7 @@ export function StudentPortalView() {
     ? 'Loading your timetable…'
     : !currentSection
     ? "Your account isn't linked to a section yet — ask the coordinator."
-    : publishedSessions.length === 0
+    : (publishedSessions?.length ?? 0) === 0
     ? 'No timetable published yet. It will appear here once the coordinator publishes it.'
     : null;
 
