@@ -2475,7 +2475,7 @@ app.delete('/api/academic/subgroups/:groupId/:subgroupId', requireAuth, requireR
 });
 
 // 7. Course Allocations CRUD
-app.get('/api/academic/allocations', requireAuth, (_req: Request, res: Response) {
+app.get('/api/academic/allocations', requireAuth, (_req: Request, res: Response) => {
   const state = supabaseStore.getBootstrapState();
   return res.json({ success: true, allocations: state.allocations });
 });
