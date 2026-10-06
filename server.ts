@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
 import type { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import path from 'path';
@@ -101,10 +102,31 @@ const corsOptions: cors.CorsOptions = {
   allowedHeaders: ['Authorization', 'Content-Type', 'Accept', 'X-Requested-With'],
 };
 
-app.use(helmet({ contentSecurityPolicy: false }));
+app.set('trust proxy', Number(process.env.TRUST_PROXY ?? 0));
+app.use(cookieParser());
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", "data:", "blob:"],
+        connectSrc: ["'self'", "https:", "wss:"],
+        fontSrc: ["'self'", "data:"],
+        objectSrc: ["'none'"],
+        frameAncestors: ["'none'"],
+      },
+    },
+  })
+);
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
+app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
+  res.setHeader('Cache-Control', 'no-store');
+  next();
+});
 
 export type WorkspaceType = 'Student' | 'CR' | 'Faculty' | 'Coordinator' | 'Admin';
 
@@ -913,6 +935,7 @@ app.post('/api/auth/logout', async (req: Request, res: Response) => {
 function getAuthenticatedUser(req: Request): StoredUser | null {
   const token =
     req.headers.authorization?.replace(/^Bearer\s+/, '') ||
+    req.cookies?.intellischedule_session ||
     (req.headers.cookie?.match(/intellischedule_session=([^;]+)/)?.[1]);
 
   if (!token) return null;
@@ -937,6 +960,18 @@ app.get('/api/me', (req: Request, res: Response) => {
   const roleKey = mapRoleCodeToDashboard(user.roleCode);
   const authorizedWorkspaces = resolveWorkspacesForUser(user);
 
+  let studentRecord: any = null;
+  let facultyRecord: any = null;
+  const bootstrap = supabaseStore.getBootstrapState();
+
+  if (user.roleCode === 'STUDENT' || user.roleCode === 'CLASS_REPRESENTATIVE') {
+    const students = bootstrap.students || [];
+    studentRecord = students.find((s: any) => s.email.toLowerCase() === user.email.toLowerCase()) || students[0];
+  } else if (user.roleCode === 'FACULTY' || user.roleCode === 'COORDINATOR' || user.roleCode === 'HOD') {
+    const faculty = bootstrap.facultyMembers || [];
+    facultyRecord = faculty.find((f: any) => f.email.toLowerCase() === user.email.toLowerCase()) || faculty[0];
+  }
+
   return res.json({
     success: true,
     user: {
@@ -949,10 +984,12 @@ app.get('/api/me', (req: Request, res: Response) => {
       roleName: user.roleName,
       roleKey,
       authorizedWorkspaces,
-      program: 'B.Tech in Computer Science & Engineering',
-      semester: 5,
-      section: 'CSE-A',
-      rollNumber: '102303999',
+      program: studentRecord?.programCode || 'B.Tech in Computer Science & Engineering',
+      semester: studentRecord?.semester || 5,
+      section: studentRecord?.sectionName || studentRecord?.sectionId || 'CSE-A',
+      rollNumber: studentRecord?.studentId || studentRecord?.id || '102303999',
+      employeeId: facultyRecord?.employeeId,
+      designation: facultyRecord?.designation,
     },
   });
 });
@@ -964,22 +1001,51 @@ app.get('/api/me/timetable', (req: Request, res: Response) => {
     return res.status(401).json({ success: false, error: 'Unauthorized: Please sign in to continue.' });
   }
 
+  const bootstrap = supabaseStore.getBootstrapState();
+  const sessions = bootstrap.sessions || [];
+  let userSection = 'CSE-A';
+  let filteredSessions = sessions;
+
+  if (user.roleCode === 'STUDENT' || user.roleCode === 'CLASS_REPRESENTATIVE') {
+    const students = bootstrap.students || [];
+    const studentRecord = students.find((s: any) => s.email.toLowerCase() === user.email.toLowerCase()) || students[0];
+    if (studentRecord) {
+      userSection = studentRecord.sectionName || studentRecord.sectionId;
+      filteredSessions = sessions.filter((s: any) => s.sectionId === studentRecord.sectionId || s.sectionId === userSection);
+    }
+  } else if (user.roleCode === 'FACULTY') {
+    const faculty = bootstrap.facultyMembers || [];
+    const facultyRecord = faculty.find((f: any) => f.email.toLowerCase() === user.email.toLowerCase());
+    if (facultyRecord) {
+      filteredSessions = sessions.filter((s: any) => s.facultyId === facultyRecord.id);
+    }
+  }
+
+  const schedule = filteredSessions.slice(0, 50).map((s: any) => {
+    const course = bootstrap.courses.find((c: any) => c.id === s.courseId);
+    const room = bootstrap.rooms.find((r: any) => r.id === s.roomId);
+    const facultyMember = bootstrap.facultyMembers.find((f: any) => f.id === s.facultyId);
+    return {
+      day: s.day,
+      timeSlot: s.timeSlotId,
+      courseCode: course?.code || s.courseId,
+      courseName: course?.name || 'Class Session',
+      room: room?.name || s.roomId,
+      faculty: facultyMember?.name || s.facultyId,
+      status: s.status || 'Confirmed',
+    };
+  });
+
   return res.json({
     success: true,
     user: {
       id: user.id,
       name: user.name,
       roleCode: user.roleCode,
-      section: 'CSE-A',
+      section: userSection,
     },
-    schedule: [
-      { day: 'Monday', timeSlot: '08:00 - 09:00', courseCode: 'CS501', courseName: 'Data Structures', room: 'LT101', faculty: 'Prof. Arvind Sharma', status: 'Cancelled' },
-      { day: 'Monday', timeSlot: '10:00 - 11:00', courseCode: 'CS502', courseName: 'Operating Systems', room: 'LT102', faculty: 'Dr. Priya Gupta', status: 'Confirmed' },
-      { day: 'Monday', timeSlot: '11:00 - 12:00', courseCode: 'CS503', courseName: 'Database Management', room: 'Room 204', faculty: 'Dr. Rohan Patel', status: 'Confirmed' },
-      { day: 'Tuesday', timeSlot: '09:00 - 10:00', courseCode: 'MA501', courseName: 'Discrete Mathematics', room: 'LT101', faculty: 'Prof. Sunita Roy', status: 'Confirmed' },
-      { day: 'Wednesday', timeSlot: '10:00 - 11:00', courseCode: 'CS501', courseName: 'Data Structures', room: 'Room 204', faculty: 'Prof. Arvind Sharma', status: 'Confirmed' },
-      { day: 'Thursday', timeSlot: '11:00 - 12:00', courseCode: 'CS503', courseName: 'Database Management', room: 'Room 204', faculty: 'Dr. Rohan Patel', status: 'Confirmed' },
-      { day: 'Friday', timeSlot: '09:00 - 10:00', courseCode: 'CS502', courseName: 'Operating Systems', room: 'LT102', faculty: 'Dr. Priya Gupta', status: 'Confirmed' },
+    schedule: schedule.length > 0 ? schedule : [
+      { day: 'Monday', timeSlot: '08:00 - 09:00', courseCode: 'CS501', courseName: 'Data Structures', room: 'LT101', faculty: 'Prof. Arvind Sharma', status: 'Confirmed' }
     ],
   });
 });

@@ -113,7 +113,7 @@ export function buildDemoDataset() {
       floor: Math.ceil(i / 10),
       type: isComp ? 'ComputerLab' : 'HardwareLab',
       capacity: prng.choice([30, 40, 50]),
-      equipment: isComp ? ['30 Workstations', 'Linux/Windows', 'Gigabit LAN'] : ['Oscilloscopes', 'Breadboards', 'Power Supplies'],
+      equipment: isComp ? ['30 Workstations', 'Linux/Windows', 'Gigabit LAN', 'Smart Projector'] : ['Oscilloscopes', 'Breadboards', 'Power Supplies', 'Smart Projector'],
       isAvailable: true,
     });
   }
