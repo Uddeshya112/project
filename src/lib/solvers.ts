@@ -8,6 +8,8 @@ export interface ConflictNode {
   courseName: string;
   sectionName: string;
   facultyName: string;
+  courseId: string;
+  sectionId: string;
   degree: number;
   saturationDegree: number;
   assignedSlot?: string;
@@ -63,6 +65,8 @@ export function buildConflictGraph(
         courseName: c.name,
         sectionName: sec.name,
         facultyName: fac?.name || 'Faculty',
+        courseId: c.id,
+        sectionId: sec.id,
         degree: 0,
         saturationDegree: 0,
       });
@@ -75,11 +79,10 @@ export function buildConflictGraph(
       const a = nodes[i];
       const b = nodes[j];
 
-      const [courseAId, secAId] = a.id.split('-');
-      const [courseBId, secBId] = b.id.split('-');
-
-      const courseA = courses.find(c => c.id === courseAId);
-      const courseB = courses.find(c => c.id === courseBId);
+      const courseA = courses.find(c => c.id === a.courseId);
+      const courseB = courses.find(c => c.id === b.courseId);
+      const secAId = a.sectionId;
+      const secBId = b.sectionId;
 
       let conflictFound = false;
 
@@ -163,6 +166,8 @@ export function runDSATURSolver(
   const slots = TIME_SLOTS.filter(ts => ts.id !== 'ts-5'); // No lunch
 
   const scheduledSessions: ClassSession[] = [];
+  const saturationColors = new Map<string, Set<string>>();
+  for (const node of unassigned) saturationColors.set(node.id, new Set());
   let iterations = 0;
 
   while (unassigned.length > 0) {
@@ -177,10 +182,13 @@ export function runDSATURSolver(
     });
 
     const current = unassigned.shift()!;
-    const [cId, sId] = current.id.split('-');
-    const course = courses.find(c => c.id === cId)!;
-    const faculty = facultyMembers.find(f => f.id === course.primaryFacultyId)!;
-    const section = sections.find(s => s.id === sId)!;
+    const course = courses.find(c => c.id === current.courseId);
+    const faculty = course ? facultyMembers.find(f => f.id === course.primaryFacultyId) : undefined;
+    const section = sections.find(s => s.id === current.sectionId);
+    if (!course || !faculty || !section) {
+      logs.push(`[DSATUR] Skipping invalid offering ${current.id}: missing course, faculty, or section.`);
+      continue;
+    }
 
     // Find best collision-free slot
     let assigned = false;
@@ -216,7 +224,7 @@ export function runDSATURSolver(
 
         if (check.isFeasible) {
           scheduledSessions.push({
-            id: `dsatur-${cId}-${day}-${slot.id}`,
+            id: `dsatur-${course.id}-${section.id}-${day}-${slot.id}`,
             courseId: course.id,
             facultyId: faculty.id,
             sectionId: section.id,
@@ -232,14 +240,16 @@ export function runDSATURSolver(
           current.assignedSlot = slot.label;
           current.color = `${day}-${slot.id}`;
 
-          // Update saturation degree of neighbours
+          // DSATUR saturation is the number of unique colours used by coloured neighbours.
           graph.edges
             .filter(e => e.source === current.id || e.target === current.id)
             .forEach(e => {
               const neighbourId = e.source === current.id ? e.target : e.source;
+              const colours = saturationColors.get(neighbourId);
               const nNode = unassigned.find(n => n.id === neighbourId);
-              if (nNode) {
-                nNode.saturationDegree++;
+              if (colours && nNode) {
+                colours.add(current.color!);
+                nNode.saturationDegree = colours.size;
               }
             });
 
@@ -264,7 +274,7 @@ export function runDSATURSolver(
       executionTimeMs: Math.max(12, execTime),
       iterations,
       hardConstraintViolations: health.hardConstraintViolations,
-      softScore: 92.4,
+      softScore: health.overallScore,
       healthScore: health.overallScore,
       solutionQuality: 'Feasible (Graph-Coloring Heuristic)',
       logs,
@@ -398,8 +408,12 @@ export function runFastGreedySolver(
 
   sections.forEach(sec => {
     courses.forEach(c => {
-      const fac = facultyMembers.find(f => f.id === c.primaryFacultyId)!;
-      const room = rooms.find(r => (!c.requiresLab || r.type === 'ComputerLab') && r.capacity >= sec.studentCount)!;
+      const fac = facultyMembers.find(f => f.id === c.primaryFacultyId);
+      const room = rooms.find(r => (!c.requiresLab || r.type === 'ComputerLab') && r.capacity >= sec.studentCount);
+      if (!fac || !room) {
+        logs.push(`[FastGreedy] Skipping ${c.code} for ${sec.name}: no qualified faculty or compatible room.`);
+        return;
+      }
 
       for (let dayIdx = 0; dayIdx < Math.min(c.requiredLecturesPerWeek, days.length); dayIdx++) {
         const day = days[dayIdx];
@@ -434,7 +448,7 @@ export function runFastGreedySolver(
       executionTimeMs: execTime,
       iterations: sessions.length,
       hardConstraintViolations: health.hardConstraintViolations,
-      softScore: 84.1,
+      softScore: health.overallScore,
       healthScore: health.overallScore,
       solutionQuality: 'Feasible (Greedy Heuristic)',
       logs,
