@@ -88,7 +88,7 @@ interface AuthContextType {
     message: string;
   }>;
 
-  logout: () => void;
+  logout: () => Promise<void>;
   switchUser: (userId: string) => void;
   updateUserRole: (userId: string, newRoleId: string, reason: string) => void;
   updateUserProfile: (userIdOrUpdates: string | Partial<AuthUser>, maybeUpdates?: Partial<AuthUser>) => Promise<{ success: boolean; message?: string }>;
@@ -298,7 +298,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   /**
    * REST Backend Register (POST /api/auth/register) - Strictly Authoritative
-   * Registration policy: Registration creates the user account in Supabase Auth,
+   * Registration policy: Registration creates the user account in the server-side database,
    * but does NOT automatically authenticate or issue an application session.
    * The user must explicitly sign in on the login screen.
    */
@@ -401,7 +401,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const logout = async () => {
+  const logout = async (): Promise<void> => {
     try { await api('/api/auth/logout', { method: 'POST', body: {} }); } catch {}
     setIsAuthenticated(false);
     setAuthStatus('UNAUTHENTICATED');
@@ -442,7 +442,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const addRoleAssignment = (email: string, roleId: string, notes?: string) => {
     const newAssignment: RoleAssignment = {
-      id: `ra-${Date.now().toString().slice(-4)}`,
+      id: `ra-${crypto.randomUUID()}`,
       institutionId: currentInstitution.id,
       email: email.toLowerCase().trim(),
       roleId,
@@ -498,14 +498,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         allSessions,
         passwordResetTokens,
         roster: currentUser ? {
-          rollNumber: currentUser.rollNumber ?? '102303999',
-          sectionId: currentUser.sectionId ?? 'sec-csea',
-          subSectionId: currentUser.subSectionId ?? 'sub-sec-csea-1'
-        } : {
-          rollNumber: '102303999',
-          sectionId: 'sec-csea',
-          subSectionId: 'sub-sec-csea-1'
-        },
+          rollNumber: currentUser.rollNumber,
+          sectionId: currentUser.sectionId,
+          subSectionId: currentUser.subSectionId,
+          facultyId: currentUser.facultyId,
+          crSectionId: currentUser.crSectionId,
+        } : undefined,
       }}
     >
       {children}
