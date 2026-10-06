@@ -299,10 +299,9 @@ export class TimetableStore {
     const activeVersion = staff && this.activeVersionNumber != null
       ? this.versions.find((v) => v.versionNumber === this.activeVersionNumber)
       : undefined;
-    const workingSessions = staff && activeVersion && this.activeSessions.length !== activeVersion.sessions.length
-      ? clone(activeVersion.sessions)
-      : this.activeSessions;
-    const allSessions = staff ? workingSessions : this.publishedSessions;
+    const allSessions = staff
+      ? (activeVersion?.sessions ?? this.activeSessions)
+      : this.publishedSessions;
     const visibleSessions = viewer.roleCode === 'STUDENT' || viewer.roleCode === 'CLASS_REPRESENTATIVE'
       ? allSessions.filter((s) => !roster.sectionId || s.sectionId === roster.sectionId)
       : viewer.roleCode === 'FACULTY' && roster.facultyId
