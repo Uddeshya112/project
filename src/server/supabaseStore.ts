@@ -813,7 +813,8 @@ class SupabaseRelationalStore {
   // --------------------------------------------------------------------------
   public persistGeneratedRoutine(
     routine: GenerationRoutine & { candidate?: GeneratedCandidate },
-    userId = 'coordinator'
+    userId = 'coordinator',
+    activateAsDraft = false
   ): GenerationRoutine {
     const allocations = Array.from(this.allocations.values());
     const facultyMembers = Array.from(this.facultyMembers.values());
@@ -883,12 +884,9 @@ class SupabaseRelationalStore {
     };
 
     this.versions.unshift(version);
-    if (this.versions.length === 1 || this.activeSessions.length === 0 || this.academicYear.publishStatus !== 'Published') {
-      // The first valid routine returned by a job becomes the active draft; no publication occurs.
-      if (this.versions[0]?.id === versionId) {
-        this.activeSessions = persisted.sessions;
-        this.academicYear.publishStatus = 'Draft';
-      }
+    if (activateAsDraft) {
+      this.activeSessions = persisted.sessions;
+      this.academicYear.publishStatus = 'Draft';
     }
 
     this.logAudit(
