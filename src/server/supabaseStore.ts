@@ -838,19 +838,19 @@ class SupabaseRelationalStore {
         .filter(v => v.severity === 'CRITICAL')
         .map(v => v.message);
       throw new Error(
-        \`Cannot persist routine \${routine.label}: independent validation failed with \${validation.hardViolationsCount} hard violation(s). \${reasons.slice(0, 5).join(' ')}\`
+        `Cannot persist routine ${routine.label}: independent validation failed with ${validation.hardViolationsCount} hard violation(s). ${reasons.slice(0, 5).join(' ')}`
       );
     }
 
     const totalRequired = allocations.reduce((sum, a) => sum + a.hoursPerWeek, 0);
     if (validation.scheduledSessionsCount !== validation.requiredSessionsCount || routine.sessions.length !== totalRequired) {
       throw new Error(
-        \`Cannot persist routine \${routine.label}: scheduled session count \${routine.sessions.length} does not match required atomic session count \${totalRequired}.\`
+        `Cannot persist routine ${routine.label}: scheduled session count ${routine.sessions.length} does not match required atomic session count ${totalRequired}.`
       );
     }
 
     const verNum = this.versions.length + 1;
-    const versionId = \`ver-\${verNum}\`;
+    const versionId = `ver-${verNum}`;
     const persisted: GenerationRoutine = {
       ...routine,
       versionId,
@@ -870,11 +870,11 @@ class SupabaseRelationalStore {
     const version: TimetableVersion = {
       id: versionId,
       versionNumber: verNum,
-      versionLabel: \`\${routine.label} Draft V\${verNum}.0\`,
-      label: \`\${routine.label} Draft V\${verNum}.0\`,
+      versionLabel: `${routine.label} Draft V${verNum}.0`,
+      label: `${routine.label} Draft V${verNum}.0`,
       createdAt: new Date().toISOString(),
       createdBy: userId,
-      changeSummary: \`Generated \${routine.label} timetable (\${routine.sessions.length} sessions).\`,
+      changeSummary: `Generated ${routine.label} timetable (${routine.sessions.length} sessions).`,
       reason: 'Asynchronous timetable generation',
       isPublished: false,
       healthScore: routine.healthScore,
@@ -894,7 +894,7 @@ class SupabaseRelationalStore {
       'TIMETABLE_ROUTINE_PERSISTED',
       'TimetableVersion',
       versionId,
-      \`Persisted independently validated \${routine.label} routine (health \${routine.healthScore}).\`
+      `Persisted independently validated ${routine.label} routine (health ${routine.healthScore}).`
     );
 
     return persisted;
