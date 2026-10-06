@@ -38,24 +38,7 @@ import {
   EngineOptions,
   GeneratedCandidate
 } from '../lib/optimizationEngine';
-import {
-  ROOMS,
-  FACULTY_MEMBERS,
-  SECTIONS,
-  COURSES,
-  DEPARTMENTS,
-  PROGRAMS,
-  INITIAL_ACADEMIC_YEAR,
-  INITIAL_ALLOCATIONS,
-  INITIAL_CONSTRAINTS,
-  INITIAL_SESSIONS,
-  INITIAL_MAKEUP_TASKS,
-  INITIAL_RECOVERY_OPPORTUNITIES,
-  INITIAL_POLLS,
-  INITIAL_NOTIFICATIONS,
-  INITIAL_VERSIONS,
-  INITIAL_WHAT_IF_SIMULATION
-} from '../lib/initialData';
+
 import {
   calculateHealthScore,
   findSelfHealingRecoverySlots,
@@ -275,60 +258,58 @@ interface TimetableContextType {
 
 const TimetableContext = createContext<TimetableContextType | null>(null);
 
+const EMPTY_ACADEMIC_YEAR: AcademicYearConfig = {
+  id: 'runtime-academic-year',
+  yearLabel: '',
+  semesterType: 'Odd (Autumn)',
+  semesterNumber: 1,
+  workingDays: [],
+  timeSlots: [],
+  lunchPeriodId: '',
+  publishStatus: 'Draft',
+};
+
+const EMPTY_WHAT_IF: WhatIfSimulation = {
+  id: 'empty',
+  title: '',
+  scenarioType: 'RoomUnavailable',
+  parameters: {},
+  impact: {
+    affectedClassesCount: 0,
+    requiredRoomChanges: 0,
+    newHardConflicts: 0,
+    stabilityScore: 100,
+    projectedHealthScore: 0,
+    affectedFacultyNames: [],
+    affectedSectionNames: [],
+  },
+  suggestedActions: [],
+};
+
 export function TimetableProvider({ children }: { children: React.ReactNode }) {
   // Master academic state
-  const [academicYear, setAcademicYear] = useState<AcademicYearConfig>(INITIAL_ACADEMIC_YEAR);
-  const [departments, setDepartments] = useState<Department[]>(DEPARTMENTS);
-  const [programs, setPrograms] = useState<Program[]>(PROGRAMS);
-  const [rooms, setRooms] = useState<Room[]>(ROOMS);
-  const [facultyMembers, setFacultyMembers] = useState<Faculty[]>(FACULTY_MEMBERS);
-  const [sections, setSections] = useState<StudentSection[]>(SECTIONS);
-  const [courses, setCourses] = useState<Course[]>(COURSES);
-  const [allocations, setAllocations] = useState<CourseAllocation[]>(INITIAL_ALLOCATIONS);
-  const [constraints, setConstraints] = useState<AcademicConstraint[]>(INITIAL_CONSTRAINTS);
-  const [publishStatus, setPublishStatus] = useState<TimetablePublishStatus>('Published');
+  const [academicYear, setAcademicYear] = useState<AcademicYearConfig>(EMPTY_ACADEMIC_YEAR);
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [programs, setPrograms] = useState<Program[]>([]);
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [facultyMembers, setFacultyMembers] = useState<Faculty[]>([]);
+  const [sections, setSections] = useState<StudentSection[]>([]);
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [allocations, setAllocations] = useState<CourseAllocation[]>([]);
+  const [constraints, setConstraints] = useState<AcademicConstraint[]>([]);
+  const [publishStatus, setPublishStatus] = useState<TimetablePublishStatus>('Draft');
 
   // Dynamic operational state
-  const [sessions, setSessions] = useState<ClassSession[]>(INITIAL_SESSIONS);
-  const [makeupTasks, setMakeupTasks] = useState<MakeupTask[]>(INITIAL_MAKEUP_TASKS);
-  const [recoveryOpportunities, setRecoveryOpportunities] = useState<RecoveryOpportunity[]>(INITIAL_RECOVERY_OPPORTUNITIES);
-  const [polls, setPolls] = useState<StudentPoll[]>(INITIAL_POLLS);
-  const [notifications, setNotifications] = useState<NotificationItem[]>(INITIAL_NOTIFICATIONS);
-  const [versions, setVersions] = useState<TimetableVersion[]>(INITIAL_VERSIONS);
-  const [whatIfSimulation, setWhatIfSimulation] = useState<WhatIfSimulation>(INITIAL_WHAT_IF_SIMULATION);
+  const [sessions, setSessions] = useState<ClassSession[]>([]);
+  const [makeupTasks, setMakeupTasks] = useState<MakeupTask[]>([]);
+  const [recoveryOpportunities, setRecoveryOpportunities] = useState<RecoveryOpportunity[]>([]);
+  const [polls, setPolls] = useState<StudentPoll[]>([]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [versions, setVersions] = useState<TimetableVersion[]>([]);
+  const [whatIfSimulation, setWhatIfSimulation] = useState<WhatIfSimulation>(EMPTY_WHAT_IF);
 
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([
-    {
-      id: 'log-1',
-      timestamp: '2026-10-02 08:00:12',
-      userId: 'user-sharma',
-      userName: 'Prof. Arvind Sharma',
-      action: 'CLASS_CANCELLED',
-      entityType: 'ClassSession',
-      entityId: 'sess-mon-1',
-      details: 'Cancelled DBMS lecture for CSE-A on Monday 08:00 due to accreditation symposium.',
-    },
-    {
-      id: 'log-2',
-      timestamp: '2026-10-02 08:00:15',
-      userId: 'sys-recovery-engine',
-      userName: 'Recovery Engine Outbox',
-      action: 'MAKEUP_TASK_CREATED',
-      entityType: 'MakeupTask',
-      entityId: 'makeup-dbms-01',
-      details: 'Calculated urgency score 96 (Exam in 21 days, syllabus completion 82%).',
-    },
-    {
-      id: 'log-3',
-      timestamp: '2026-10-02 08:05:30',
-      userId: 'sys-recovery-engine',
-      userName: 'Cross-Cancellation Engine',
-      action: 'RECOVERY_OPPORTUNITY_FOUND',
-      entityType: 'RecoveryOpportunity',
-      entityId: 'rec-opp-01',
-      details: 'Identified zero-conflict slot on Thursday 11:00-12:00 in Room 204 created by Dr. Gupta OS cancellation.',
-    }
-  ]);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+
 
   const [currentRole, setCurrentRole] = useState<UserRole>('Coordinator');
   const [activeView, setActiveView] = useState<ViewTab>('overview');
@@ -355,21 +336,21 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
           const data = await res.json();
           if (data.success && isMounted) {
             if (data.academicYear) setAcademicYear(data.academicYear);
-            if (data.departments && data.departments.length > 0) setDepartments(data.departments);
-            if (data.programs && data.programs.length > 0) setPrograms(data.programs);
-            if (data.courses && data.courses.length > 0) setCourses(data.courses);
-            if (data.facultyMembers && data.facultyMembers.length > 0) setFacultyMembers(data.facultyMembers);
-            if (data.rooms && data.rooms.length > 0) setRooms(data.rooms);
-            if (data.sections && data.sections.length > 0) setSections(data.sections);
-            if (data.allocations && data.allocations.length > 0) setAllocations(data.allocations);
-            if (data.constraints && data.constraints.length > 0) setConstraints(data.constraints);
-            if (data.sessions && data.sessions.length > 0) setSessions(data.sessions);
-            if (data.versions && data.versions.length > 0) setVersions(data.versions);
-            if (data.notifications && data.notifications.length > 0) setNotifications(data.notifications);
-            if (data.makeupTasks && data.makeupTasks.length > 0) setMakeupTasks(data.makeupTasks);
-            if (data.recoveryOpportunities && data.recoveryOpportunities.length > 0) setRecoveryOpportunities(data.recoveryOpportunities);
-            if (data.polls && data.polls.length > 0) setPolls(data.polls);
-            if (data.auditLogs && data.auditLogs.length > 0) setAuditLogs(data.auditLogs);
+            if (Array.isArray(data.departments)) setDepartments(data.departments);
+            if (Array.isArray(data.programs)) setPrograms(data.programs);
+            if (Array.isArray(data.courses)) setCourses(data.courses);
+            if (Array.isArray(data.facultyMembers)) setFacultyMembers(data.facultyMembers);
+            if (Array.isArray(data.rooms)) setRooms(data.rooms);
+            if (Array.isArray(data.sections)) setSections(data.sections);
+            if (Array.isArray(data.allocations)) setAllocations(data.allocations);
+            if (Array.isArray(data.constraints)) setConstraints(data.constraints);
+            if (Array.isArray(data.sessions)) setSessions(data.sessions);
+            if (Array.isArray(data.versions)) setVersions(data.versions);
+            if (Array.isArray(data.notifications)) setNotifications(data.notifications);
+            if (Array.isArray(data.makeupTasks)) setMakeupTasks(data.makeupTasks);
+            if (Array.isArray(data.recoveryOpportunities)) setRecoveryOpportunities(data.recoveryOpportunities);
+            if (Array.isArray(data.polls)) setPolls(data.polls);
+            if (Array.isArray(data.auditLogs)) setAuditLogs(data.auditLogs);
             if (data.publishStatus) setPublishStatus(data.publishStatus);
           }
         }
@@ -1425,24 +1406,10 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
   };
 
   const resetDemoAcademicData = () => {
-    setAcademicYear(INITIAL_ACADEMIC_YEAR);
-    setDepartments(DEPARTMENTS);
-    setPrograms(PROGRAMS);
-    setRooms(ROOMS);
-    setFacultyMembers(FACULTY_MEMBERS);
-    setSections(SECTIONS);
-    setCourses(COURSES);
-    setAllocations(INITIAL_ALLOCATIONS);
-    setConstraints(INITIAL_CONSTRAINTS);
-    setSessions(INITIAL_SESSIONS);
-    setMakeupTasks(INITIAL_MAKEUP_TASKS);
-    setRecoveryOpportunities(INITIAL_RECOVERY_OPPORTUNITIES);
-    setPolls(INITIAL_POLLS);
-    setNotifications(INITIAL_NOTIFICATIONS);
-    setVersions(INITIAL_VERSIONS);
-    setWhatIfSimulation(INITIAL_WHAT_IF_SIMULATION);
-    setPublishStatus('Published');
+    // Reload authoritative server data instead of restoring client-side fixtures.
+    window.location.reload();
   };
+
 
   // Bulk Import Helper
   const bulkImportData = (
