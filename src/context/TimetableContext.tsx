@@ -255,7 +255,7 @@ interface TimetableContextType {
     validationReports: IndependentValidationReport[];
     diagnostics?: string[];
   };
-  generateDualRoutinesAPI: () => Promise<GenerationResponse>;
+  generateDualRoutinesAPI: (options?: { budgetMode?: EngineOptions['budgetMode']; timeBudgetMs?: number; maxCandidates?: number }) => Promise<GenerationResponse>;
   selectRoutineAPI: (versionNumber: number) => Promise<{ success: boolean; message?: string }>;
   latestGeneratedRoutines: GenerationRoutine[] | null;
   setLatestGeneratedRoutines: (routines: GenerationRoutine[] | null) => void;
@@ -1111,28 +1111,28 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     return { success: true };
   };
 
-  const generateDualRoutinesAPI = async (): Promise<GenerationResponse> => {
+  const generateDualRoutinesAPI = async (
+    options: { budgetMode?: EngineOptions['budgetMode']; timeBudgetMs?: number; maxCandidates?: number } = {},
+  ): Promise<GenerationResponse> => {
     try {
       const headers = await getAuthHeadersAsync();
       const targetUrl = apiUrl('/api/academic/generate');
-
-      if (import.meta.env.DEV) {
-        console.info('[GENERATION AUTH TRACE]', {
-          frontendSession: Boolean(headers['Authorization']),
-          accessToken: headers['Authorization'] ? 'present' : 'missing',
-          apiUrl: targetUrl,
-          authorizationHeaderAttached: Boolean(headers['Authorization']),
-        });
-      }
+      const count = Math.min(5, Math.max(1, options.maxCandidates ?? 2));
+      const profiles: GenerationRoutine['optimizationProfile'][] = ['STUDENT_FOCUSED', 'FACULTY_FOCUSED', 'BALANCED'];
+      const routines = Array.from({ length: count }, (_, i) => ({
+        id: `routine-${i + 1}`,
+        label: i === 0 ? 'Student-focused' : i === 1 ? 'Faculty-focused' : `Balanced Option ${i + 1}`,
+        optimizationProfile: profiles[i % profiles.length],
+      }));
 
       const res = await fetch(targetUrl, {
         method: 'POST',
         headers,
+        credentials: 'include',
         body: JSON.stringify({
-          routines: [
-            { id: 'student-focused', label: 'Student-focused', optimizationProfile: 'STUDENT_FOCUSED' },
-            { id: 'faculty-focused', label: 'Faculty-focused', optimizationProfile: 'FACULTY_FOCUSED' },
-          ],
+          budgetMode: options.budgetMode || 'BALANCED',
+          timeBudgetMs: options.timeBudgetMs || 1000,
+          routines,
         }),
       });
 
@@ -1146,7 +1146,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     } catch (err: any) {
       console.warn('[TIMETABLE_API] Generate API fallback to local solver:', err);
       // Fallback to local execution if backend network fails
-      const candRes = generateMultiCandidateTimetables({ timeBudgetMs: 800 });
+      const candRes = generateMultiCandidateTimetables({ timeBudgetMs: options.timeBudgetMs || 800, maxCandidates: options.maxCandidates || 3, budgetMode: options.budgetMode || 'BALANCED' });
       const fallbackRoutines: GenerationRoutine[] = candRes.candidates.map((c, i) => ({
         id: i === 0 ? 'student-focused' : 'faculty-focused',
         label: i === 0 ? 'Student-focused' : 'Faculty-focused',
@@ -1166,10 +1166,10 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
           availabilityViolations: 0,
         },
         metrics: {
-          studentGaps: 96,
-          facultyGaps: 15,
-          roomUtilization: 23.0,
-          labUtilization: 21.33,
+          studentGaps: candRes.validationReports[i]?.metrics.totalStudentGaps ?? 0,
+          facultyGaps: candRes.validationReports[i]?.metrics.totalFacultyGaps ?? 0,
+          roomUtilization: candRes.validationReports[i]?.metrics.roomUtilizationRate ?? 0,
+          labUtilization: candRes.validationReports[i]?.metrics.labUtilizationRate ?? 0,
         },
         healthScore: c.healthScore,
       }));
