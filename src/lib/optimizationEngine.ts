@@ -565,6 +565,11 @@ export function executeOptimizationEngine(
   const subSectionOccupancy = new Array<bigint>(Math.max(1, problem.totalSubSections)).fill(0n);
   const sectionSubgroupCounts = Array.from({ length: numSections }, () => new Int16Array(totalSlots));
   const sectionElectiveGroupCounts = Array.from({ length: numSections }, () => new Map<number, Map<string, number>>());
+
+  const scheduleAssignments = new Array<{ allocIdx: number; roomIdx: number } | null>(totalSlots).fill(null);
+  const allocHoursAssigned = new Array<number>(problem.allocations.length).fill(0);
+  const allocAssignedSlots = Array.from({ length: problem.allocations.length }, () => [] as { slotIdx: number; roomIdx: number }[]);
+
   const pinnedSessions = (options.pinnedSessions || []).filter(s => s.isLocked && s.status !== 'Cancelled');
   const pinnedAllocationHours = new Map<string, number>();
   for (const pin of pinnedSessions) {
@@ -596,14 +601,6 @@ export function executeOptimizationEngine(
     allocHoursAssigned[allocation.allocIdx] += pin.durationPeriods || 1;
     block.forEach(idx => allocAssignedSlots[allocation.allocIdx].push({ slotIdx: idx, roomIdx: roomIndex }));
   }
-
-  // Schedule Grid: slotIdx -> { allocIdx, roomIdx } | null
-  const scheduleAssignments = new Array<{ allocIdx: number; roomIdx: number } | null>(totalSlots).fill(null);
-
-  // Tracking hours assigned per allocation
-  const allocHoursAssigned = new Array<number>(problem.allocations.length).fill(0);
-  const allocAssignedSlots = Array.from({ length: problem.allocations.length }, () => [] as { slotIdx: number; roomIdx: number }[]);
-  const sectionElectiveGroupCounts = Array.from({ length: numSections }, () => new Map<number, Map<string, number>>());
 
   // Phase A: Feasibility Backtracking Search
   const feasibilityStart = performance.now();
