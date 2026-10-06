@@ -25,6 +25,7 @@ import {
   INITIAL_CONSTRAINTS,
 } from './src/lib/initialData';
 import { supabaseStore } from './src/server/supabaseStore';
+import { startTimetableGenerationJob, getTimetableGenerationJob, cancelTimetableGenerationJob } from './src/server/timetableGenerationJobs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2682,31 +2683,50 @@ app.post('/api/academic/import', requireAuth, requireRole(['COORDINATOR', 'COLLE
 // TIMETABLE SCHEDULING, SOLVER & VERSIONING APIS
 // -------------------------------------------------------------
 
-// Timetable Generation (Server-Side Solver + Independent Validator + Supabase Persistence)
-const handleGenerateTimetable = (req: AuthenticatedRequest, res: Response) => {
+// Timetable generation is asynchronous so the API remains responsive for large datasets.
+app.post('/api/timetable/generate', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
   const body = req.body || {};
-  const { budgetMode = 'BALANCED', timeBudgetMs = 800, routines } = body;
-
-  const result = supabaseStore.generateDualRoutines(
-    {
-      budgetMode,
-      timeBudgetMs: Number(timeBudgetMs),
-      routines: Array.isArray(routines) ? routines : undefined,
-    },
-    req.authenticatedUser?.name
-  );
-
-  return res.json({
-    ...result,
-    generatedBy: req.authenticatedUser?.name,
+  const budgetMode = body.budgetMode === 'FAST' || body.budgetMode === 'MAXIMUM_OPTIMIZATION' ? body.budgetMode : 'BALANCED';
+  const requestedTimeBudget = Number(body.timeBudgetMs);
+  const timeBudgetMs = Number.isFinite(requestedTimeBudget) ? Math.max(50, Math.min(120000, requestedTimeBudget)) : 2000;
+  const requestedRoutines = Array.isArray(body.routines) && body.routines.length > 0 ? body.routines : [
+    { id: 'student-focused', label: 'Student-focused', description: 'Prioritizes student timetable quality and minimizes student gaps.', optimizationProfile: 'STUDENT_FOCUSED' },
+    { id: 'faculty-focused', label: 'Faculty-focused', description: 'Prioritizes faculty timetable quality and minimizes faculty gaps.', optimizationProfile: 'FACULTY_FOCUSED' },
+  ];
+  const routines = requestedRoutines.map((routine: any, index: number) => ({
+    id: String(routine.id || 'routine-' + (index + 1)),
+    label: String(routine.label || 'Routine ' + (index + 1)),
+    description: routine.description ? String(routine.description) : undefined,
+    optimizationProfile: routine.optimizationProfile === 'FACULTY_FOCUSED' || routine.optimizationProfile === 'BALANCED' ? routine.optimizationProfile : 'STUDENT_FOCUSED',
+    seed: Number.isInteger(routine.seed) ? routine.seed : 1337 + index * 8642,
+  }));
+  const job = startTimetableGenerationJob({
+    budgetMode,
+    timeBudgetMs,
+    routines,
+    userId: req.authenticatedUser?.name || req.authenticatedUser?.email || 'coordinator',
   });
-};
+  return res.status(202).json({
+    success: true,
+    jobId: job.jobId,
+    status: job.status,
+    progress: job.progress,
+    phase: job.phase,
+    createdAt: job.createdAt,
+  });
+});
 
-app.post('/api/academic/generate', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), handleGenerateTimetable);
-app.post('/api/timetable/generate', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), handleGenerateTimetable);
-app.post('/api/timetables/generate', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), handleGenerateTimetable);
-app.post('/api/timetable/generate-engine', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), handleGenerateTimetable);
+app.get('/api/timetable/generate/:jobId', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
+  const job = getTimetableGenerationJob(String(req.params.jobId));
+  if (!job) return res.status(404).json({ success: false, error: 'Generation job not found or expired.' });
+  return res.json({ success: true, ...job });
+});
 
+app.post('/api/timetable/generate/:jobId/cancel', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), async (req: AuthenticatedRequest, res: Response) => {
+  const job = await cancelTimetableGenerationJob(String(req.params.jobId));
+  if (!job) return res.status(404).json({ success: false, error: 'Generation job not found or expired.' });
+  return res.json({ success: true, ...job });
+});
 // Select Routine Version as Active Draft
 app.post('/api/timetable/select-routine', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
   const { versionNumber } = req.body;
