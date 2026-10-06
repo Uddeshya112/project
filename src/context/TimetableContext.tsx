@@ -754,23 +754,71 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
 
   // CRUD: Constraints
   const addConstraint = async (constraint: Omit<AcademicConstraint, 'id'>) => {
-    const newConst: AcademicConstraint = {
-      ...constraint,
-      id: `const-${Date.now().toString().slice(-4)}`,
-    };
-    setConstraints(prev => [...prev, newConst]);
-    return { success: true, message: 'Success' };
+    try {
+      const res = await fetch(apiUrl('/api/constraints'), {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(constraint),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success || !data.constraint) return { success: false, message: data.message || 'Constraint creation failed.' };
+      setConstraints(prev => [...prev, data.constraint]);
+      return { success: true, message: 'Success' };
+    } catch {
+      return { success: false, message: 'Network error saving constraint.' };
+    }
   };
 
   const updateConstraint = async (id: string, updates: Partial<AcademicConstraint>) => {
-    setConstraints(prev => prev.map(c => (c.id === id ? { ...c, ...updates } : c)));
-    return { success: true, message: 'Success' };
+    try {
+      const res = await fetch(apiUrl(`/api/constraints/${encodeURIComponent(id)}`), {
+        method: 'PATCH',
+        headers: getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(updates),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success || !data.constraint) return { success: false, message: data.message || 'Constraint update failed.' };
+      setConstraints(prev => prev.map(c => c.id === id ? data.constraint : c));
+      return { success: true, message: 'Success' };
+    } catch {
+      return { success: false, message: 'Network error saving constraint.' };
+    }
   };
 
   const toggleConstraint = async (id: string) => {
-    setConstraints(prev => prev.map(c => (c.id === id ? { ...c, isActive: !c.isActive } : c)));
-    return { success: true, message: 'Success' };
+    try {
+      const res = await fetch(apiUrl(`/api/constraints/${encodeURIComponent(id)}/toggle`), {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        credentials: 'include',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success || !data.constraint) return { success: false, message: data.message || 'Constraint update failed.' };
+      setConstraints(prev => prev.map(c => c.id === id ? data.constraint : c));
+      return { success: true, message: 'Success' };
+    } catch {
+      return { success: false, message: 'Network error saving constraint.' };
+    }
   };
+
+  const deleteConstraint = async (id: string): Promise<{ success: boolean; message?: string }> => {
+    try {
+      const res = await fetch(apiUrl(`/api/constraints/${encodeURIComponent(id)}`), {
+        method: 'DELETE',
+        headers: getAuthHeaders(),
+        credentials: 'include',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) return { success: false, message: data.message || 'Constraint deletion failed.' };
+      setConstraints(prev => prev.filter(c => c.id !== id));
+      return { success: true, message: 'Success' };
+    } catch {
+      return { success: false, message: 'Network error deleting constraint.' };
+    }
+  };
+
 
   // Pre-generation Validation Run
   const runValidation = (): ValidationReport => {
