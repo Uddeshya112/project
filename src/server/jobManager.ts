@@ -1,9 +1,22 @@
-import { Worker, isMainThread, parentPort, workerData } from 'worker_threads';
-import { executeOptimizationEngine, EngineResult } from '../lib/optimizationEngine';
-import { AcademicYearConfig, CourseAllocation, Faculty, Room, StudentSection, Course, AcademicConstraint } from '../types';
+import { Worker } from 'node:worker_threads';
+import type { Db } from './db';
+import type { EngineResult, EngineOptions } from '../lib/optimizationEngine';
+import type { AcademicYearConfig, CourseAllocation, Faculty, Room, StudentSection, Course, AcademicConstraint } from '../types';
 
-export interface TimetableJobRequest {
+export type JobStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+
+export interface TimetableJobState {
   jobId: string;
+  status: JobStatus;
+  progress: number;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  result?: EngineResult;
+  error?: string;
+}
+
+type StoredJobPayload = {
   academicYear: AcademicYearConfig;
   allocations: CourseAllocation[];
   facultyMembers: Faculty[];
@@ -11,126 +24,160 @@ export interface TimetableJobRequest {
   sections: StudentSection[];
   courses: Course[];
   constraints: AcademicConstraint[];
-  options: {
-    budgetMode?: 'FAST' | 'BALANCED' | 'MAXIMUM_OPTIMIZATION';
-    optimizationProfile?: 'STUDENT_FOCUSED' | 'FACULTY_FOCUSED' | 'BALANCED';
-    timeBudgetMs?: number;
-    seed?: number;
-    maxCandidates?: number;
-  };
-}
+  options: EngineOptions;
+};
 
-export type JobStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+export class TimetableJobManager {
+  private readonly workers = new Map<string, Worker>();
 
-export interface TimetableJobState {
-  jobId: string;
-  status: JobStatus;
-  progress: number; // 0 - 100%
-  createdAt: string;
-  startedAt?: string;
-  completedAt?: string;
-  result?: EngineResult;
-  error?: string;
-  worker?: Worker;
-}
+  constructor(private readonly db: Db) {}
 
-class TimetableJobManager {
-  private jobs = new Map<string, TimetableJobState>();
+  async init() {
+    await this.db.query(
+      \`update intellischedule.timetable_jobs
+       set status = 'FAILED',
+           error = 'Server restarted while the job was running.',
+           completed_at = now(),
+           progress = 100
+       where status = 'RUNNING'\`,
+    );
+    const pending = await this.db.query<{ job_id: string; payload: StoredJobPayload }>(
+      \`select job_id, payload from intellischedule.timetable_jobs where status = 'PENDING' order by created_at asc\`,
+    );
+    for (const job of pending) this.spawn(job.job_id, job.payload);
+  }
 
-  public createJob(
-    academicYear: AcademicYearConfig,
-    allocations: CourseAllocation[],
-    facultyMembers: Faculty[],
-    rooms: Room[],
-    sections: StudentSection[],
-    courses: Course[],
-    constraints: AcademicConstraint[],
-    options: any = {}
-  ): string {
-    const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const jobState: TimetableJobState = {
-      jobId,
-      status: 'PENDING',
-      progress: 0,
-      createdAt: new Date().toISOString(),
-    };
-
-    this.jobs.set(jobId, jobState);
-
-    // Execute asynchronously using setImmediate / background execution to keep event loop unblocked
-    setImmediate(() => {
-      this.executeJob(jobId, {
-        jobId,
-        academicYear,
-        allocations,
-        facultyMembers,
-        rooms,
-        sections,
-        courses,
-        constraints,
-        options,
-      });
-    });
-
+  async createJob(payload: StoredJobPayload): Promise<string> {
+    const jobId = \`job_\${Date.now()}_\${crypto.randomUUID().slice(0, 8)}\`;
+    await this.db.query(
+      \`insert into intellischedule.timetable_jobs
+       (job_id, status, progress, payload, created_at)
+       values ($1, 'PENDING', 0, $2, now())\`,
+      [jobId, payload],
+    );
+    this.spawn(jobId, payload);
     return jobId;
   }
 
-  private executeJob(jobId: string, payload: TimetableJobRequest) {
-    const job = this.jobs.get(jobId);
-    if (!job || job.status === 'CANCELLED') return;
-
-    job.status = 'RUNNING';
-    job.startedAt = new Date().toISOString();
-    job.progress = 25;
-
-    try {
-      // Deterministic solve
-      const result = executeOptimizationEngine(
-        payload.academicYear,
-        payload.allocations,
-        payload.facultyMembers,
-        payload.rooms,
-        payload.sections,
-        payload.courses,
-        payload.constraints,
-        payload.options
-      );
-
-      const currentJob = this.jobs.get(jobId);
-      if (!currentJob || currentJob.status === 'CANCELLED') return;
-
-      currentJob.status = 'COMPLETED';
-      currentJob.progress = 100;
-      currentJob.completedAt = new Date().toISOString();
-      currentJob.result = result;
-    } catch (err: any) {
-      const currentJob = this.jobs.get(jobId);
-      if (!currentJob || currentJob.status === 'CANCELLED') return;
-      currentJob.status = 'FAILED';
-      currentJob.error = err?.message || 'Unknown error occurred during generation';
-      currentJob.completedAt = new Date().toISOString();
-    }
+  async getJob(jobId: string): Promise<TimetableJobState | undefined> {
+    const rows = await this.db.query<any>(
+      \`select job_id, status, progress, created_at, started_at, completed_at, result, error
+       from intellischedule.timetable_jobs where job_id = $1\`,
+      [jobId],
+    );
+    const row = rows[0];
+    if (!row) return undefined;
+    return {
+      jobId: row.job_id,
+      status: row.status,
+      progress: Number(row.progress) || 0,
+      createdAt: new Date(row.created_at).toISOString(),
+      startedAt: row.started_at ? new Date(row.started_at).toISOString() : undefined,
+      completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : undefined,
+      result: row.result ?? undefined,
+      error: row.error ?? undefined,
+    };
   }
 
-  public getJob(jobId: string): TimetableJobState | undefined {
-    const job = this.jobs.get(jobId);
-    if (!job) return undefined;
-    const { worker, ...safeState } = job;
-    return safeState as TimetableJobState;
-  }
+  async cancelJob(jobId: string): Promise<boolean> {
+    const rows = await this.db.query<{ status: JobStatus }>(
+      \`select status from intellischedule.timetable_jobs where job_id = $1\`,
+      [jobId],
+    );
+    const current = rows[0]?.status;
+    if (!current || current === 'COMPLETED' || current === 'FAILED' || current === 'CANCELLED') return false;
 
-  public cancelJob(jobId: string): boolean {
-    const job = this.jobs.get(jobId);
-    if (!job) return false;
-    if (job.status === 'COMPLETED' || job.status === 'FAILED') return false;
-
-    job.status = 'CANCELLED';
-    job.completedAt = new Date().toISOString();
-    if (job.worker) {
-      job.worker.terminate().catch(() => {});
+    await this.db.query(
+      \`update intellischedule.timetable_jobs
+       set status = 'CANCELLED', progress = 100, completed_at = now(), error = 'Cancelled by user.'
+       where job_id = $1 and status in ('PENDING','RUNNING')\`,
+      [jobId],
+    );
+    const worker = this.workers.get(jobId);
+    if (worker) {
+      this.workers.delete(jobId);
+      await worker.terminate().catch(() => {});
     }
     return true;
   }
-}
 
-export const timetableJobManager = new TimetableJobManager();
+  private spawn(jobId: string, payload: StoredJobPayload) {
+    if (this.workers.has(jobId)) return;
+
+    const workerUrl = new URL('./timetableGenerationWorker.ts', import.meta.url);
+    const worker = new Worker(workerUrl, {
+      type: 'module',
+      workerData: payload,
+      execArgv: process.execArgv,
+    });
+    this.workers.set(jobId, worker);
+
+    worker.on('message', async (message: any) => {
+      try {
+        if (message?.type === 'started') {
+          await this.db.query(
+            \`update intellischedule.timetable_jobs
+             set status = 'RUNNING', progress = 10, started_at = coalesce(started_at, now())
+             where job_id = $1 and status = 'PENDING'\`,
+            [jobId],
+          );
+          return;
+        }
+
+        if (message?.type === 'completed') {
+          await this.db.query(
+            \`update intellischedule.timetable_jobs
+             set status = 'COMPLETED', progress = 100, completed_at = now(), result = $2
+             where job_id = $1 and status <> 'CANCELLED'\`,
+            [jobId, message.result],
+          );
+          this.workers.delete(jobId);
+          await worker.terminate().catch(() => {});
+          return;
+        }
+
+        if (message?.type === 'failed') {
+          await this.db.query(
+            \`update intellischedule.timetable_jobs
+             set status = 'FAILED', progress = 100, completed_at = now(), error = $2
+             where job_id = $1 and status <> 'CANCELLED'\`,
+            [jobId, String(message.error || 'Worker failed.')],
+          );
+          this.workers.delete(jobId);
+          await worker.terminate().catch(() => {});
+        }
+      } catch (error: any) {
+        await this.db.query(
+          \`update intellischedule.timetable_jobs
+           set status = 'FAILED', progress = 100, completed_at = now(), error = $2
+           where job_id = $1 and status <> 'CANCELLED'\`,
+          [jobId, error?.message || 'Unable to persist job state.'],
+        ).catch(() => {});
+        this.workers.delete(jobId);
+      }
+    });
+
+    worker.on('error', async (error) => {
+      await this.db.query(
+        \`update intellischedule.timetable_jobs
+         set status = 'FAILED', progress = 100, completed_at = now(), error = $2
+         where job_id = $1 and status <> 'CANCELLED'\`,
+        [jobId, error.message],
+      ).catch(() => {});
+      this.workers.delete(jobId);
+    });
+
+    worker.on('exit', async (code) => {
+      if (this.workers.get(jobId) !== worker) return;
+      this.workers.delete(jobId);
+      if (code !== 0) {
+        await this.db.query(
+          \`update intellischedule.timetable_jobs
+           set status = 'FAILED', progress = 100, completed_at = now(), error = $2
+           where job_id = $1 and status in ('PENDING','RUNNING')\`,
+          [jobId, \`Worker exited with code \${code}.\`],
+        ).catch(() => {});
+      }
+    });
+  }
+}
