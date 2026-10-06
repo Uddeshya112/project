@@ -430,7 +430,7 @@ export function createAuth(opts: AuthOptions) {
       );
 
       if (mailer) {
-        const base = (opts.appUrl || `${req.protocol}://${req.get('host')}`).replace(/\\/+$/, '');
+        const base = (opts.appUrl || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
         const mailResp = await fetch(mailer, {
           method: 'POST',
           headers: {
