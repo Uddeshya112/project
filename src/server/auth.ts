@@ -312,7 +312,7 @@ export function createAuth(opts: AuthOptions) {
     if (opts.allowedDomains.length) {
       const domain = email.split('@')[1] ?? '';
       if (!opts.allowedDomains.includes(domain)) {
-        return res.status(400).json({ success: false, message: 'Registration is limited to approved institutional email domains.' });
+        return res.status(400).json({ success: false, error: 'INVALID_EMAIL_DOMAIN', message: 'Registration is limited to approved institutional email domains.' });
       }
     }
     if (password.length > MAX_PASSWORD_LENGTH) {
@@ -352,6 +352,7 @@ export function createAuth(opts: AuthOptions) {
       success: true,
       userId: user.id,
       user: publicUser(user),
+      requiresLogin: true,
       message: 'Account created successfully. You can now sign in with your email and password.',
     });
   });
