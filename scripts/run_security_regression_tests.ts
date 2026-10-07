@@ -1,4 +1,50 @@
-const BASE_URL = 'http://localhost:3000';
+import { spawn, type ChildProcess } from 'node:child_process';
+
+const BASE_URL = 'http://127.0.0.1:3000';
+let testServer: ChildProcess | null = null;
+
+async function waitForServer(timeoutMs = 30000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    try {
+      const res = await fetch(`${BASE_URL}/api/health/live`);
+      if (res.ok && (await res.json().catch(() => null))?.status === 'LIVE') return;
+    } catch {}
+    await new Promise(resolve => setTimeout(resolve, 150));
+  }
+  throw new Error('Timed out waiting for the isolated security test server.');
+}
+
+function startServer(seedPassword: string) {
+  testServer = spawn('npx', ['tsx', 'server.ts'], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      NODE_ENV: 'test',
+      PORT: '3000',
+      DATABASE_URL: 'pglite:memory',
+      DEMO_MODE: 'true',
+      SEED_DEMO_DATA: 'true',
+      SEED_USER_PASSWORD: seedPassword,
+      SAMPLE_ACCOUNTS_PASSWORD: seedPassword,
+      DEMO_ACCOUNTS_PASSWORD: 'ThaparDemo@2026Test!',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  testServer.stdout?.on('data', chunk => process.stdout.write('[security-server] ' + chunk));
+  testServer.stderr?.on('data', chunk => process.stderr.write('[security-server] ' + chunk));
+}
+
+async function stopServer() {
+  if (!testServer || testServer.exitCode !== null) return;
+  await new Promise<void>(resolve => {
+    const child = testServer!;
+    const timer = setTimeout(() => { child.kill('SIGKILL'); resolve(); }, 5000);
+    child.once('exit', () => { clearTimeout(timer); resolve(); });
+    child.kill('SIGTERM');
+  });
+  testServer = null;
+}
 
 async function loginCookie(email: string, password: string) {
   const res = await fetch(`${BASE_URL}/api/auth/login`, {
@@ -23,8 +69,10 @@ async function expectStatus(name: string, actual: Response, expected: number) {
 
 async function main() {
   const password = process.env.SEED_USER_PASSWORD || 'ThaparInstitute@2026!';
-
-  const student = await loginCookie('aarav.m@thapar.edu', password);
+  startServer(password);
+  await waitForServer();
+  try {
+    const student = await loginCookie('aarav.m@thapar.edu', password);
   const faculty = await loginCookie('a.sharma@thapar.edu', password);
   const coordinator = await loginCookie('kn.murthy@thapar.edu', password);
   const admin = await loginCookie('dean@thapar.edu', password);
@@ -97,10 +145,14 @@ async function main() {
   if (benchmark.status !== 200 || typeof benchmarkData.fastMode?.candidatesEvaluated !== 'number' || typeof benchmarkData.optimizationMode?.candidatesEvaluated !== 'number') {
     throw new Error('Solver benchmark did not return calculated metrics.');
   }
-  console.log('✓ Solver benchmark returns calculated metrics');
+    console.log('✓ Solver benchmark returns calculated metrics');
+  } finally {
+    await stopServer();
+  }
 }
 
-main().catch(error => {
+main().catch(async error => {
   console.error(error);
+  await stopServer();
   process.exit(1);
 });
