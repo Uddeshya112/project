@@ -82,7 +82,7 @@ async function main(): Promise<void> {
     }
 
     const testEnv = { NODE_ENV: 'test', PORT: TEST_PORT, BASE_URL, ALLOW_TEST_RESET_TOKEN: 'true', SEED_USER_PASSWORD: testPassword, DEMO_ACCOUNT_PASSWORD: testPassword };
-    const unitExit = await runCommand('tsx', ['--test', ...testFiles], testEnv);
+    const unitExit = await runCommand('tsx', ['--test', '--test-concurrency=1', ...testFiles], testEnv);
     if (unitExit !== 0) {
       process.exitCode = unitExit;
       return;
