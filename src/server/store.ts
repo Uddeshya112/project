@@ -296,12 +296,8 @@ export class TimetableStore {
   getBootstrapState(viewer: Viewer) {
     const staff = STAFF_ROLES.includes(viewer.roleCode);
     const roster = this.rosterContext(viewer);
-    const activeVersion = staff && this.activeVersionNumber != null
-      ? this.versions.find((v) => v.versionNumber === this.activeVersionNumber)
-      : undefined;
-    const allSessions = staff
-      ? (activeVersion?.sessions ?? this.activeSessions)
-      : this.publishedSessions;
+    // activeSessions is the authoritative mutable working draft. Versions remain historical snapshots.
+    const allSessions = staff ? this.activeSessions : this.publishedSessions;
     const visibleSessions = viewer.roleCode === 'STUDENT' || viewer.roleCode === 'CLASS_REPRESENTATIVE'
       ? roster.sectionId
         ? allSessions.filter((s) => s.sectionId === roster.sectionId)
