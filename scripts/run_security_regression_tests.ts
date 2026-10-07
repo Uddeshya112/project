@@ -18,6 +18,9 @@ async function startTestServer(seedPassword: string) {
     import('../server'),
   ]);
 
+  process.env.SEED_USER_PASSWORD = seedPassword;
+  process.env.SAMPLE_ACCOUNTS_PASSWORD = seedPassword;
+  process.env.DEMO_ACCOUNTS_PASSWORD = 'ThaparDemo@2026Test!';
   db = await connectDb('pglite:memory');
   await store.init(db, { seedDemoData: true });
   const app = await createApp(db);
@@ -25,9 +28,6 @@ async function startTestServer(seedPassword: string) {
   server = app.app.listen(0);
   const address = server.address() as AddressInfo;
   BASE_URL = `http://127.0.0.1:${address.port}`;
-  process.env.SEED_USER_PASSWORD = seedPassword;
-  process.env.SAMPLE_ACCOUNTS_PASSWORD = seedPassword;
-  process.env.DEMO_ACCOUNTS_PASSWORD = 'ThaparDemo@2026Test!';
 }
 
 async function stopTestServer() {
