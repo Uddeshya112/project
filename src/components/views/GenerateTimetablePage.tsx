@@ -206,8 +206,18 @@ export function GenerateTimetablePage() {
   const handleSelectAndApply = async (idx: number) => {
     if (!generationOutput || !generationOutput.candidates[idx]) return;
     setSelectedCandidateIdx(idx);
-    applyCandidateAsDraft(generationOutput.candidates[idx]);
-    await selectRoutineAPI(generationOutput.candidates[idx].versionNumber ?? idx + 1);
+    const candidate = generationOutput.candidates[idx];
+    if (Number.isInteger(candidate.versionNumber)) {
+      const result = await selectRoutineAPI(candidate.versionNumber!);
+      if (!result.success) {
+        setPublishFeedback({
+          success: false,
+          message: result.message || 'The server rejected the selected timetable routine.',
+        });
+      }
+      return;
+    }
+    applyCandidateAsDraft(candidate);
   };
 
   const handlePublishCurrent = async () => {
