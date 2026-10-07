@@ -85,15 +85,20 @@ export function TimetableGridView() {
     setActiveSessionDetail(session);
   };
 
-  const executeCancellation = () => {
+  const executeCancellation = async () => {
     if (!activeSessionDetail) return;
-    cancelSession(
+    const result = await cancelSession(
       activeSessionDetail.id,
       cancellationReasonInput.trim() || 'Instructor unavailable (Personal/Administrative)'
     );
+    if (!result.success) {
+      setScheduleError('The server rejected the cancellation. The timetable was not changed.');
+      return;
+    }
     setShowCancelModal(false);
     setActiveSessionDetail(null);
     setCancellationReasonInput('');
+    setScheduleError(null);
   };
 
   return (
@@ -482,9 +487,10 @@ export function TimetableGridView() {
             {/* Actions: Lock, Cancel */}
             <div className="flex flex-col sm:flex-row items-center gap-3 pt-2">
               <button
-                onClick={() => {
-                  toggleSessionLock(activeSessionDetail.id);
-                  setActiveSessionDetail(prev => prev ? { ...prev, isLocked: !prev.isLocked } : null);
+                onClick={async () => {
+                  await toggleSessionLock(activeSessionDetail.id);
+                  const updated = sessions.find(s => s.id === activeSessionDetail.id);
+                  if (updated) setActiveSessionDetail(updated);
                 }}
                 className={`w-full sm:w-auto flex-1 flex items-center justify-center gap-2 py-2 px-4 rounded-lg text-xs font-semibold border transition-all ${
                   activeSessionDetail.isLocked
