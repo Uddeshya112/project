@@ -1,3 +1,5 @@
+import { apiUrl } from './apiConfig';
+
 // Same-origin JSON API client. The session lives in an httpOnly cookie, so no token handling here.
 
 export class ApiError extends Error {
@@ -15,9 +17,9 @@ export const SESSION_EXPIRED_EVENT = 'intellischedule:session-expired';
 export async function api<T = any>(path: string, options: { method?: string; body?: unknown } = {}): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(path, {
+    res = await fetch(apiUrl(path), {
       method: options.method ?? (options.body === undefined ? 'GET' : 'POST'),
-      credentials: 'same-origin',
+      credentials: 'include',
       headers: options.body === undefined ? undefined : { 'Content-Type': 'application/json' },
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
     });
