@@ -104,6 +104,7 @@ interface TimetableContextType {
   auditLogs: AuditLog[];
   health: SystemHealthMetrics;
   whatIfSimulation: WhatIfSimulation;
+  simulatedSessions: ClassSession[];
 
   // View state
   currentRole: UserRole;
@@ -310,6 +311,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [versions, setVersions] = useState<TimetableVersion[]>([]);
   const [whatIfSimulation, setWhatIfSimulation] = useState<WhatIfSimulation>(EMPTY_WHAT_IF);
+  const [simulatedSessions, setSimulatedSessions] = useState<ClassSession[]>([]);
 
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
 
@@ -1389,13 +1391,14 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const runWhatIfSimulation = async (scenarioId: string, title?: string): Promise<{ success: boolean; message?: string; simulation?: WhatIfSimulation }> => {
+  const runWhatIfSimulation = async (scenarioId: string, title?: string): Promise<{ success: boolean; message?: string; simulation?: WhatIfSimulation; sessions?: ClassSession[] }> => {
     try {
       const roomTarget = scenarioId === 'lab301-closure' ? rooms.find(r => r.type === 'ComputerLab' || r.type === 'HardwareLab') : rooms.find(r => r.type === 'LectureHall' || r.type === 'SeminarRoom');
       const facultyTarget = scenarioId === 'faculty-leave' ? facultyMembers.find(f => f.name.toLowerCase().includes('arvind sharma')) : undefined;
       const data = await persistMutation('/api/whatif/simulate', 'POST', { scenarioId, title: title || scenarioId, targetEntityId: facultyTarget?.id || roomTarget?.id, targetName: facultyTarget?.name || roomTarget?.name, timeBudgetMs: 1600 });
       if (data.simulation) setWhatIfSimulation(data.simulation);
-      return { success: true, simulation: data.simulation };
+      if (Array.isArray(data.sessions)) setSimulatedSessions(data.sessions);
+      return { success: true, simulation: data.simulation, sessions: data.sessions };
     } catch (err: any) {
       const message = err?.message || 'What-If simulation failed.';
       setNoticeState({ type: 'error', message });
@@ -1409,6 +1412,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       const facultyTarget = scenarioId === 'faculty-leave' ? facultyMembers.find(f => f.name.toLowerCase().includes('arvind sharma')) : undefined;
       const data = await persistMutation('/api/whatif/apply', 'POST', { scenarioId, title: title || scenarioId, targetEntityId: facultyTarget?.id || roomTarget?.id, targetName: facultyTarget?.name || roomTarget?.name, timeBudgetMs: 1600 });
       if (data.simulation) setWhatIfSimulation(data.simulation);
+      if (Array.isArray(data.sessions)) setSimulatedSessions(data.sessions);
       await syncBootstrapData();
       const message = data.version ? 'What-If scenario applied as draft version ' + data.version.versionNumber + '.' : 'What-If scenario applied.';
       setNoticeState({ type: 'success', message });
@@ -1569,6 +1573,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         auditLogs,
         health,
         whatIfSimulation,
+        simulatedSessions,
         currentRole,
         setCurrentRole,
         activeView,
