@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 
 export function WhatIfSimulatorView() {
-  const { whatIfSimulation, runWhatIfSimulation, applySimulation, health, rooms, facultyMembers } = useTimetable();
+  const { whatIfSimulation, simulatedSessions, runWhatIfSimulation, applySimulation, health, rooms, facultyMembers, sessions } = useTimetable();
 
   const [activeScenario, setActiveScenario] = useState<string>('lab301-closure');
   const [simulationRunning, setSimulationRunning] = useState<boolean>(false);
@@ -143,7 +143,7 @@ export function WhatIfSimulatorView() {
               ) : (
                 <>
                   <GitBranch className="h-3.5 w-3.5" />
-                  <span>Commit Simulation to Live Timetable</span>
+                  <span>Apply to Working Draft</span>
                 </>
               )}
             </button>
@@ -165,7 +165,7 @@ export function WhatIfSimulatorView() {
             <span className="text-2xl font-bold font-mono text-amber-700 dark:text-amber-400 tabular-nums">
               {whatIfSimulation.impact.requiredRoomChanges}
             </span>
-            <span className="text-[10px] text-amber-700/80 block mt-1">Reassigned to Lab 302</span>
+            <span className="text-[10px] text-amber-700/80 block mt-1">Server-selected compatible rooms</span>
           </div>
 
           <div className="p-3.5 bg-white dark:bg-zinc-950/60 rounded-xl border border-[#E5E2D9] dark:border-zinc-800 shadow-xs">
@@ -181,7 +181,7 @@ export function WhatIfSimulatorView() {
             <span className="text-2xl font-bold font-mono text-[#8C1B2E] dark:text-red-400 tabular-nums">
               {whatIfSimulation.impact.stabilityScore}%
             </span>
-            <span className="text-[10px] text-stone-400 dark:text-zinc-500 block mt-1">Disruption penalty: -8</span>
+            <span className="text-[10px] text-stone-400 dark:text-zinc-500 block mt-1">Disruption penalty: {Math.round(100 - whatIfSimulation.impact.stabilityScore)}%</span>
           </div>
 
           <div className="p-3.5 bg-white dark:bg-zinc-950/60 rounded-xl border border-[#E5E2D9] dark:border-zinc-800 shadow-xs">
@@ -193,52 +193,37 @@ export function WhatIfSimulatorView() {
           </div>
         </div>
 
-        {/* Side-by-Side Schedule Comparison (V1 vs Candidate V2) */}
+        {/* Server-generated schedule comparison */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="p-4 rounded-xl bg-white dark:bg-zinc-950/80 border border-[#E5E2D9] dark:border-zinc-800 space-y-3 shadow-xs">
             <div className="flex items-center justify-between border-b border-[#E5E2D9] dark:border-zinc-800 pb-2">
-              <span className="font-bold text-xs text-stone-800 dark:text-zinc-200">Master Schedule V1.0 (Live Baseline)</span>
+              <span className="font-bold text-xs text-stone-800 dark:text-zinc-200">Current Timetable Snapshot</span>
               <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-stone-100 dark:bg-zinc-800 text-stone-600 dark:text-zinc-400 border border-[#E5E2D9] dark:border-zinc-700">
-                100% Pinned
+                {sessions.length} sessions
               </span>
             </div>
-            <ul className="text-xs text-stone-600 dark:text-zinc-400 space-y-2">
-              <li className="flex items-center justify-between">
-                <span>CS501 Operating Systems Lab</span>
-                <span className="font-mono text-stone-800 dark:text-zinc-300">Mon 13:00 · Lab 301</span>
-              </li>
-              <li className="flex items-center justify-between">
-                <span>CS503 Network Security Lab</span>
-                <span className="font-mono text-stone-800 dark:text-zinc-300">Tue 14:00 · Lab 301</span>
-              </li>
-              <li className="flex items-center justify-between">
-                <span>EC501 VLSI Simulation Lab</span>
-                <span className="font-mono text-stone-800 dark:text-zinc-300">Wed 10:00 · Lab 301</span>
-              </li>
-            </ul>
+            <div className="text-xs text-stone-600 dark:text-zinc-400 space-y-2">
+              <div>Affected classes: <strong>{whatIfSimulation.impact.affectedClassesCount}</strong></div>
+              <div>Affected sections: <strong>{whatIfSimulation.impact.affectedSectionNames.length}</strong></div>
+              <div>Affected faculty: <strong>{whatIfSimulation.impact.affectedFacultyNames.length}</strong></div>
+              <div>Room changes required: <strong>{whatIfSimulation.impact.requiredRoomChanges}</strong></div>
+            </div>
           </div>
-
           <div className="p-4 rounded-xl bg-emerald-50/70 border border-emerald-300 dark:bg-emerald-950/20 dark:border-emerald-800/40 space-y-3 shadow-xs">
             <div className="flex items-center justify-between border-b border-emerald-200 dark:border-emerald-800/40 pb-2">
-              <span className="font-bold text-xs text-emerald-900 dark:text-emerald-300">Simulated Candidate V2.0 (Optimized)</span>
+              <span className="font-bold text-xs text-emerald-900 dark:text-emerald-300">Server-Generated Candidate</span>
               <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-300 font-semibold">
-                Feasible Solution Found
+                {whatIfSimulation.impact.newHardConflicts === 0 ? 'Feasible Solution Found' : 'Hard Conflicts Detected'}
               </span>
             </div>
-            <ul className="text-xs text-emerald-900 dark:text-emerald-200/90 space-y-2">
-              <li className="flex items-center justify-between">
-                <span>CS501 Operating Systems Lab</span>
-                <span className="font-mono text-emerald-700 dark:text-emerald-400 font-semibold">Mon 13:00 · Rerouted to Lab 302</span>
-              </li>
-              <li className="flex items-center justify-between">
-                <span>CS503 Network Security Lab</span>
-                <span className="font-mono text-emerald-700 dark:text-emerald-400 font-semibold">Tue 14:00 · Rerouted to Lab 302</span>
-              </li>
-              <li className="flex items-center justify-between">
-                <span>EC501 VLSI Simulation Lab</span>
-                <span className="font-mono text-emerald-700 dark:text-emerald-400 font-semibold">Wed 10:00 · Shifted to Thu 14:00</span>
-              </li>
-            </ul>
+            <div className="text-xs text-emerald-900 dark:text-emerald-200/90 space-y-2">
+              <div>Candidate sessions: <strong>{simulatedSessions.length}</strong></div>
+              <div>Projected health: <strong>{whatIfSimulation.impact.projectedHealthScore}</strong></div>
+              <div>Changed class slots: <strong>{Math.max(0, whatIfSimulation.impact.affectedClassesCount + whatIfSimulation.impact.requiredRoomChanges)}</strong></div>
+              {whatIfSimulation.impact.affectedSectionNames.length > 0 && (
+                <div>Affected sections: <strong>{whatIfSimulation.impact.affectedSectionNames.slice(0, 4).join(', ')}</strong></div>
+              )}
+            </div>
           </div>
         </div>
 
