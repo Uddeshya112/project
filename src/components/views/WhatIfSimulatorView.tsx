@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 
 export function WhatIfSimulatorView() {
-  const { whatIfSimulation, applySimulation, health, rooms, facultyMembers } = useTimetable();
+  const { whatIfSimulation, runWhatIfSimulation, applySimulation, health, rooms, facultyMembers } = useTimetable();
 
   const [activeScenario, setActiveScenario] = useState<string>('lab301-closure');
   const [simulationRunning, setSimulationRunning] = useState<boolean>(false);
@@ -40,16 +40,15 @@ export function WhatIfSimulatorView() {
     },
   ];
 
-  const handleRunSimulation = () => {
+  const handleRunSimulation = async () => {
     setSimulationRunning(true);
-    setTimeout(() => {
-      setSimulationRunning(false);
-    }, 400);
+    await runWhatIfSimulation(activeScenario, scenarios.find(s => s.id === activeScenario)?.title);
+    setSimulationRunning(false);
   };
 
-  const handleApply = () => {
-    applySimulation();
-    setHasApplied(true);
+  const handleApply = async () => {
+    const result = await applySimulation(activeScenario, scenarios.find(s => s.id === activeScenario)?.title);
+    if (result.success) setHasApplied(true);
   };
 
   return (
