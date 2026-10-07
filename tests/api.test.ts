@@ -235,7 +235,8 @@ test('generate -> select -> publish workflow with role checks', async () => {
 
   const student = await demo('Student');
   const sb = (await student.get('/api/academic/bootstrap')).body;
-  assert.deepEqual(sb.sessions.map(scheduleKey).sort(), routine.sessions.map(scheduleKey).sort());
+  const studentRoutineSessions = routine.sessions.filter((s: any) => s.sectionId === sb.roster.sectionId);
+  assert.deepEqual(sb.sessions.map(scheduleKey).sort(), studentRoutineSessions.map(scheduleKey).sort());
 });
 
 test('manual edits are validated on the server', async () => {
