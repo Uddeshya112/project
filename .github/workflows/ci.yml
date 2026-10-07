@@ -23,7 +23,19 @@ jobs:
         run: npm test
       - name: Solver tests
         run: npm run test:solver
+      - name: Start security test server
+        run: |
+          NODE_ENV=test PORT=3000 BASE_URL=http://127.0.0.1:3000 SEED_USER_PASSWORD='CI-Test-Seed-Password-2026!' DEMO_ACCOUNT_PASSWORD='CI-Test-Demo-Password-2026!' nohup npx tsx server.ts >/tmp/intellischedule-test-server.log 2>&1 &
+          for i in {1..60}; do
+            if curl -fsS http://127.0.0.1:3000/api/health/live >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/intellischedule-test-server.log
+          exit 1
       - name: Security tests
+        env:
+          SEED_USER_PASSWORD: CI-Test-Seed-Password-2026!
+          DEMO_ACCOUNT_PASSWORD: CI-Test-Demo-Password-2026!
         run: npm run test:security
       - name: Production build
         run: npm run build
