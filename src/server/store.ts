@@ -1125,6 +1125,7 @@ export class TimetableStore {
         versionId: version?.id ?? null,
         versionNumber: version?.versionNumber ?? null,
         sessions,
+        softPenalty: result.bestCandidate?.softPenalty ?? null,
         statusMessage: result.statusMessage,
         diagnostics: result.infeasibilityDiagnostics ?? [],
         validation: {
