@@ -310,7 +310,7 @@ export function compileSchedulingProblem(
     // Determine session duration (1 for Lecture/Tutorial, 2 or 3 for Lab blocks)
     const durationPeriods = alloc.durationPeriods || (alloc.sessionType === 'Lab' || alloc.sessionType === 'Practical' ? (course.requiredLabsPerWeek === 3 ? 3 : 2) : 1);
 
-    if (durationPeriods > 1 && alloc.hoursPerWeek % durationPeriods !== 0) {
+    if (alloc.durationPeriods !== undefined && durationPeriods > 1 && alloc.hoursPerWeek % durationPeriods !== 0) {
       infeasibilityReasons.push(
         `Course ${course.code} allocation ${alloc.id}: ${alloc.hoursPerWeek} weekly hour(s) cannot be represented as whole ${durationPeriods}-period lab blocks.`,
       );
@@ -684,7 +684,9 @@ export function executeOptimizationEngine(
     const secIdx = currentAlloc.sectionIdx;
     const isSubgroupAlloc = currentAlloc.subSectionIdx !== undefined;
 
+    const requiresAtomicBlock = currentAlloc.allocation.durationPeriods !== undefined;
     const isMultiPeriod =
+      requiresAtomicBlock &&
       currentAlloc.durationPeriods > 1 &&
       hoursNeeded >= currentAlloc.durationPeriods &&
       hoursNeeded % currentAlloc.durationPeriods === 0;
