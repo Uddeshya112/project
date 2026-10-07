@@ -363,3 +363,65 @@ test('concurrent writers cannot silently overwrite each other', async () => {
   other.createRoom({ name: 'Writer Two', capacity: 10 }, 'test');
   await assert.rejects(other.persist(), /changed by another server instance/);
 });
+
+
+test('authoritative What-If and unpublish actions persist and can be reversed', async () => {
+  const coord = await demo('Coordinator');
+  const before = (await coord.get('/api/academic/bootstrap')).body;
+  const room = before.rooms.find((r: any) => r.type === 'ComputerLab' || r.type === 'HardwareLab');
+  assert.ok(room, 'a laboratory exists for the What-If scenario');
+
+  const sim = await coord.post('/api/whatif/simulate', {
+    scenarioId: 'lab301-closure',
+    targetEntityId: room.id,
+    title: 'Regression Room Closure',
+    timeBudgetMs: 800,
+  });
+  assert.equal(sim.status, 200, JSON.stringify(sim.body));
+  assert.equal(sim.body.success, true);
+  assert.ok(sim.body.simulation);
+  assert.equal(sim.body.sessions.length, before.sessions.length, 'simulation preserves required session count');
+
+  const admin = await demo('Admin');
+  const unpublished = await admin.post('/api/timetable/unpublish');
+  assert.equal(unpublished.status, 200, JSON.stringify(unpublished.body));
+  assert.equal(unpublished.body.success, true);
+
+  const draft = (await admin.get('/api/academic/bootstrap')).body;
+  assert.equal(draft.publishStatus, 'Draft');
+  assert.equal(draft.publishedVersionNumber, null);
+  assert.equal(draft.publishedSessions.length, 0);
+
+  const republished = await admin.post('/api/timetable/publish');
+  assert.equal(republished.status, 200, JSON.stringify(republished.body));
+  const live = (await admin.get('/api/academic/bootstrap')).body;
+  assert.equal(live.publishStatus, 'Published');
+  assert.ok(live.publishedVersionNumber);
+  assert.ok(live.publishedSessions.length > 0);
+});
+
+test('bulk group generation is server-backed and survives a fresh store load', async () => {
+  const coord = await demo('Coordinator');
+  const created = await coord.post('/api/academic/groups/bulk', {
+    departmentId: 'dept-cse',
+    programName: 'B.Tech in Computer Science & Engineering',
+    batchYear: 2026,
+    semester: 5,
+    totalStudents: 80,
+    numGroups: 2,
+    namingPattern: 'REG-{A}',
+    numSubgroupsPerGroup: 2,
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.equal(created.body.sections.length, 2);
+
+  const b = (await coord.get('/api/academic/bootstrap')).body;
+  assert.equal(b.sections.filter((s: any) => s.name.startsWith('REG-')).length, 2);
+
+  const { TimetableStore } = await import('../src/server/store');
+  const fresh = new TimetableStore();
+  await fresh.init(db, { seedDemoData: true });
+  const viewer = { id: 'regression', name: 'Regression', email: 'regression@thapar.edu', roleCode: 'COORDINATOR' as const, isDemo: false, profile: {} };
+  const reloaded = fresh.getBootstrapState(viewer);
+  assert.equal(reloaded.sections.filter((s: any) => s.name.startsWith('REG-')).length, 2);
+});
