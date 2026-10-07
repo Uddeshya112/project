@@ -180,7 +180,7 @@ async function runAdversarialSuite() {
   const injectedRegEmail = `injected_${Date.now()}@thapar.edu`;
   const injectReg = await fetch(`${BASE_URL}/api/auth/register`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Test-Mode': 'true' },
     body: JSON.stringify({
       name: 'Adversary User',
       email: injectedRegEmail,
@@ -205,6 +205,13 @@ async function runAdversarialSuite() {
   const registeredUserId = injectData.userId || injectData.user?.id;
   if (registeredUserId && supabaseAdmin) {
     await supabaseAdmin.auth.admin.updateUserById(registeredUserId, { email_confirm: true });
+  }
+  if (injectData.verificationToken) {
+    await fetch(`${BASE_URL}/api/auth/verify-email`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Test-Mode': 'true' },
+      body: JSON.stringify({ token: injectData.verificationToken }),
+    });
   }
 
   const injectLoginRes = await fetch(`${BASE_URL}/api/auth/login`, {
@@ -301,10 +308,17 @@ async function runAdversarialSuite() {
 
   // 7.3 Faculty cancels class session for recovery
   // Fetch active session from bootstrap to guarantee valid session ID
-  const bootstrapRes = await fetch(`${BASE_URL}/api/academic/bootstrap`);
+  const bootstrapRes = await fetch(`${BASE_URL}/api/academic/bootstrap`, {
+    headers: { Authorization: `Bearer ${facultyToken}` },
+  });
   const bootstrapData = await bootstrapRes.json();
+  const facultyProfile = (bootstrapData.facultyMembers || []).find(
+    (f: any) => String(f.email || '').toLowerCase() === 'a.sharma@thapar.edu'
+  );
   const sessionList = bootstrapData.sessions || bootstrapData.activeSessions || [];
-  const sessionToCancel = sessionList.find((s: any) => s.status !== 'Cancelled')?.id || 'sess-1';
+  const sessionToCancel = sessionList.find(
+    (s: any) => s.status !== 'Cancelled' && facultyProfile && s.facultyId === facultyProfile.id
+  )?.id;
 
   const facultyCancel = await fetch(`${BASE_URL}/api/recovery/cancel-class`, {
     method: 'POST',
