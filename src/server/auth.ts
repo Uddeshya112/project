@@ -301,6 +301,61 @@ export function createAuth(opts: AuthOptions) {
     res.json({ googleEnabled, demoEnabled: opts.demoMode, allowedDomains: opts.allowedDomains });
   });
 
+  router.post('/api/auth/register', async (req, res) => {
+    const name = String(req.body?.name ?? '').trim();
+    const email = normEmail(req.body?.email);
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+
+    if (!name || name.length > 120 || !isEmail(email) || !password) {
+      return res.status(400).json({ success: false, message: 'Valid name, email and password are required.' });
+    }
+    if (opts.allowedDomains.length) {
+      const domain = email.split('@')[1] ?? '';
+      if (!opts.allowedDomains.includes(domain)) {
+        return res.status(400).json({ success: false, message: 'Registration is limited to approved institutional email domains.' });
+      }
+    }
+    if (password.length > MAX_PASSWORD_LENGTH) {
+      return res.status(400).json({ success: false, message: `Password must be ${MAX_PASSWORD_LENGTH} characters or fewer.` });
+    }
+
+    const wait = await persistentRateLimit(`register-ip:${req.ip}`, 10, 60 * 60_000);
+    if (wait) {
+      res.setHeader('Retry-After', String(wait));
+      return res.status(429).json({ success: false, message: `Too many registration attempts. Try again in ${wait} seconds.` });
+    }
+
+    const policy = evaluatePasswordPolicy(password);
+    if (!policy.isValid) {
+      return res.status(400).json({ success: false, message: `Password needs: ${policy.errors.join(', ')}.` });
+    }
+
+    const existing = await userByEmail(email);
+    if (existing) {
+      return res.status(409).json({ success: false, message: 'An account with this email already exists.' });
+    }
+
+    const roster = opts.rosterLookup(email);
+    if (roster && !['STUDENT', 'CLASS_REPRESENTATIVE'].includes(roster.roleCode)) {
+      return res.status(409).json({ success: false, message: 'Staff accounts are provisioned by an administrator or institutional Google sign-in.' });
+    }
+
+    const roleCode: RoleCode = roster?.roleCode ?? 'STUDENT';
+    const profile = roster?.profile ?? {};
+    const [user] = await db.query<UserRow>(
+      `insert into ${T}.users (id, email, name, role_code, department, password_hash, profile)
+       values ($1, $2, $3, $4, $5, $6, $7) returning *`,
+      [`usr-${crypto.randomUUID()}`, email, name, roleCode, roster?.department ?? '', await hashPassword(password), profile],
+    );
+
+    return res.status(201).json({
+      success: true,
+      userId: user.id,
+      user: publicUser(user),
+      message: 'Account created successfully. You can now sign in with your email and password.',
+    });
+  });
+
   router.post('/api/auth/login', async (req, res) => {
     const email = normEmail(req.body?.email);
     const password = typeof req.body?.password === 'string' ? req.body.password : '';
