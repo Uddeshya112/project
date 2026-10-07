@@ -271,6 +271,14 @@ export function createAuth(opts: AuthOptions) {
           ],
         );
       }
+      await db.query(
+        'update ' + T + '.users set profile = coalesce(profile, \'{}\'::jsonb) || $2::jsonb where email = $1',
+        [DEMO_ROLE_EMAILS.Student, JSON.stringify({ sectionId: 'sec-cse-a', rollNumber: '102303999', batch: 'Batch COE-A1' })],
+      );
+      await db.query(
+        'update ' + T + '.users set profile = coalesce(profile, \'{}\'::jsonb) || $2::jsonb where email = $1',
+        [DEMO_ROLE_EMAILS.Faculty, JSON.stringify({ facultyId: 'fac-0005' })],
+      );
       console.info(`[auth] Seeded ${SAMPLE_USERS.length} sample accounts (change their passwords from Admin -> Users).`);
     }
 
