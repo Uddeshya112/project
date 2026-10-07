@@ -1056,40 +1056,12 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       }
       return data;
     } catch (err: any) {
-      console.warn('[TIMETABLE_API] Generate API fallback to local solver:', err);
-      // Fallback to local execution if backend network fails
-      const candRes = generateMultiCandidateTimetables({ timeBudgetMs: options.timeBudgetMs || 800, maxCandidates: options.maxCandidates || 3, budgetMode: options.budgetMode || 'BALANCED' });
-      const fallbackRoutines: GenerationRoutine[] = candRes.candidates.map((c, i) => ({
-        id: i === 0 ? 'student-focused' : 'faculty-focused',
-        label: i === 0 ? 'Student-focused' : 'Faculty-focused',
-        description: i === 0 ? 'Prioritizes student timetable quality and minimizes student gaps.' : 'Prioritizes faculty timetable quality and minimizes faculty gaps.',
-        optimizationProfile: (i === 0 ? 'STUDENT_FOCUSED' : 'FACULTY_FOCUSED') as any,
-        versionNumber: i + 1,
-        versionId: `ver-${i + 1}`,
-        sessions: c.sessions,
-        validation: {
-          valid: candRes.validationReports[i]?.hardViolationsCount === 0,
-          hardViolations: candRes.validationReports[i]?.hardViolationsCount || 0,
-          unscheduled: 0,
-          studentConflicts: 0,
-          facultyConflicts: 0,
-          roomConflicts: 0,
-          capacityViolations: 0,
-          availabilityViolations: 0,
-        },
-        metrics: {
-          studentGaps: candRes.validationReports[i]?.metrics.totalStudentGaps ?? 0,
-          facultyGaps: candRes.validationReports[i]?.metrics.totalFacultyGaps ?? 0,
-          roomUtilization: candRes.validationReports[i]?.metrics.roomUtilizationRate ?? 0,
-          labUtilization: candRes.validationReports[i]?.metrics.labUtilizationRate ?? 0,
-        },
-        healthScore: c.healthScore,
-      }));
-      setLatestGeneratedRoutines(fallbackRoutines);
+      console.warn('[TIMETABLE_API] Generate API failed:', err);
       return {
-        success: candRes.isSuccess,
-        isFeasible: candRes.isSuccess,
-        routines: fallbackRoutines,
+        success: false,
+        isFeasible: false,
+        routines: [],
+        message: err?.message || 'Timetable generation service is unavailable. Check the server connection and try again.',
       };
     }
   };
