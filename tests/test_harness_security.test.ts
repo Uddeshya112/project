@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert';
+import { isTestTokenAllowed } from '../server';
 
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:3000';
 
 test('ALLOW_TEST_RESET_TOKEN test harness security and production isolation', async () => {
   const email = 'coordinator.demo@demo.thapar.local';
 
-  // 1. Request forgot-password without test headers
+  // (a) no header gives no token even when the flag is set
   const resNoTest = await fetch(`${BASE_URL}/api/auth/forgot-password`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -14,9 +15,9 @@ test('ALLOW_TEST_RESET_TOKEN test harness security and production isolation', as
   });
   assert.strictEqual(resNoTest.status, 200);
   const dataNoTest = await resNoTest.json();
-  assert.strictEqual(dataNoTest.resetToken, undefined, 'Reset token must not be leaked without test flag/header');
+  assert.strictEqual(dataNoTest.resetToken, undefined, 'No header gives no token even when flag is set');
 
-  // 2. Request forgot-password with test header in non-production
+  // (b) flag set + header + test env gives a token
   const resWithTest = await fetch(`${BASE_URL}/api/auth/forgot-password`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Test-Mode': 'true' },
@@ -24,9 +25,22 @@ test('ALLOW_TEST_RESET_TOKEN test harness security and production isolation', as
   });
   assert.strictEqual(resWithTest.status, 200);
   const dataWithTest = await resWithTest.json();
-  if (process.env.NODE_ENV !== 'production') {
-    assert.ok(dataWithTest.resetToken, 'Reset token should be present in test mode');
-  } else {
-    assert.strictEqual(dataWithTest.resetToken, undefined, 'Reset token must never be returned in production');
+  assert.ok(dataWithTest.resetToken, 'Flag set + header + test env gives a token');
+
+  // (c) NODE_ENV=production with flag + header gives no token
+  const savedNodeEnv = process.env.NODE_ENV;
+  const savedFlag = process.env.ALLOW_TEST_RESET_TOKEN;
+  try {
+    process.env.NODE_ENV = 'production';
+    process.env.ALLOW_TEST_RESET_TOKEN = 'true';
+    const mockReq = { headers: { 'x-test-mode': 'true' } } as any;
+    assert.strictEqual(
+      isTestTokenAllowed(mockReq),
+      false,
+      'NODE_ENV=production with flag + header gives no token'
+    );
+  } finally {
+    process.env.NODE_ENV = savedNodeEnv;
+    process.env.ALLOW_TEST_RESET_TOKEN = savedFlag;
   }
 });

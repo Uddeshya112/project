@@ -62,7 +62,7 @@ async function runTestSuite() {
   console.log('INTELLISCHEDULE INDEPENDENT SECURITY & PERFORMANCE AUDIT SUITE');
   console.log('================================================================\n');
 
-  const BASE_URL = 'http://localhost:3000';
+  const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
 
   // -------------------------------------------------------------
   // SUITE 0: MONITORING & HEALTH CHECKS (Layer 14)
@@ -448,7 +448,7 @@ async function runTestSuite() {
     // Step A: Request Reset
     const forgotRes = await fetch(`${BASE_URL}/api/auth/forgot-password`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Test-Mode': 'true' },
       body: JSON.stringify({ email: testRegEmail }),
     });
     const forgotData = await forgotRes.json();

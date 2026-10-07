@@ -453,11 +453,12 @@ function validateOneTimeToken(rawToken: string, expectedPurpose: OneTimeTokenPur
   return persistentStore.validateOneTimeToken(rawToken, expectedPurpose);
 }
 
-function isTestTokenAllowed(req?: Request): boolean {
-  if (process.env.NODE_ENV === 'production') {
-    return false;
-  }
-  return process.env.ALLOW_TEST_RESET_TOKEN === 'true' || Boolean(req && req.headers['x-test-mode'] === 'true') || process.env.NODE_ENV === 'test';
+export function isTestTokenAllowed(req?: Request): boolean {
+  return (
+    process.env.NODE_ENV === 'test' &&
+    process.env.ALLOW_TEST_RESET_TOKEN === 'true' &&
+    Boolean(req && req.headers['x-test-mode'] === 'true')
+  );
 }
 
 function resolveWorkspacesForUser(user: StoredUser): WorkspaceType[] {
@@ -3217,7 +3218,8 @@ app.get('/api/audit', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN', 
 });
 
 // API 404 Fallback Handler
-app.all('/api/*path', (_req: Request, res: Response) => {
+app.all(/^\/api\/.*/, (_req: Request, res: Response) => {
+  console.log('!!! API 404 Handler caught request !!!', _req.path);
   return res.status(404).json({ success: false, error: 'NOT_FOUND', message: 'API route not found' });
 });
 

@@ -4,7 +4,8 @@ import path from 'path';
 import { spawn, type ChildProcess } from 'child_process';
 
 const ROOT = process.cwd();
-const BASE_URL = 'http://127.0.0.1:3000';
+const TEST_PORT = process.env.TEST_PORT || '3100';
+const BASE_URL = process.env.BASE_URL || `http://127.0.0.1:${TEST_PORT}`;
 let ownedServer: ChildProcess | null = null;
 
 const randomTestPassword = () => crypto.randomBytes(24).toString('base64url') + 'A1!';
@@ -27,13 +28,13 @@ async function waitForServer(timeoutMs = 30000): Promise<void> {
     if (await isServerReady()) return;
     await new Promise(resolve => setTimeout(resolve, 250));
   }
-  throw new Error('Timed out waiting for the local test server on port 3000.');
+  throw new Error(`Timed out waiting for the local test server on port ${TEST_PORT}.`);
 }
 
 function startServer(testPassword: string): ChildProcess {
   const child = spawn(commandName('tsx'), ['server.ts'], {
     cwd: ROOT,
-    env: { ...process.env, NODE_ENV: 'test', PORT: '3000', ALLOW_TEST_RESET_TOKEN: 'true', SEED_USER_PASSWORD: testPassword, DEMO_ACCOUNT_PASSWORD: testPassword },
+    env: { ...process.env, NODE_ENV: 'test', PORT: TEST_PORT, BASE_URL, ALLOW_TEST_RESET_TOKEN: 'true', SEED_USER_PASSWORD: testPassword, DEMO_ACCOUNT_PASSWORD: testPassword },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   child.stdout?.on('data', chunk => process.stdout.write('[test-server] ' + chunk));
@@ -74,13 +75,13 @@ async function main(): Promise<void> {
 
   try {
     if (await isServerReady()) {
-      // Server already running
+      // Server already running on test port
     } else {
       ownedServer = startServer(testPassword);
       await waitForServer();
     }
 
-    const testEnv = { NODE_ENV: 'test', SEED_USER_PASSWORD: testPassword, DEMO_ACCOUNT_PASSWORD: testPassword };
+    const testEnv = { NODE_ENV: 'test', PORT: TEST_PORT, BASE_URL, ALLOW_TEST_RESET_TOKEN: 'true', SEED_USER_PASSWORD: testPassword, DEMO_ACCOUNT_PASSWORD: testPassword };
     const unitExit = await runCommand('tsx', ['--test', ...testFiles], testEnv);
     if (unitExit !== 0) {
       process.exitCode = unitExit;

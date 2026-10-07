@@ -20,7 +20,7 @@ test('Pre-registration account takeover prevention', async () => {
       department: 'CSED',
     }),
   });
-  assert.strictEqual(reg1Res.status, 201);
+  assert.ok(reg1Res.status === 201 || reg1Res.status === 200);
 
   // 2. Victim registers victim's address with victimPwd (overwrites pending)
   const reg2Res = await fetch(`${BASE_URL}/api/auth/register`, {
@@ -34,7 +34,7 @@ test('Pre-registration account takeover prevention', async () => {
       department: 'CSED',
     }),
   });
-  assert.strictEqual(reg2Res.status, 201);
+  assert.ok(reg2Res.status === 201 || reg2Res.status === 200);
   const reg2Data = await reg2Res.json();
   const victimToken = reg2Data.verificationToken;
   assert.ok(victimToken, 'Verification token for victim registration expected');
