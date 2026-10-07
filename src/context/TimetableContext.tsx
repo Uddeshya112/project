@@ -779,7 +779,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     const sessionsGenerated = routine.sessions.length;
     const hardViolations = routine.validation?.hardViolations ?? 0;
     const unscheduled = routine.validation?.unscheduled ?? 0;
-    const totalHours = report.totalHours;
+    const totalHours = allocations.reduce((sum, allocation) => sum + Number(allocation.hoursPerWeek || 0), 0);
     return {
       isSuccess: hardViolations === 0 && sessionsGenerated > 0,
       sessionsGenerated,
