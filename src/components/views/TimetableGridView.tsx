@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useTimetable } from '../../context/TimetableContext';
+import { useAuth } from '../../context/AuthContext';
 import { TIME_SLOTS } from '../../lib/initialData';
 import { DayOfWeek, ClassSession } from '../../types';
 import {
@@ -37,6 +38,7 @@ export function TimetableGridView() {
     validationReport,
     setActiveView,
   } = useTimetable();
+  const { currentUser } = useAuth();
 
   const [filterMode, setFilterMode] = useState<'section' | 'faculty' | 'room'>('section');
   const [activeSessionDetail, setActiveSessionDetail] = useState<ClassSession | null>(null);
@@ -57,7 +59,7 @@ export function TimetableGridView() {
   const days: DayOfWeek[] = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
 
   const hardViolationsCount = validationReport.hardViolationsCount ?? validationReport.errorCount;
-  const canPublish = sessions.length > 0 && hardViolationsCount === 0;
+  const canPublish = ['COLLEGE_ADMIN', 'SUPER_ADMIN'].includes(currentUser?.roleCode ?? '') && sessions.length > 0 && hardViolationsCount === 0;
 
   const handlePublish = async () => {
     if (!canPublish) {
