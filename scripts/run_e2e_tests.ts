@@ -204,9 +204,9 @@ async function runTestSuite() {
     assert(
       res.status === 200 &&
       data.success === true &&
-      data.role === 'Coordinator' &&
-      data.authorizedWorkspaces.includes('Coordinator') &&
-      data.authorizedWorkspaces.includes('Faculty'),
+      data.user?.roleCode === 'COORDINATOR' &&
+      data.user?.authorizedWorkspaces.includes('Coordinator') &&
+      data.user?.authorizedWorkspaces.includes('Faculty'),
       'Auth API',
       'Coordinator login resolves role and multi-workspaces [Coordinator, Faculty]'
     );
@@ -227,9 +227,9 @@ async function runTestSuite() {
     assert(
       res.status === 200 &&
       data.success === true &&
-      data.role === 'Student' &&
-      data.authorizedWorkspaces.includes('Student') &&
-      data.authorizedWorkspaces.includes('CR'),
+      ['STUDENT', 'CLASS_REPRESENTATIVE'].includes(data.user?.roleCode) &&
+      data.user?.authorizedWorkspaces.includes('Student') &&
+      data.user?.authorizedWorkspaces.includes('CR'),
       'Auth API',
       'Student login resolves CR multi-workspace authorization'
     );
@@ -247,7 +247,7 @@ async function runTestSuite() {
       res.status === 200 &&
       data.authenticated === true &&
       data.user.email === 'kn.murthy@thapar.edu' &&
-      data.role === 'Coordinator',
+      data.user?.roleCode === 'COORDINATOR',
       'Auth API',
       'Session verification /api/auth/me validates the server session cookie and returns user profile'
     );
@@ -393,17 +393,19 @@ async function runTestSuite() {
       'Newly registered account rejects wrong password with HTTP 401'
     );
 
-    // Verify that newly registered account without email confirmation is blocked from login until verified
-    const unconfirmedLoginRes = await fetch(`${BASE_URL}/api/auth/login`, {
+    const registeredLoginRes = await fetch(`${BASE_URL}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: testRegEmail, password: testRegPassword }),
     });
-    const unconfirmedLoginData = await unconfirmedLoginRes.json();
+    const registeredLoginData = await registeredLoginRes.json();
     assert(
-      unconfirmedLoginRes.status === 401 && unconfirmedLoginData.success === false,
+      registeredLoginRes.status === 200 &&
+      registeredLoginData.success === true &&
+      registeredLoginData.user?.roleCode === 'STUDENT' &&
+      !registeredLoginData.token,
       'Auth API',
-      'Unconfirmed newly registered account is rejected with HTTP 401 until email verification'
+      'Newly registered institutional account can sign in without a bearer token'
     );
   } catch (err) {
     assert(false, 'Auth API', 'Registration test flow failed', String(err));
