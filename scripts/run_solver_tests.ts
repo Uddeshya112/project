@@ -737,6 +737,11 @@ async function runFullPerformanceVerificationSuite() {
       constraints: INITIAL_CONSTRAINTS,
     });
     labBlocksValid = valReport.isValid && valReport.hardViolationsCount === 0;
+    if (!labBlocksValid) {
+      console.error('Lab block validator diagnostics:', valReport.violations.slice(0, 20));
+    }
+  } else {
+    console.error('Lab block generation diagnostics:', labEngineRes.infeasibilityDiagnostics ?? []);
   }
   console.log(`• Multi-Period Lab Block Constraint (2h & 3h Contiguous, No Lunch, Same Room & Faculty): ${labBlocksValid ? 'VERIFIED (0 Violations)' : 'FAILED'}`);
 
