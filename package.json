@@ -13,7 +13,7 @@
     "test": "tsx scripts/run_test_suite.ts",
     "test:auth": "tsx scripts/run_auth_architecture_tests.ts",
     "test:demo": "tsx scripts/run_demo_tests.ts",
-    "test:security": "tsx scripts/run_adversarial_tests.ts",
+    "test:security": "tsx scripts/run_security_regression_tests.ts",
     "test:solver": "tsx scripts/run_solver_tests.ts",
     "benchmark": "tsx scripts/run_password_benchmarks.ts",
     "start": "tsx server.ts",
