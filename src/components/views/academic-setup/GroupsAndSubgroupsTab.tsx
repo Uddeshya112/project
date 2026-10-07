@@ -104,11 +104,11 @@ export function GroupsAndSubgroupsTab({ canEdit = true }: { canEdit?: boolean })
     );
   };
 
-  const handleRunBulkGenerator = (e: React.FormEvent) => {
+  const handleRunBulkGenerator = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!bulkForm.departmentId) return;
-    bulkGenerateGroups(bulkForm);
-    setShowBulkGenerator(false);
+    const created = await bulkGenerateGroups(bulkForm);
+    if (created.length > 0) setShowBulkGenerator(false);
   };
 
   // Filter sections by name
