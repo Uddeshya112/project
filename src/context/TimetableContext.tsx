@@ -1072,6 +1072,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       const res = await fetch(apiUrl('/api/timetable/select-routine'), {
         method: 'POST',
         headers,
+        credentials: 'include',
         body: JSON.stringify({ versionNumber }),
       });
       const data = await res.json();
