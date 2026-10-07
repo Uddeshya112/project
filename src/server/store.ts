@@ -22,7 +22,7 @@ import type {
 import { INITIAL_ACADEMIC_YEAR, INITIAL_CONSTRAINTS, type StudentRecord } from '../lib/initialData';
 import { validateTimetableIndependently, validateProposedSessionMove, validateProposedSessionSwap } from '../lib/independentValidator';
 import { executeOptimizationEngine, type BudgetMode, type OptimizationProfile } from '../lib/optimizationEngine';
-import { findSelfHealingRecoverySlots, calculateHealthScore, checkHardConstraints } from '../lib/recoveryEngine';
+import { findSelfHealingRecoverySlots, findSubstituteFaculty, calculateHealthScore, checkHardConstraints } from '../lib/recoveryEngine';
 import type { ExcelImportPreview } from '../lib/excelMasterService';
 import type { Db } from './db';
 import { HttpError, ValidationError, SPECS, clean, requireFields } from './validate';
@@ -1291,6 +1291,117 @@ export class TimetableStore {
       category: 'Success',
     });
     return this.academicYear;
+  }
+
+  unpublish(user: string) {
+    if (!this.publishedSessions.length && this.publishedVersionNumber == null) throw new HttpError(409, 'There is no published timetable to unpublish.');
+    const previous = this.publishedVersionNumber;
+    this.publishedSessions = [];
+    this.publishedVersionNumber = null;
+    this.versions = this.versions.map((v) => ({ ...v, isPublished: false }));
+    this.academicYear.publishStatus = 'Draft';
+    this.academicYear.approvedBy = undefined;
+    this.academicYear.approvedAt = undefined;
+    this.academicYear.publishedAt = undefined;
+    this.logAudit(user, 'TIMETABLE_UNPUBLISHED', 'TimetableVersion', String(previous ?? 'published'), 'Removed the live timetable from student and faculty views and returned governance state to Draft.');
+    return this.academicYear;
+  }
+
+  applyCandidate(body: unknown, user: string) {
+    const b = (body ?? {}) as Record<string, any>;
+    if (!Array.isArray(b.sessions) || b.sessions.length === 0) throw new ValidationError('A candidate with sessions is required.');
+    const sessions = clone(b.sessions) as ClassSession[];
+    const report = validateTimetableIndependently(sessions, this.context());
+    if (!report.canPublish || report.scheduledSessionsCount !== report.requiredSessionsCount) throw new HttpError(422, `Candidate rejected: ${report.hardViolationsCount} hard violations and ${Math.max(0, report.requiredSessionsCount - report.scheduledSessionsCount)} unscheduled hours.`);
+    this.activeSessions = sessions;
+    const version = this.addVersion({ label: 'Candidate Selected V{n}.0', summary: `Applied solver candidate with ${sessions.length} sessions.`, reason: String(b.reason || 'Candidate Selection').slice(0, 300), sessions, createdBy: user, healthScore: this.health(sessions), hardViolations: report.hardViolationsCount, makeActive: true });
+    this.activeVersionNumber = version.versionNumber;
+    this.academicYear.publishStatus = 'Draft';
+    this.logAudit(user, 'CANDIDATE_APPLIED', 'TimetableVersion', `v-${version.versionNumber}`, version.changeSummary);
+    return version;
+  }
+
+  simulateWhatIf(body: unknown, user: string) {
+    const b = (body ?? {}) as Record<string, any>;
+    const scenarioId = String(b.scenarioId ?? '').trim();
+    if (!scenarioId) throw new ValidationError('scenarioId is required.');
+    const base = (this.publishedSessions.length ? this.publishedSessions : this.activeSessions).filter((s) => s.status !== 'Cancelled');
+    if (!base.length) throw new HttpError(400, 'There is no timetable to simulate against.');
+    const scenarioType = scenarioId === 'faculty-leave' ? 'FacultyOnLeave' : 'RoomUnavailable';
+    const rooms = clone([...this.rooms.values()]);
+    const facultyMembers = clone([...this.facultyMembers.values()]);
+    let targetEntityId = String(b.targetEntityId ?? '');
+    let targetName = String(b.targetName ?? '');
+    const findRoom = (preferred: string, preferLab: boolean) => {
+      const exact = preferred ? rooms.find((r) => r.id === preferred || r.name.toLowerCase() === preferred.toLowerCase()) : undefined;
+      if (exact) return exact;
+      return rooms.find((r) => preferLab ? (r.type === 'ComputerLab' || r.type === 'HardwareLab') : (r.type === 'LectureHall' || r.type === 'SeminarRoom'));
+    };
+    let candidateSessions: ClassSession[] = [];
+    let affectedBase: ClassSession[] = [];
+    if (scenarioType === 'RoomUnavailable') {
+      const targetRoom = findRoom(targetEntityId, scenarioId === 'lab301-closure');
+      if (!targetRoom) throw new HttpError(422, 'No suitable room exists for this scenario.');
+      targetEntityId = targetRoom.id;
+      targetName = targetRoom.name;
+      targetRoom.isAvailable = false;
+      affectedBase = base.filter((s) => s.roomId === targetEntityId);
+      const result = executeOptimizationEngine(this.academicYear, [...this.allocations.values()], facultyMembers, rooms, [...this.groups.values()], [...this.courses.values()], [...this.constraints.values()], { budgetMode: 'BALANCED', timeBudgetMs: Math.min(3000, Math.max(300, Number(b.timeBudgetMs) || 1400)), maxCandidates: 1, seed: Number.isInteger(b.seed) ? b.seed : 1337, fixedSessions: base.filter((s) => s.roomId !== targetEntityId) });
+      if (!result.bestCandidate) throw new HttpError(422, result.infeasibilityDiagnostics?.join(' ') || 'The room closure could not be repaired without violating hard constraints.');
+      candidateSessions = result.bestCandidate.sessions;
+    } else {
+      const targetFaculty = facultyMembers.find((f) => f.id === targetEntityId || f.name.toLowerCase() === targetName.toLowerCase() || f.name.toLowerCase().includes('arvind sharma'));
+      if (!targetFaculty) throw new HttpError(422, 'The faculty member for this scenario was not found.');
+      targetEntityId = targetFaculty.id;
+      targetName = targetFaculty.name;
+      affectedBase = base.filter((s) => s.facultyId === targetEntityId);
+      const working = base.map((s) => ({ ...s }));
+      const load = new Map<string, number>();
+      working.forEach((s) => { if (s.facultyId !== targetEntityId) load.set(s.facultyId, (load.get(s.facultyId) ?? 0) + 1); });
+      let failed = 0;
+      for (const s of working.filter((x) => x.facultyId === targetEntityId)) {
+        const course = this.courses.get(s.courseId);
+        const candidates = findSubstituteFaculty(s.courseId, s.day, s.timeSlotId, facultyMembers.filter((f) => f.id !== targetEntityId), working, course?.code).filter((x) => x.isAvailable && x.compatibilityScore > 0).filter((x) => (load.get(x.faculty.id) ?? 0) < x.maxLoad);
+        const sub = candidates[0];
+        if (!sub) { failed++; continue; }
+        const index = working.findIndex((x) => x.id === s.id);
+        if (index >= 0) { working[index] = { ...working[index], facultyId: sub.faculty.id, status: 'Planned' }; load.set(sub.faculty.id, (load.get(sub.faculty.id) ?? 0) + 1); }
+      }
+      if (failed) throw new HttpError(422, `No qualified substitute was available for ${failed} affected class(es).`);
+      candidateSessions = working;
+    }
+    const report = validateTimetableIndependently(candidateSessions, this.context());
+    if (report.hardViolationsCount > 0 || report.scheduledSessionsCount < report.requiredSessionsCount) throw new HttpError(422, `Simulation leaves ${report.hardViolationsCount} hard violation(s) and ${Math.max(0, report.requiredSessionsCount - report.scheduledSessionsCount)} unscheduled hour(s).`);
+    const dayOrder = new Map(this.academicYear.workingDays.map((d, i) => [d, i]));
+    const groupByAllocation = (list: ClassSession[]) => {
+      const map = new Map<string, ClassSession[]>();
+      for (const s of list) { const key = `${s.courseId}|${s.sectionId}|${s.subSectionId ?? ''}`; const arr = map.get(key) ?? []; arr.push(s); map.set(key, arr); }
+      for (const arr of map.values()) arr.sort((a, z) => (dayOrder.get(a.day) ?? 99) - (dayOrder.get(z.day) ?? 99) || a.timeSlotId.localeCompare(z.timeSlotId));
+      return map;
+    };
+    const before = groupByAllocation(base);
+    const after = groupByAllocation(candidateSessions);
+    let changedSlots = 0, roomChanges = 0;
+    const affectedSections = new Set<string>(), affectedFaculty = new Set<string>();
+    for (const [key, arr] of before) {
+      const next = after.get(key) ?? [];
+      arr.forEach((s, i) => { const n = next[i]; if (!n || n.day !== s.day || n.timeSlotId !== s.timeSlotId) changedSlots++; if (!n || n.roomId !== s.roomId) roomChanges++; if (!n || n.day !== s.day || n.timeSlotId !== s.timeSlotId || n.roomId !== s.roomId || n.facultyId !== s.facultyId) { affectedSections.add(s.sectionId); affectedFaculty.add(s.facultyId); if (n) affectedFaculty.add(n.facultyId); } });
+    }
+    const baseHealth = calculateHealthScore(base, [...this.rooms.values()], [...this.facultyMembers.values()], [...this.groups.values()], [...this.courses.values()], this.academicYear).overallScore;
+    const projectedHealth = calculateHealthScore(candidateSessions, [...this.rooms.values()], [...this.facultyMembers.values()], [...this.groups.values()], [...this.courses.values()], this.academicYear).overallScore;
+    const simulation = {
+      id: `whatif-${scenarioId}`, title: String(b.title || `${targetName} scenario`), scenarioType: scenarioType as 'RoomUnavailable' | 'FacultyOnLeave', parameters: { targetEntityId, startDate: b.startDate, endDate: b.endDate },
+      impact: { affectedClassesCount: affectedBase.length, requiredRoomChanges: roomChanges, newHardConflicts: report.hardViolationsCount, stabilityScore: Math.max(0, Number((100 - changedSlots / Math.max(1, base.length) * 100).toFixed(1))), projectedHealthScore: projectedHealth, affectedFacultyNames: [...new Set([...affectedFaculty].map((id) => this.facultyMembers.get(id)?.name).filter(Boolean) as string[])], affectedSectionNames: [...new Set([...affectedSections].map((id) => this.groups.get(id)?.name).filter(Boolean) as string[])] },
+      suggestedActions: scenarioType === 'RoomUnavailable' ? [`Reassign ${affectedBase.length} affected class(es) away from ${targetName}.`, `Keep the ${changedSlots} moved slot(s) outside locked sessions.`, `Projected health changes from ${baseHealth} to ${projectedHealth}.`] : [`Replace ${affectedBase.length} affected class(es) using qualified available faculty.`, `Keep student sections at their existing periods where feasible.`, `Projected health changes from ${baseHealth} to ${projectedHealth}.`],
+    };
+    if (Boolean(b.apply)) {
+      this.activeSessions = clone(candidateSessions);
+      const version = this.addVersion({ label: 'What-If Applied V{n}.0', summary: simulation.title, reason: 'What-If Simulation Commit', sessions: this.activeSessions, createdBy: user, healthScore: projectedHealth, hardViolations: report.hardViolationsCount, makeActive: true });
+      this.academicYear.publishStatus = 'Draft';
+      this.logAudit(user, 'WHATIF_APPLIED', 'TimetableVersion', `v-${version.versionNumber}`, simulation.title);
+      return { success: true, simulation, sessions: candidateSessions, version };
+    }
+    return { success: true, simulation, sessions: candidateSessions };
   }
 
   /** Adds a single session. Staff edit the draft (new version); faculty add to the live timetable for themselves. */
