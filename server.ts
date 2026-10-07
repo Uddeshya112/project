@@ -503,6 +503,12 @@ export async function createApp(db: import('./src/server/db').Db, jobManager?: T
     res.json({ success: true, academicYear: value });
   }));
 
+  app.post('/api/timetable/unpublish', requireRole(['COLLEGE_ADMIN']), asyncRoute(async (req, res) => {
+    const value = store.unpublish(req.user!.name);
+    await store.persist();
+    res.json({ success: true, academicYear: value });
+  }));
+
 
   app.post('/api/timetable/unpublish', requireRole(['COLLEGE_ADMIN']), asyncRoute(async (req, res) => {
     const value = store.unpublish(req.user!.name);
