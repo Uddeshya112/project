@@ -310,7 +310,7 @@ export function DashboardLayout({
               {activeView === 'allocations' && <AcademicSetupHubView />}
               {activeView === 'availability' && <AcademicSetupHubView />}
               {activeView === 'generation_validator' && <GenerateTimetablePage />}
-              {activeView === 'recovery' && <RequestsView />}
+              {activeView === 'recovery' && <RecoveryEngineView />}
               {activeView === 'whatif' && <WhatIfSimulatorView />}
               {activeView === 'syllabus' && <WorkloadSyllabusView />}
               {activeView === 'settings' && <SettingsView />}
