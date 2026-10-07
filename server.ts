@@ -1605,6 +1605,7 @@ app.post('/api/auth/resend-verification', async (req: Request, res: Response) =>
     responseData.verificationToken = rawToken;
   }
 
+  await new Promise(resolve => setTimeout(resolve, AUTH_TIMING_FLOOR_MS));
   return res.json(responseData);
 });
 
@@ -1903,6 +1904,8 @@ async function sendResetEmail(email: string, token: string): Promise<void> {
   }
 }
 
+const AUTH_TIMING_FLOOR_MS = 20;
+
 const handleForgotPassword = async (req: Request, res: Response) => {
   const clientIp = req.ip || req.socket.remoteAddress || '127.0.0.1';
   const { email } = req.body;
@@ -1953,6 +1956,7 @@ const handleForgotPassword = async (req: Request, res: Response) => {
     responseData.resetToken = rawToken;
   }
 
+  await new Promise(resolve => setTimeout(resolve, AUTH_TIMING_FLOOR_MS));
   return res.json(responseData);
 };
 
