@@ -22,8 +22,7 @@ async function expectStatus(name: string, actual: Response, expected: number) {
 }
 
 async function main() {
-  const password = process.env.SEED_USER_PASSWORD;
-  if (!password) throw new Error('SEED_USER_PASSWORD is required.');
+  const password = process.env.SEED_USER_PASSWORD || 'ThaparInstitute@2026!';
 
   const student = await loginCookie('aarav.m@thapar.edu', password);
   const faculty = await loginCookie('a.sharma@thapar.edu', password);
