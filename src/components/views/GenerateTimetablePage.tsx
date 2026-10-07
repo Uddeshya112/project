@@ -157,6 +157,18 @@ export function GenerateTimetablePage() {
     applyCandidateAsDraft(candidate);
   };
 
+  const distinctnessAudit = useMemo(() => {
+    const a = generationOutput?.candidates[0]?.sessions ?? [];
+    const b = generationOutput?.candidates[1]?.sessions ?? [];
+    if (a.length < 1 || b.length < 1) return null;
+    const key = (s: ClassSession) => s.courseId + '|' + s.sectionId + '|' + (s.subSectionId ?? '') + '|' + s.facultyId + '|' + s.roomId + '|' + s.day + '|' + s.timeSlotId;
+    const keysA = new Set(a.map(key));
+    const identical = b.filter(s => keysA.has(key(s))).length;
+    const total = Math.max(a.length, b.length);
+    const different = Math.max(0, total - identical);
+    return { total, identical, different, percent: total ? Math.round((different / total) * 10000) / 100 : 0 };
+  }, [generationOutput]);
+
   const handlePublishCurrent = async () => {
     const res = await publishMasterTimetable('Dean Academic Affairs');
     if (res.success) {
