@@ -1,49 +1,41 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import type { Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 
-const BASE_URL = 'http://127.0.0.1:3000';
-let testServer: ChildProcess | null = null;
+process.env.NODE_ENV = 'test';
+process.env.DEMO_MODE = 'true';
+process.env.SEED_DEMO_DATA = 'true';
+process.env.BCRYPT_ROUNDS = '4';
 
-async function waitForServer(timeoutMs = 30000) {
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    try {
-      const res = await fetch(`${BASE_URL}/api/health/live`);
-      if (res.ok && (await res.json().catch(() => null))?.status === 'LIVE') return;
-    } catch {}
-    await new Promise(resolve => setTimeout(resolve, 150));
+let BASE_URL = '';
+let server: Server | null = null;
+let db: import('../src/server/db').Db | null = null;
+
+async function startTestServer(seedPassword: string) {
+  const [{ connectDb }, { store }, { createApp }] = await Promise.all([
+    import('../src/server/db'),
+    import('../src/server/store'),
+    import('../server'),
+  ]);
+
+  db = await connectDb('pglite:memory');
+  await store.init(db, { seedDemoData: true });
+  const app = await createApp(db);
+  await app.seedUsers();
+  server = app.app.listen(0);
+  const address = server.address() as AddressInfo;
+  BASE_URL = `http://127.0.0.1:${address.port}`;
+  process.env.SEED_USER_PASSWORD = seedPassword;
+}
+
+async function stopTestServer() {
+  if (server) {
+    await new Promise<void>(resolve => server!.close(() => resolve()));
+    server = null;
   }
-  throw new Error('Timed out waiting for the isolated security test server.');
-}
-
-function startServer(seedPassword: string) {
-  testServer = spawn('npx', ['tsx', 'server.ts'], {
-    cwd: process.cwd(),
-    env: {
-      ...process.env,
-      NODE_ENV: 'test',
-      PORT: '3000',
-      DATABASE_URL: 'pglite:memory',
-      DEMO_MODE: 'true',
-      SEED_DEMO_DATA: 'true',
-      SEED_USER_PASSWORD: seedPassword,
-      SAMPLE_ACCOUNTS_PASSWORD: seedPassword,
-      DEMO_ACCOUNTS_PASSWORD: 'ThaparDemo@2026Test!',
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  testServer.stdout?.on('data', chunk => process.stdout.write('[security-server] ' + chunk));
-  testServer.stderr?.on('data', chunk => process.stderr.write('[security-server] ' + chunk));
-}
-
-async function stopServer() {
-  if (!testServer || testServer.exitCode !== null) return;
-  await new Promise<void>(resolve => {
-    const child = testServer!;
-    const timer = setTimeout(() => { child.kill('SIGKILL'); resolve(); }, 5000);
-    child.once('exit', () => { clearTimeout(timer); resolve(); });
-    child.kill('SIGTERM');
-  });
-  testServer = null;
+  if (db) {
+    await db.close();
+    db = null;
+  }
 }
 
 async function loginCookie(email: string, password: string) {
@@ -69,8 +61,7 @@ async function expectStatus(name: string, actual: Response, expected: number) {
 
 async function main() {
   const password = process.env.SEED_USER_PASSWORD || 'ThaparInstitute@2026!';
-  startServer(password);
-  await waitForServer();
+  await startTestServer(password);
   try {
     const student = await loginCookie('aarav.m@thapar.edu', password);
   const faculty = await loginCookie('a.sharma@thapar.edu', password);
@@ -147,12 +138,12 @@ async function main() {
   }
     console.log('✓ Solver benchmark returns calculated metrics');
   } finally {
-    await stopServer();
+    await stopTestServer();
   }
 }
 
 main().catch(async error => {
   console.error(error);
-  await stopServer();
+  await stopTestServer();
   process.exit(1);
 });
