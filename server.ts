@@ -123,7 +123,14 @@ export async function createApp(db: import('./src/server/db').Db, jobManager?: T
   app.use(gzipJsonResponses);
 
   app.get('/api/health/live', (_req, res) => res.json({ status: 'LIVE' }));
-  app.get('/api/health/ready', (_req, res) => res.json({ status: 'READY' }));
+  app.get('/api/health/ready', async (_req, res) => {
+    try {
+      await db.query('select 1');
+      return res.json({ status: 'READY' });
+    } catch {
+      return res.status(503).json({ status: 'NOT_READY' });
+    }
+  });
 
   const auth = createAuth({
     db,
