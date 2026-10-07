@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useTimetable } from '../../context/TimetableContext';
 import { useAuth } from '../../context/AuthContext';
 import type { DayOfWeek, TimeSlot } from '../../types';
@@ -24,7 +24,7 @@ const slotHours = (slot?: TimeSlot) => {
 const fmtHrs = (h: number) => `${Math.round(h * 10) / 10} hr${h === 1 ? '' : 's'}`;
 const MAX_TAKE_OVER_OPTIONS = 3;
 
-export function FacultyPortalView() {
+export function FacultyPortalView({ focus = 'dashboard' }: { focus?: 'dashboard' | 'availability' } = {}) {
   const { currentUser, roster } = useAuth();
   const {
     academicYear,
@@ -53,6 +53,14 @@ export function FacultyPortalView() {
   const canClaim = roleCode === 'FACULTY';
   const facultyId = isTeacher ? roster?.facultyId ?? '' : selectedFacultyId;
   const currentFaculty = facultyMembers.find(f => f.id === facultyId);
+
+  useEffect(() => {
+    if (focus !== 'availability') return;
+    const id = window.setTimeout(() => {
+      document.getElementById('faculty-availability')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, [focus]);
 
   const { workingDays, timeSlots, lunchPeriodId } = academicYear;
   const slotById = useMemo(() => new Map(timeSlots.map(t => [t.id, t])), [timeSlots]);
@@ -253,6 +261,10 @@ export function FacultyPortalView() {
             </div>
           ))}
         </div>
+      </div>
+
+      <div id="faculty-availability" className="scroll-mt-6">
+        {/* Availability controls are part of the faculty workspace. */}
       </div>
 
       {/* Main Grid: Class Schedule & Replacement Actions */}
