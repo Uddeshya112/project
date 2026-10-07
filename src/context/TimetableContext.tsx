@@ -179,13 +179,13 @@ interface TimetableContextType {
   // Validation & Generation Engine
   runValidation: () => ValidationReport;
   resetDemoAcademicData: () => void;
-  generateDraftTimetable: () => {
+  generateDraftTimetable: () => Promise<{
     isSuccess: boolean;
     sessionsGenerated: number;
     conflicts: string[];
     scheduledHours: number;
     totalHours: number;
-  };
+  }>;
   updatePublishStatus: (status: TimetablePublishStatus, reviewerName?: string) => Promise<{ success: boolean }>;
   bulkImportData: (type: 'faculty' | 'courses' | 'rooms' | 'sections' | 'allocations', records: any[]) => { successCount: number; errors: string[] };
   commitMasterImport: (
@@ -752,7 +752,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
   };
 
   // Timetable Generator Pipeline
-  const generateDraftTimetable = () => {
+  const generateDraftTimetable = async () => {
     const report = runValidation();
     if (!report.isReadyForGeneration) {
       return {
@@ -764,58 +764,31 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       };
     }
 
-    const result = generateTimetableFromConfiguration(
-      academicYear,
-      allocations,
-      facultyMembers,
-      rooms,
-      sections,
-      courses,
-      constraints
-    );
-
-    if (result.sessions.length > 0) {
-      setSessions(result.sessions);
-      setPublishStatus('Draft');
-
-      const newVersionNumber = versions.length + 1;
-      const newVersion: TimetableVersion = {
-        versionNumber: newVersionNumber,
-        versionLabel: `Draft V${newVersionNumber}.0`,
-        createdAt: new Date().toISOString(),
-        createdBy: 'Dr. K. N. Murthy (Coordinator)',
-        changeSummary: `Generated timetable from ${allocations.length} academic allocations across ${sections.length} sections.`,
-        reason: 'Automated Schedule Generation Run',
-        isPublished: false,
-        healthScore: 98,
-        sessions: result.sessions,
+    const data = await generateDualRoutinesAPI({ budgetMode: 'FAST', timeBudgetMs: 1000, maxCandidates: 1 });
+    const routine = data.routines?.[0];
+    if (!data.success || !routine) {
+      return {
+        isSuccess: false,
+        sessionsGenerated: 0,
+        conflicts: data.message ? [data.message] : ['Timetable generation failed on the server.'],
+        scheduledHours: 0,
+        totalHours: report.totalHours,
       };
-
-      setVersions(prev => [newVersion, ...prev]);
-
-      setAuditLogs(prev => [
-        {
-          id: `log-${Date.now()}`,
-          timestamp: new Date().toLocaleString(),
-          userId: 'coordinator',
-          userName: 'Timetable Coordinator',
-          action: 'TIMETABLE_GENERATED',
-          entityType: 'TimetableVersion',
-          entityId: `draft-v${newVersionNumber}`,
-          details: `Generated ${result.sessions.length} class periods (${result.scheduledHours} weekly hours) for ${sections.length} sections.`,
-        },
-        ...prev,
-      ]);
     }
 
+    const sessionsGenerated = routine.sessions.length;
+    const hardViolations = routine.validation?.hardViolations ?? 0;
+    const unscheduled = routine.validation?.unscheduled ?? 0;
+    const totalHours = report.totalHours;
     return {
-      isSuccess: result.sessions.length > 0,
-      sessionsGenerated: result.sessions.length,
-      conflicts: result.conflicts,
-      scheduledHours: result.scheduledHours,
-      totalHours: result.totalRequestedHours,
+      isSuccess: hardViolations === 0 && sessionsGenerated > 0,
+      sessionsGenerated,
+      conflicts: hardViolations === 0 ? [] : [`Generated timetable has ${hardViolations} hard constraint violation(s).`],
+      scheduledHours: Math.max(0, totalHours - unscheduled),
+      totalHours,
     };
   };
+
 
   // Publish Status Lifecycle
   const updatePublishStatus = async (status: TimetablePublishStatus, _reviewerName?: string): Promise<{ success: boolean }> => {
