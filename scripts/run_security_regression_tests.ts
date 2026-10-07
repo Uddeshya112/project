@@ -26,6 +26,8 @@ async function startTestServer(seedPassword: string) {
   const address = server.address() as AddressInfo;
   BASE_URL = `http://127.0.0.1:${address.port}`;
   process.env.SEED_USER_PASSWORD = seedPassword;
+  process.env.SAMPLE_ACCOUNTS_PASSWORD = seedPassword;
+  process.env.DEMO_ACCOUNTS_PASSWORD = 'ThaparDemo@2026Test!';
 }
 
 async function stopTestServer() {
