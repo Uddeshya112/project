@@ -3254,14 +3254,18 @@ async function setupApp() {
   }
 }
 
-if (!process.env.VERCEL) {
+const isDirectEntrypoint =
+  Boolean(process.argv[1]) &&
+  path.resolve(process.argv[1]) === __filename;
+
+if (!process.env.VERCEL && isDirectEntrypoint) {
   const effectivePort = Number(process.env.PORT) || 3000;
   console.log("[STARTUP] About to bind HTTP server", {
     port: effectivePort,
     host: "0.0.0.0"
   });
 
-  const server = app.listen(effectivePort, "0.0.0.0", () => {
+  app.listen(effectivePort, "0.0.0.0", () => {
     console.log("[STARTUP] HTTP SERVER LISTENING", {
       port: effectivePort,
       address: "0.0.0.0"
@@ -3269,10 +3273,8 @@ if (!process.env.VERCEL) {
   });
 
   setupApp().catch(err => console.error('[SETUP APP ERROR]:', err));
-} else {
-  if (process.env.NODE_ENV !== 'production') {
-    ensureSupabaseAuthUsers().catch(() => {});
-  }
+} else if (process.env.NODE_ENV !== 'production' && isDirectEntrypoint) {
+  ensureSupabaseAuthUsers().catch(() => {});
 }
 
 export default app;
