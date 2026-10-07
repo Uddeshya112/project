@@ -714,6 +714,10 @@ async function runFullPerformanceVerificationSuite() {
   labBlockDataset.allocations[1].hoursPerWeek = 2;
   labBlockDataset.allocations[1].durationPeriods = 2;
 
+  // This fixture is specifically for two explicit lab-block allocations; remove
+  // additional synthetic allocations that would inherit the course-level lab duration.
+  labBlockDataset.allocations = labBlockDataset.allocations.slice(0, 2);
+
   const labEngineRes = executeOptimizationEngine(
     labBlockDataset.academicYear,
     labBlockDataset.allocations,
