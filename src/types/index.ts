@@ -532,6 +532,7 @@ export interface GenerationRoutine {
   sessions: ClassSession[];
   validation: RoutineValidation;
   metrics: RoutineMetrics;
+  softPenalty?: Record<string, number>;
   healthScore: number;
 }
 
