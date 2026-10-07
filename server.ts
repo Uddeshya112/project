@@ -428,7 +428,7 @@ export async function createApp(db: import('./src/server/db').Db, jobManager?: T
     res.status(202).json({ success: true, jobId, status: 'PENDING', progress: 0 });
   }));
 
-  app.get('/api/timetable/jobs/:id', requireAuth, asyncRoute(async (req, res) => {
+  app.get('/api/timetable/jobs/:id', requireRole(STAFF_ROLES), asyncRoute(async (req, res) => {
     if (!jobManager) throw new HttpError(503, 'Background timetable jobs are not configured.');
     const job = await jobManager.getJob(String(req.params.id));
     if (!job) throw new HttpError(404, 'Generation job not found.');
