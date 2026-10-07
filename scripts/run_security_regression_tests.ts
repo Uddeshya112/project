@@ -2,6 +2,7 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
 process.env.NODE_ENV = 'test';
+process.env.INTELLISCHEDULE_NO_LISTEN = '1';
 process.env.DEMO_MODE = 'true';
 process.env.SEED_DEMO_DATA = 'true';
 process.env.BCRYPT_ROUNDS = '4';
