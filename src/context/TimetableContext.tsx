@@ -229,12 +229,12 @@ interface TimetableContextType {
     targetTimeSlotId: string,
     targetRoomId: string,
     reason?: string
-  ) => { success: boolean; error?: string };
+  ) => Promise<{ success: boolean; error?: string }>;
   swapSessionsWithValidation: (
     sessionAId: string,
     sessionBId: string,
     reason?: string
-  ) => { success: boolean; error?: string };
+  ) => Promise<{ success: boolean; error?: string }>;
   generateMultiCandidateTimetables: (options?: EngineOptions) => {
     isSuccess: boolean;
     candidates: GeneratedCandidate[];
