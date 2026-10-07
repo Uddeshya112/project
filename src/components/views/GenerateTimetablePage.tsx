@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useTimetable } from '../../context/TimetableContext';
 import { GeneratedCandidate } from '../../lib/optimizationEngine';
 import { IndependentValidationReport } from '../../lib/independentValidator';
@@ -392,7 +392,7 @@ export function GenerateTimetablePage() {
             {generationOutput.candidates.map((cand, idx) => {
               const valReport = generationOutput.validationReports[idx];
               const isSelected = selectedCandidateIdx === idx;
-              const routineName = idx === 0 ? 'Routine A — Student-Focused' : 'Routine B — Faculty/Resource-Focused';
+              const routineName = idx === 0 ? 'Routine A — Student-Focused' : idx === 1 ? 'Routine B — Faculty/Resource-Focused' : `Routine ${String.fromCharCode(65 + idx)} — Balanced`;
               const focusDesc = idx === 0
                 ? 'Optimizes student workload distribution, minimizes cohort gaps, balances daily class load.'
                 : 'Optimizes faculty teaching spreads, minimizes faculty gaps, maximizes room and laboratory utilization.';
@@ -422,7 +422,7 @@ export function GenerateTimetablePage() {
                         {focusDesc}
                       </p>
                       <span className="text-[11px] font-mono font-semibold text-stone-700 dark:text-zinc-300 block mt-1.5">
-                        {cand.scheduledHours} / 736 sessions scheduled
+                        {cand.scheduledHours} / {cand.totalRequestedHours} sessions scheduled
                       </span>
                     </div>
 
@@ -521,13 +521,13 @@ export function GenerateTimetablePage() {
             <div className="p-3.5 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl text-xs space-y-1.5 shadow-2xs font-mono">
               <div className="flex items-center justify-between font-serif font-bold text-stone-900 dark:text-zinc-100 font-sans border-b border-[#E5E2D9] dark:border-zinc-800 pb-1.5">
                 <span>Routine A vs Routine B Distinctness Audit</span>
-                <span className="text-emerald-700 dark:text-emerald-400 font-bold">60.87% Distinct</span>
+                <span className="text-emerald-700 dark:text-emerald-400 font-bold">{distinctnessAudit?.percent}% Distinct</span>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-0.5 text-stone-600 dark:text-zinc-400 text-[11px]">
-                <div>Total Sessions: <strong>736</strong></div>
-                <div>Identical Slots: <strong>288</strong></div>
-                <div>Different Slots: <strong>448</strong></div>
-                <div>Diversity Status: <strong className="text-emerald-700">Genuine Solver Spread</strong></div>
+                <div>Total Sessions: <strong>{distinctnessAudit?.total ?? 0}</strong></div>
+                <div>Identical Slots: <strong>{distinctnessAudit?.identical ?? 0}</strong></div>
+                <div>Different Slots: <strong>{distinctnessAudit?.different ?? 0}</strong></div>
+                <div>Diversity Status: <strong className="text-emerald-700">{(distinctnessAudit?.percent ?? 0) > 0 ? 'Genuine Solver Spread' : 'Identical / insufficient candidates'}</strong></div>
               </div>
             </div>
           )}
