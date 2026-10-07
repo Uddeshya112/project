@@ -315,7 +315,12 @@ async function runAdversarialSuite() {
   const facultyProfile = (bootstrapData.facultyMembers || []).find(
     (f: any) => String(f.email || '').toLowerCase() === 'a.sharma@thapar.edu'
   );
-  const sessionList = bootstrapData.sessions || bootstrapData.activeSessions || [];
+  const versionsRes = await fetch(`${BASE_URL}/api/timetable/versions`, {
+    headers: { Authorization: `Bearer ${facultyToken}` },
+  });
+  const versionsData = await versionsRes.json();
+  const versionList = versionsData.versions || [];
+  const sessionList = versionList.flatMap((v: any) => Array.isArray(v.sessions) ? v.sessions : []);
   const sessionToCancel = sessionList.find(
     (s: any) => s.status !== 'Cancelled' && facultyProfile && s.facultyId === facultyProfile.id
   )?.id;
