@@ -66,11 +66,79 @@ export function GenerateTimetablePage() {
   const activeSectionsCount = sections.filter(s => s.status !== 'Inactive').length;
   const totalSubgroupsCount = sections.reduce((acc, s) => acc + (s.subSections?.length || 0), 0);
 
-  // Automatically initialize generation output if routines exist
+  // Hydrate the review panel from the latest server-generated routines.
   useEffect(() => {
-    if (latestGeneratedRoutines && latestGeneratedRoutines.length > 0 && !generationOutput) {
+    if (!latestGeneratedRoutines || latestGeneratedRoutines.length === 0 || generationOutput) return;
+    setGenerationOutput({
+      candidates: latestGeneratedRoutines.map((r, i) => ({
+        candidateId: r.id,
+        versionNumber: r.versionNumber,
+        seed: 1337 + i * 8642,
+        sessions: r.sessions,
+        hardConstraintViolations: r.validation.hardViolations,
+        softPenalty: {
+          facultyGapsPenalty: r.softPenalty?.facultyGapsPenalty ?? r.metrics.facultyGaps,
+          facultyConsecutivePenalty: r.softPenalty?.facultyConsecutivePenalty ?? 0,
+          studentGapsPenalty: r.softPenalty?.studentGapsPenalty ?? r.metrics.studentGaps,
+          studentConsecutivePenalty: r.softPenalty?.studentConsecutivePenalty ?? 0,
+          studentWorkloadImbalancePenalty: r.softPenalty?.studentWorkloadImbalancePenalty ?? 0,
+          courseDistributionPenalty: r.softPenalty?.courseDistributionPenalty ?? 0,
+          buildingTravelPenalty: r.softPenalty?.buildingTravelPenalty ?? 0,
+          sameSlotEveryDayPenalty: r.softPenalty?.sameSlotEveryDayPenalty ?? 0,
+          roomCapacityFitPenalty: r.softPenalty?.roomCapacityFitPenalty ?? 0,
+          facultyPreferenceBonus: r.softPenalty?.facultyPreferenceBonus ?? 0,
+          totalPenalty: r.softPenalty?.totalPenalty ?? (100 - r.healthScore),
+        },
+        healthScore: r.healthScore,
+        scheduledHours: r.sessions.length,
+        totalRequestedHours: r.sessions.length + (r.validation.unscheduled || 0),
+        unscheduledAllocations: [],
+      })),
+      validationReports: latestGeneratedRoutines.map(r => {
+        const required = r.sessions.length + (r.validation.unscheduled || 0);
+        return {
+          isValid: r.validation.valid,
+          canPublish: r.validation.valid,
+          hardViolationsCount: r.validation.hardViolations,
+          warningCount: 0,
+          violations: [],
+          totalSessionsEvaluated: r.sessions.length,
+          requiredSessionsCount: required,
+          scheduledSessionsCount: r.sessions.length,
+          completionRate: required > 0 ? Math.round((r.sessions.length / required) * 10000) / 100 : 0,
+          metrics: {
+            facultyConflictFreeRate: r.validation.facultyConflicts === 0 ? 100 : Math.max(0, 100 - r.validation.facultyConflicts),
+            roomUtilizationRate: Math.round(r.metrics.roomUtilization),
+            labUtilizationRate: Math.round(r.metrics.labUtilization),
+            capacityComplianceRate: r.validation.capacityViolations === 0 ? 100 : Math.max(0, 100 - r.validation.capacityViolations),
+            subgroupParallelEfficiency: r.metrics.courseDistributionQualityRate ?? 100,
+            sameCourseSameDayCount: r.metrics.sameCourseSameDayCount ?? 0,
+            sameCourseConsecutiveCount: r.metrics.sameCourseConsecutiveCount ?? 0,
+            totalStudentGaps: r.metrics.studentGaps,
+            totalFacultyGaps: r.metrics.facultyGaps,
+            avgStudentDailyLoad: r.metrics.avgStudentDailyLoad ?? 0,
+            maxStudentDailyLoad: r.metrics.maxStudentDailyLoad ?? 0,
+            avgFacultyDailyLoad: r.metrics.avgFacultyDailyLoad ?? 0,
+            maxFacultyDailyLoad: r.metrics.maxFacultyDailyLoad ?? 0,
+            courseDistributionQualityRate: r.metrics.courseDistributionQualityRate ?? 0,
+          },
+          auditTimestamp: new Date().toISOString(),
+        };
+      }),
+    });
+  }, [latestGeneratedRoutines, generationOutput]);
+
+  const handleStartGeneration = async () => {
+    setIsGenerating(true);
+    setPublishFeedback(null);
+    try {
+      const res = await generateDualRoutinesAPI({ budgetMode, timeBudgetMs, maxCandidates: numCandidates });
+      if (!res.success || !res.routines?.length) {
+        setPublishFeedback({ success: false, message: res.error || res.message || 'Generation failed.' });
+        return;
+      }
       setGenerationOutput({
-        candidates: latestGeneratedRoutines.map((r, i) => ({
+        candidates: res.routines.map((r, i) => ({
           candidateId: r.id,
           versionNumber: r.versionNumber,
           seed: 1337 + i * 8642,
@@ -94,47 +162,41 @@ export function GenerateTimetablePage() {
           totalRequestedHours: r.sessions.length + (r.validation.unscheduled || 0),
           unscheduledAllocations: [],
         })),
-        validationReports: latestGeneratedRoutines.map(r => ({
-          isValid: r.validation.valid,
-          canPublish: r.validation.valid,
-          hardViolationsCount: r.validation.hardViolations,
-          warningCount: 0,
-          violations: [],
-          totalSessionsEvaluated: r.sessions.length,
-          requiredSessionsCount: r.sessions.length + (r.validation.unscheduled || 0),
-          scheduledSessionsCount: r.sessions.length,
-          completionRate: (r.sessions.length + (r.validation.unscheduled || 0)) > 0 ? Math.round((r.sessions.length / (r.sessions.length + (r.validation.unscheduled || 0))) * 10000) / 100 : 0,
-          metrics: {
-            facultyConflictFreeRate: r.validation.facultyConflicts === 0 ? 100 : Math.max(0, 100 - r.validation.facultyConflicts),
-            roomUtilizationRate: Math.round(r.metrics.roomUtilization),
-            labUtilizationRate: Math.round(r.metrics.labUtilization),
-            capacityComplianceRate: r.validation.capacityViolations === 0 ? 100 : Math.max(0, 100 - r.validation.capacityViolations),
-            subgroupParallelEfficiency: r.metrics.courseDistributionQualityRate ?? 100,
-            sameCourseSameDayCount: r.metrics.sameCourseSameDayCount ?? 0,
-            sameCourseConsecutiveCount: r.metrics.sameCourseConsecutiveCount ?? 0,
-            totalStudentGaps: r.metrics.studentGaps,
-            totalFacultyGaps: r.metrics.facultyGaps,
-            avgStudentDailyLoad: r.metrics.avgStudentDailyLoad ?? 0,
-            maxStudentDailyLoad: r.metrics.maxStudentDailyLoad ?? 0,
-            avgFacultyDailyLoad: r.metrics.avgFacultyDailyLoad ?? 0,
-            maxFacultyDailyLoad: r.metrics.maxFacultyDailyLoad ?? 0,
-            courseDistributionQualityRate: r.metrics.courseDistributionQualityRate ?? 0,
-          },
-          auditTimestamp: new Date().toISOString(),
-        })),
+        validationReports: res.routines.map(r => {
+          const required = r.sessions.length + (r.validation.unscheduled || 0);
+          return {
+            isValid: r.validation.valid,
+            canPublish: r.validation.valid,
+            hardViolationsCount: r.validation.hardViolations,
+            warningCount: 0,
+            violations: [],
+            totalSessionsEvaluated: r.sessions.length,
+            requiredSessionsCount: required,
+            scheduledSessionsCount: r.sessions.length,
+            completionRate: required > 0 ? Math.round((r.sessions.length / required) * 10000) / 100 : 0,
+            metrics: {
+              facultyConflictFreeRate: r.validation.facultyConflicts === 0 ? 100 : Math.max(0, 100 - r.validation.facultyConflicts),
+              roomUtilizationRate: Math.round(r.metrics.roomUtilization),
+              labUtilizationRate: Math.round(r.metrics.labUtilization),
+              capacityComplianceRate: r.validation.capacityViolations === 0 ? 100 : Math.max(0, 100 - r.validation.capacityViolations),
+              subgroupParallelEfficiency: r.metrics.courseDistributionQualityRate ?? 100,
+              sameCourseSameDayCount: r.metrics.sameCourseSameDayCount ?? 0,
+              sameCourseConsecutiveCount: r.metrics.sameCourseConsecutiveCount ?? 0,
+              totalStudentGaps: r.metrics.studentGaps,
+              totalFacultyGaps: r.metrics.facultyGaps,
+              avgStudentDailyLoad: r.metrics.avgStudentDailyLoad ?? 0,
+              maxStudentDailyLoad: r.metrics.maxStudentDailyLoad ?? 0,
+              avgFacultyDailyLoad: r.metrics.avgFacultyDailyLoad ?? 0,
+              maxFacultyDailyLoad: r.metrics.maxFacultyDailyLoad ?? 0,
+              courseDistributionQualityRate: r.metrics.courseDistributionQualityRate ?? 0,
+            },
+            auditTimestamp: new Date().toISOString(),
+          };
+        }),
       });
-
-      } else {
-        setPublishFeedback({
-          success: false,
-          message: res.error || res.message || 'Generation failed.',
-        });
-      }
+      setSelectedCandidateIdx(0);
     } catch (err: any) {
-      setPublishFeedback({
-        success: false,
-        message: err.message || 'Generation error.',
-      });
+      setPublishFeedback({ success: false, message: err?.message || 'Generation error.' });
     } finally {
       setIsGenerating(false);
     }
@@ -147,14 +209,16 @@ export function GenerateTimetablePage() {
     if (Number.isInteger(candidate.versionNumber)) {
       const result = await selectRoutineAPI(candidate.versionNumber!);
       if (!result.success) {
-        setPublishFeedback({
-          success: false,
-          message: result.message || 'The server rejected the selected timetable routine.',
-        });
+        setPublishFeedback({ success: false, message: result.message || 'The server rejected the selected timetable routine.' });
+      } else {
+        await setTimeout(() => {}, 0);
       }
       return;
     }
-    applyCandidateAsDraft(candidate);
+    const result = await applyCandidateAsDraft(candidate);
+    if (!result.success) {
+      setPublishFeedback({ success: false, message: result.message || 'The server rejected the selected timetable candidate.' });
+    }
   };
 
   const distinctnessAudit = useMemo(() => {
