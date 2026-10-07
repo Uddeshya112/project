@@ -1770,28 +1770,31 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const triggerAutoMatchAll = () => {
-    let matched = 0;
-    recoveryOpportunities.forEach(opp => {
-      if (opp.matchScore >= 90 && opp.status === 'Proposed') {
-        scheduleMakeup(opp.id);
-        matched++;
-      }
-    });
-    if (matched > 0) {
-      setNotifications(prev => [
-        {
-          id: `notif-${Date.now()}`,
-          type: 'makeup_request',
-          title: 'Automated Recovery Batch Complete',
-          message: `Self-healing solver matched and scheduled ${matched} makeup slot(s) with zero constraint conflicts.`,
-          timestamp: 'Just now',
-          read: false,
-          category: 'Success',
-        },
-        ...prev,
-      ]);
+  const requestStudentMakeup = async (courseId: string, sectionId: string): Promise<{ success: boolean }> => {
+    try {
+      const res = await fetch(apiUrl('/api/recovery/request-makeup'), {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ message: `Student makeup request for ${courseId} / ${sectionId}` }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) return { success: false };
+      await syncBootstrapData();
+      return { success: true };
+    } catch {
+      return { success: false };
     }
+  };
+
+  const triggerAutoMatchAll = async () => {
+    let matched = 0;
+    for (const opp of recoveryOpportunities) {
+      if (opp.matchScore < 90 || opp.status !== 'Proposed') continue;
+      const result = await scheduleMakeup(opp.id);
+      if (result.success) matched += 1;
+    }
+    return { success: matched > 0 };
   };
 
   const declineOpportunity = async (opportunityId: string): Promise<{ success: boolean }> => {
