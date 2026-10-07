@@ -1625,6 +1625,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         toggleSessionLock,
         setFacultyProtectedSlot,
         restoreVersion,
+        runWhatIfSimulation,
         applySimulation,
         markNotificationRead,
         triggerAutoMatchAll,
