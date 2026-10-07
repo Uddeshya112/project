@@ -1090,10 +1090,8 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
 
       const data = await res.json();
       if (data.success && data.routines && data.routines.length > 0) {
-        setSessions(data.routines[0].sessions);
-        setPublishStatus('Draft');
         setLatestGeneratedRoutines(data.routines);
-        if (Number.isInteger(data.routines[0].versionNumber)) setActiveVersionNumber(data.routines[0].versionNumber);
+        await syncBootstrapData();
       }
       return data;
     } catch (err: any) {
@@ -1145,9 +1143,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       });
       const data = await res.json();
       if (data.success && data.version?.sessions) {
-        setSessions(data.version.sessions);
-        setPublishStatus('Draft');
-        if (Number.isInteger(data.version.versionNumber)) setActiveVersionNumber(data.version.versionNumber);
+        await syncBootstrapData();
       }
       return data;
     } catch (err: any) {
@@ -1247,20 +1243,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         return { success: false, error: data.message || 'The server rejected publication.' };
       }
 
-      setPublishStatus('Published');
-      setAcademicYear(prev => ({
-        ...prev,
-        publishStatus: 'Published',
-        approvedBy: reviewerName,
-        approvedAt: prev.approvedAt ?? new Date().toISOString(),
-        publishedAt: new Date().toISOString(),
-      }));
-      setVersions(prev =>
-        prev.map(v => (activeVersion && v.versionNumber === activeVersion.versionNumber)
-          ? { ...v, isPublished: true, versionLabel: `Published Master V${v.versionNumber}.0` }
-          : { ...v, isPublished: false })
-      );
-      setSessions(prev => [...prev]);
+      await syncBootstrapData();
       return { success: true };
     } catch {
       return { success: false, error: 'Network error publishing timetable.' };
@@ -1763,18 +1746,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.success || !data.version) return;
-      setSessions(data.version.sessions || []);
-      setActiveVersionNumber(data.version.versionNumber);
-      setAuditLogs(prev => [{
-        id: `log-${Date.now()}`,
-        timestamp: new Date().toLocaleString(),
-        userId: 'coordinator',
-        userName: 'Timetable Coordinator',
-        action: 'VERSION_RESTORED',
-        entityType: 'TimetableVersion',
-        entityId: `v-${versionNumber}`,
-        details: `Restored timetable matrix to ${data.version.versionLabel}.`,
-      }, ...prev]);
+      await syncBootstrapData();
     } catch {}
   };
 
