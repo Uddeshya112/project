@@ -572,6 +572,10 @@ export function createAuth(opts: AuthOptions) {
     `${opts.appUrl?.replace(/\/+$/, '') || `${req.protocol}://${req.get('host')}`}/api/auth/google/callback`;
   const appHome = (req: Request) => opts.appUrl?.replace(/\/+$/, '') || `${req.protocol}://${req.get('host')}`;
 
+  router.get('/api/auth/google/status', (_req, res) => {
+    res.json({ configured: googleEnabled, allowedDomains: opts.allowedDomains });
+  });
+
   router.get('/api/auth/google/start', async (req, res) => {
     if (!googleEnabled) return res.redirect(`${appHome(req)}/?auth_error=${encodeURIComponent('Google sign-in is not configured.')}`);
     const wait = await persistentRateLimit(`oauth:${req.ip}`, IP_LIMIT_PER_MIN, 60_000);
