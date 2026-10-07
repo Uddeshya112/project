@@ -310,6 +310,12 @@ export function compileSchedulingProblem(
     // Determine session duration (1 for Lecture/Tutorial, 2 or 3 for Lab blocks)
     const durationPeriods = alloc.durationPeriods || (alloc.sessionType === 'Lab' || alloc.sessionType === 'Practical' ? (course.requiredLabsPerWeek === 3 ? 3 : 2) : 1);
 
+    if (durationPeriods > 1 && alloc.hoursPerWeek % durationPeriods !== 0) {
+      infeasibilityReasons.push(
+        `Course ${course.code} allocation ${alloc.id}: ${alloc.hoursPerWeek} weekly hour(s) cannot be represented as whole ${durationPeriods}-period lab blocks.`,
+      );
+    }
+
     // Compute contiguous multi-period blocks for Lab/Practical/Multi-period allocations
     const feasibleBlocks: number[][] = [];
     const feasibleLabBlocks: [number, number][] = [];
@@ -681,7 +687,7 @@ export function executeOptimizationEngine(
     const isMultiPeriod =
       currentAlloc.durationPeriods > 1 &&
       hoursNeeded >= currentAlloc.durationPeriods &&
-      Boolean(currentAlloc.feasibleBlocks && currentAlloc.feasibleBlocks.length > 0);
+      hoursNeeded % currentAlloc.durationPeriods === 0;
 
     if (isMultiPeriod) {
       // Branch 1: Atomic Multi-Period Block Scheduling (2 or 3 hours)
