@@ -191,7 +191,7 @@ interface TimetableContextType {
   commitMasterImport: (
     parsedData: ExcelImportPreview['parsedData'],
     mode?: 'upsert' | 'replace'
-  ) => { success: boolean; importedCount: number; message: string };
+  ) => Promise<{ success: boolean; importedCount: number; message: string }>;
   bulkGenerateGroups: (params: {
     programName: string;
     batchYear: number;
@@ -211,7 +211,7 @@ interface TimetableContextType {
   setFacultyProtectedSlot: (facultyId: string, day: DayOfWeek, periodId: string, reason: 'Research' | 'Lunch' | 'Personal' | 'Department' | 'Meeting') => Promise<{ success: boolean }>;
   restoreVersion: (versionNumber: number) => void;
   applySimulation: () => void;
-  markNotificationRead: (id: string) => void;
+  markNotificationRead: (id: string) => Promise<{ success: boolean }>;
   triggerAutoMatchAll: () => void;
   requestStudentMakeup: (courseId: string, sectionId: string) => Promise<{ success: boolean }>;
   declineOpportunity: (opportunityId: string) => Promise<{ success: boolean }>;
@@ -328,6 +328,38 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
   const getAuthHeadersAsync = async (): Promise<Record<string, string>> => ({
     'Content-Type': 'application/json',
   });
+
+  const syncBootstrapData = async () => {
+    const res = await fetch(apiUrl('/api/academic/bootstrap'), {
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.success === false) {
+      throw new Error(data.message || 'Could not refresh timetable data from the server.');
+    }
+    if (data.academicYear) setAcademicYear(data.academicYear);
+    if (Array.isArray(data.departments)) setDepartments(data.departments);
+    if (Array.isArray(data.programs)) setPrograms(data.programs);
+    if (Array.isArray(data.courses)) setCourses(data.courses);
+    if (Array.isArray(data.facultyMembers)) setFacultyMembers(data.facultyMembers);
+    if (Array.isArray(data.rooms)) setRooms(data.rooms);
+    if (Array.isArray(data.sections)) setSections(data.sections);
+    if (Array.isArray(data.allocations)) setAllocations(data.allocations);
+    if (Array.isArray(data.constraints)) setConstraints(data.constraints);
+    if (Array.isArray(data.sessions)) setSessions(data.sessions);
+    if (Array.isArray(data.versions)) setVersions(data.versions);
+    if (Number.isInteger(data.activeVersionNumber)) setActiveVersionNumber(data.activeVersionNumber);
+    if (Array.isArray(data.notifications)) setNotifications(data.notifications);
+    if (Array.isArray(data.makeupTasks)) setMakeupTasks(data.makeupTasks);
+    if (Array.isArray(data.recoveryOpportunities)) setRecoveryOpportunities(data.recoveryOpportunities);
+    if (Array.isArray(data.polls)) setPolls(data.polls);
+    if (Array.isArray(data.publishedSessions)) setPublishedSessions(data.publishedSessions);
+    if (Array.isArray(data.auditLogs)) setAuditLogs(data.auditLogs);
+    if (data.publishStatus) setPublishStatus(data.publishStatus);
+    if (typeof data.studentsCount === 'number') setStudentsCountFromServer(data.studentsCount);
+    return data;
+  };
 
   const [studentsCountFromServer, setStudentsCountFromServer] = useState<number | undefined>(undefined);
 
@@ -1943,166 +1975,54 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
 
   // Cancel Session & Trigger Self-Healing Pipeline
   const cancelSession = async (sessionId: string, reason: string): Promise<{ success: boolean }> => {
-    const targetSession = sessions.find(s => s.id === sessionId);
-    if (!targetSession) return { success: false };
-
-    setSessions(prev =>
-      prev.map(s =>
-        s.id === sessionId
-          ? {
-              ...s,
-              status: 'Cancelled',
-              cancellationReason: reason,
-              cancellationTimestamp: new Date().toISOString(),
-            }
-          : s
-      )
-    );
-
-    const newTaskId = `makeup-${Date.now()}`;
-    const newMakeupTask: MakeupTask = {
-      id: newTaskId,
-      cancelledSessionId: sessionId,
-      courseId: targetSession.courseId,
-      sectionId: targetSession.sectionId,
-      facultyId: targetSession.facultyId,
-      cancelledDay: targetSession.day,
-      cancelledTimeSlot: targetSession.timeSlotId,
-      priorityScore: 95,
-      status: 'ProposalsGenerated',
-      createdAt: new Date().toISOString(),
-    };
-
-    setMakeupTasks(prev => [newMakeupTask, ...prev]);
-
-    const discoveredOpps = findSelfHealingRecoverySlots(
-      newMakeupTask,
-      sessions,
-      rooms,
-      facultyMembers,
-      sections,
-      courses
-    );
-
-    if (discoveredOpps.length > 0) {
-      setRecoveryOpportunities(prev => [...discoveredOpps, ...prev]);
+    try {
+      const res = await fetch(apiUrl('/api/recovery/cancel-class'), {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ sessionId, reason }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) return { success: false };
+      await syncBootstrapData();
+      return { success: true };
+    } catch {
+      return { success: false };
     }
-
-    setNotifications(prev => [
-      {
-        id: `notif-${Date.now()}`,
-        type: 'cancellation',
-        title: `Class Disruption: ${targetSession.courseId}`,
-        message: `${targetSession.day} session was cancelled. Reason: ${reason}. Self-healing engine generated replacement slot proposals.`,
-        timestamp: 'Just now',
-        read: false,
-        category: 'Critical',
-        actionable: true,
-      },
-      ...prev,
-    ]);
-
-    setAuditLogs(prev => [
-      {
-        id: `log-${Date.now()}`,
-        timestamp: new Date().toLocaleString(),
-        userId: 'faculty-member',
-        userName: 'Faculty Instructor',
-        action: 'CLASS_CANCELLED',
-        entityType: 'ClassSession',
-        entityId: sessionId,
-        details: `Cancelled ${targetSession.courseId} (${targetSession.day} ${targetSession.timeSlotId}). Reason: ${reason}.`,
-      },
-      ...prev,
-    ]);
-
-    fetch('/api/recovery/cancel-class', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify({ sessionId, reason }),
-    }).catch(err => console.warn('[SUPABASE_API] Cancel session persistence notice:', err));
-
-    return { success: true };
   };
 
   const scheduleMakeup = async (opportunityId: string): Promise<{ success: boolean }> => {
-    const opp = recoveryOpportunities.find(o => o.id === opportunityId);
-    if (!opp) return { success: false };
-
-    const makeupTask = makeupTasks.find(t => t.id === opp.makeupTaskId);
-    if (!makeupTask) return { success: false };
-
-    const newSessionId = `makeup-sess-${Date.now().toString().slice(-4)}`;
-    const newSession: ClassSession = {
-      id: newSessionId,
-      courseId: makeupTask.courseId,
-      facultyId: opp.facultyId,
-      sectionId: makeupTask.sectionId,
-      roomId: opp.roomId,
-      day: opp.targetDay,
-      timeSlotId: opp.timeSlotId,
-      type: 'Makeup',
-      status: 'Confirmed',
-      originalSessionId: makeupTask.cancelledSessionId,
-      version: 1,
-    };
-
-    setSessions(prev => [...prev, newSession]);
-
-    setMakeupTasks(prev =>
-      prev.map(t => (t.id === makeupTask.id ? { ...t, status: 'Scheduled' } : t))
-    );
-
-    setRecoveryOpportunities(prev =>
-      prev.map(o => (o.id === opportunityId ? { ...o, status: 'Approved' } : o))
-    );
-
-    const roomObj = rooms.find(r => r.id === opp.roomId);
-    setNotifications(prev => [
-      {
-        id: `notif-${Date.now()}`,
-        type: 'makeup_request',
-        title: `Makeup Scheduled: ${makeupTask.courseId}`,
-        message: `Recovery class locked for ${opp.targetDay} in ${roomObj?.name || opp.roomId}. Students and Faculty notified.`,
-        timestamp: 'Just now',
-        read: false,
-        category: 'Success',
-      },
-      ...prev,
-    ]);
-
-    fetch('/api/recovery/schedule-makeup', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify({ opportunityId }),
-    }).catch(err => console.warn('[SUPABASE_API] Schedule makeup persistence notice:', err));
-
-    return { success: true };
+    try {
+      const res = await fetch(apiUrl('/api/recovery/schedule-makeup'), {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ opportunityId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) return { success: false };
+      await syncBootstrapData();
+      return { success: true };
+    } catch {
+      return { success: false };
+    }
   };
 
   const votePoll = async (pollId: string, optionId: string): Promise<{ success: boolean }> => {
-    setPolls(prev =>
-      prev.map(p => {
-        if (p.id !== pollId) return p;
-        return {
-          ...p,
-          votedStudentsCount: p.votedStudentsCount + 1,
-          userHasVoted: true,
-          userVotedOptionId: optionId,
-          options: p.options.map(opt =>
-            opt.id === optionId ? { ...opt, votes: opt.votes + 1 } : opt
-          ),
-        };
-      })
-    );
-
-    fetch('/api/voting/vote', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify({ pollId, optionId }),
-    }).catch(err => console.warn('[SUPABASE_API] Vote persistence notice:', err));
-
-    return { success: true };
+    try {
+      const res = await fetch(apiUrl('/api/voting/vote'), {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ pollId, optionId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) return { success: false };
+      await syncBootstrapData();
+      return { success: true };
+    } catch {
+      return { success: false };
+    }
   };
 
   const toggleSessionLock = async (sessionId: string, reason = 'Administrative Lock'): Promise<void> => {
@@ -2183,8 +2103,20 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     ]);
   };
 
-  const markNotificationRead = (id: string) => {
-    setNotifications(prev => prev.map(n => (n.id === id ? { ...n, read: true } : n)));
+  const markNotificationRead = async (id: string): Promise<{ success: boolean }> => {
+    try {
+      const res = await fetch(apiUrl(`/api/notifications/${encodeURIComponent(id)}/read`), {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        credentials: 'include',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) return { success: false };
+      setNotifications(prev => prev.map(n => (n.id === id ? { ...n, read: true } : n)));
+      return { success: true };
+    } catch {
+      return { success: false };
+    }
   };
 
   const triggerAutoMatchAll = () => {
@@ -2212,10 +2144,20 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
   };
 
   const declineOpportunity = async (opportunityId: string): Promise<{ success: boolean }> => {
-    setRecoveryOpportunities(prev =>
-      prev.map(o => (o.id === opportunityId ? { ...o, status: 'Rejected' } : o))
-    );
-    return { success: true };
+    try {
+      const res = await fetch(apiUrl('/api/recovery/decline-opportunity'), {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ opportunityId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) return { success: false };
+      await syncBootstrapData();
+      return { success: true };
+    } catch {
+      return { success: false };
+    }
   };
 
   const claimMarketplaceSlot = async (
@@ -2224,23 +2166,19 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     day: DayOfWeek,
     timeSlotId: string,
     roomId: string,
-    type: string
+    type: string,
   ): Promise<{ success: boolean }> => {
-    const newSessionId = `claim-sess-${Date.now().toString().slice(-4)}`;
-    const newSession: ClassSession = {
-      id: newSessionId,
+    const result = await addSession({
       courseId,
       facultyId: selectedFacultyId,
       sectionId,
       roomId,
       day,
       timeSlotId,
-      type: type as any || 'Lecture',
+      type: (type || 'Lecture') as ClassSession['type'],
       status: 'Confirmed',
-      version: 1,
-    };
-    setSessions(prev => [...prev, newSession]);
-    return { success: true };
+    });
+    return { success: result.isSuccess };
   };
 
   const requestSubstituteCover = async (
@@ -2248,36 +2186,23 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     courseId: string,
     sectionId: string,
     day: DayOfWeek,
-    timeSlotId: string
+    timeSlotId: string,
   ): Promise<{ success: boolean }> => {
     const substitute = facultyMembers.find(f => f.id === substituteFacultyId);
     const course = courses.find(c => c.id === courseId);
-    setNotifications(prev => [
-      {
-        id: `notif-${Date.now()}`,
-        type: 'makeup_request',
-        title: `Substitute Cover Requested (${course?.code || courseId})`,
-        message: `Requested ${substitute?.name || 'Faculty Member'} to cover ${day} slot for ${sectionId}.`,
-        timestamp: 'Just now',
-        read: false,
-        category: 'Info',
-      },
-      ...prev,
-    ]);
-    return { success: true };
-  };
-
-  const requestStudentMakeup = async (courseId: string, sectionId: string): Promise<{ success: boolean }> => {
-    const message = `Student makeup request for ${courseId} / ${sectionId}`;
     try {
-      const res = await fetch(apiUrl('/api/recovery/request-makeup'), {
+      const res = await fetch(apiUrl('/api/recovery/request-substitute'), {
         method: 'POST',
         headers: getAuthHeaders(),
         credentials: 'include',
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({
+          message: `Requested ${substitute?.name || 'Faculty Member'} to cover ${course?.code || courseId} for ${sectionId} on ${day} ${timeSlotId}.`,
+        }),
       });
       const data = await res.json().catch(() => ({}));
-      return { success: Boolean(res.ok && data.success) };
+      if (!res.ok || !data.success) return { success: false };
+      await syncBootstrapData();
+      return { success: true };
     } catch {
       return { success: false };
     }
@@ -2293,7 +2218,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.success || !data.session) return { isSuccess: false, error: data.message || 'Could not add session.' };
-      setSessions(prev => [...prev, data.session]);
+      await syncBootstrapData();
       return { isSuccess: true };
     } catch {
       return { isSuccess: false, error: 'Network error adding session.' };
@@ -2402,7 +2327,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         compareTimetableVersions,
         activeVersionNumber,
         publishedSessions,
-        refresh: async () => window.location.reload(),
+        refresh: syncBootstrapData,
         isLoading: false,
         loadError: null,
         notice: null,
