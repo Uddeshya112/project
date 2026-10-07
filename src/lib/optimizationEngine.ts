@@ -684,7 +684,11 @@ export function executeOptimizationEngine(
     const secIdx = currentAlloc.sectionIdx;
     const isSubgroupAlloc = currentAlloc.subSectionIdx !== undefined;
 
-    const requiresAtomicBlock = currentAlloc.allocation.durationPeriods !== undefined;
+    const requiresAtomicBlock =
+      currentAlloc.allocation.durationPeriods !== undefined ||
+      (((currentAlloc.sessionType === 'Lab' || currentAlloc.sessionType === 'Practical')) &&
+        currentAlloc.durationPeriods > 1 &&
+        currentAlloc.requiredHours % currentAlloc.durationPeriods === 0);
     const isMultiPeriod =
       requiresAtomicBlock &&
       currentAlloc.durationPeriods > 1 &&
