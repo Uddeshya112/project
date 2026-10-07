@@ -289,7 +289,11 @@ export function DashboardLayout({
           <>
           {currentWorkspace === 'Student' && <StudentPortalView />}
           {currentWorkspace === 'CR' && <CRPortalView />}
-          {currentWorkspace === 'Faculty' && <FacultyPortalView />}
+          {currentWorkspace === 'Faculty' && (
+            activeView === 'grid'
+              ? <TimetableGridView />
+              : <FacultyPortalView focus={activeView === 'availability' ? 'availability' : 'dashboard'} />
+          )}
           {currentWorkspace === 'Admin' && <AdminPortalView />}
 
           {currentWorkspace === 'Coordinator' && (
