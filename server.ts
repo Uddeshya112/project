@@ -502,7 +502,19 @@ export async function createApp(db: import('./src/server/db').Db, jobManager?: T
     await store.persist();
     res.json({ success: true, academicYear: value });
   }));
-  app.post('/api/timetables/publish', requireRole(['COLLEGE_ADMIN']), asyncRoute(async (req, res) => {
+
+
+  app.post('/api/timetable/unpublish', requireRole(['COLLEGE_ADMIN']), asyncRoute(async (req, res) => {
+    const value = store.unpublish(req.user!.name);
+    await store.persist();
+    res.json({ success: true, academicYear: value });
+  }));
+
+  app.post('/api/timetable/apply-candidate', schedulingWrite, asyncRoute(async (req, res) => {
+    const version = store.applyCandidate(req.body, req.user!.name);
+    await store.persist();
+    res.json({ success: true, version });
+  }));  app.post('/api/timetables/publish', requireRole(['COLLEGE_ADMIN']), asyncRoute(async (req, res) => {
     const versionNumber = parseVersionId(req.body?.versionId);
     if (versionNumber !== undefined) store.selectVersion(versionNumber, req.user!.name);
     const value = store.publish(req.user!.name);
@@ -556,6 +568,17 @@ export async function createApp(db: import('./src/server/db').Db, jobManager?: T
     });
   });
 
+
+  app.post('/api/whatif/simulate', requireRole(['COORDINATOR', 'COLLEGE_ADMIN', 'HOD']), asyncRoute(async (req, res) => {
+    const result = store.simulateWhatIf(req.body, req.user!.name);
+    res.json(result);
+  }));
+
+  app.post('/api/whatif/apply', requireRole(['COORDINATOR', 'COLLEGE_ADMIN', 'HOD']), asyncRoute(async (req, res) => {
+    const result = store.simulateWhatIf({ ...(req.body ?? {}), apply: true }, req.user!.name);
+    await store.persist();
+    res.json(result);
+  }));
   app.post('/api/recovery/cancel-class', requireRole(['FACULTY', 'COORDINATOR', 'COLLEGE_ADMIN', 'HOD']), asyncRoute(async (req, res) => {
     const value = store.cancelClass(req.body, toViewer(req));
     await store.persist();
