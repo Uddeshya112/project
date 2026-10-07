@@ -303,7 +303,9 @@ export class TimetableStore {
       ? (activeVersion?.sessions ?? this.activeSessions)
       : this.publishedSessions;
     const visibleSessions = viewer.roleCode === 'STUDENT' || viewer.roleCode === 'CLASS_REPRESENTATIVE'
-      ? allSessions.filter((s) => !roster.sectionId || s.sectionId === roster.sectionId)
+      ? roster.sectionId
+        ? allSessions.filter((s) => s.sectionId === roster.sectionId)
+        : []
       : viewer.roleCode === 'FACULTY' && roster.facultyId
         ? allSessions.filter((s) => s.facultyId === roster.facultyId)
         : allSessions;
@@ -335,7 +337,9 @@ export class TimetableStore {
       sections,
       allocations: staff
         ? [...this.allocations.values()]
-        : [...this.allocations.values()].filter((a) => !roster.sectionId || a.sectionId === roster.sectionId),
+        : roster.sectionId
+          ? [...this.allocations.values()].filter((a) => a.sectionId === roster.sectionId)
+          : [],
       constraints: staff ? [...this.constraints.values()] : [],
       studentsCount: staff ? this.students.size : undefined,
       sessions: visibleSessions,
@@ -361,7 +365,7 @@ export class TimetableStore {
         ? this.recoveryOpportunities
         : [],
       polls: this.polls
-        .filter((p) => staff || !roster.sectionId || p.sectionId === roster.sectionId)
+        .filter((p) => staff || (roster.sectionId ? p.sectionId === roster.sectionId : false))
         .map((p) => {
           const voted = this.votes.get(`${p.id}:${viewer.id}`);
           return { ...p, userHasVoted: Boolean(voted), userVotedOptionId: voted };
