@@ -19,31 +19,36 @@ export function WhatIfSimulatorView() {
   const [simulationRunning, setSimulationRunning] = useState<boolean>(false);
   const [hasApplied, setHasApplied] = useState<boolean>(false);
 
+  const labTarget = rooms.find(r => r.type === 'ComputerLab' || r.type === 'HardwareLab');
+  const lectureTarget = rooms.find(r => r.type === 'LectureHall' || r.type === 'SeminarRoom');
   const scenarios = [
     {
       id: 'lab301-closure',
-      title: 'Lab 301 Emergency Hardware Maintenance (3 Days)',
-      description: 'Main CS computer lab undergoes urgent GPU rack thermal servicing. 14 laboratory and lecture sessions must be rerouted.',
-      target: 'Lab 301',
+      title: (labTarget?.name || 'Computer Lab') + ' Emergency Maintenance',
+      description: 'The selected computer laboratory is temporarily unavailable. The solver reassigns affected classes while preserving hard constraints.',
+      target: labTarget?.name || 'Computer Lab',
     },
     {
       id: 'faculty-leave',
-      title: 'Prof. Arvind Sharma Medical Leave (1 Week)',
-      description: 'Primary DBMS instructor unavailable for 5 working days. System evaluates automated substitute assignments without violating UGC caps.',
-      target: 'Prof. Arvind Sharma',
+      title: 'Prof. Arvind Sharma Medical Leave',
+      description: 'The selected faculty member is unavailable. Qualified substitute faculty are evaluated against real workload and timetable availability.',
+      target: facultyMembers.find(f => f.name.toLowerCase().includes('arvind sharma'))?.name || 'Target Faculty',
     },
     {
       id: 'exam-block',
-      title: 'Auditorium 101 Reserved for GATE Mock Exams',
-      description: 'High-capacity lecture hall blocked on Wednesday & Thursday. Impact on large combined lectures evaluated.',
-      target: 'Auditorium 101',
+      title: (lectureTarget?.name || 'Lecture Hall') + ' Reserved',
+      description: 'The selected lecture room is temporarily unavailable. The solver reassigns affected sessions while preserving capacity, equipment, faculty and cohort constraints.',
+      target: lectureTarget?.name || 'Lecture Hall',
     },
   ];
 
   const handleRunSimulation = async () => {
     setSimulationRunning(true);
-    await runWhatIfSimulation(activeScenario, scenarios.find(s => s.id === activeScenario)?.title);
-    setSimulationRunning(false);
+    try {
+      await runWhatIfSimulation(activeScenario, scenarios.find(s => s.id === activeScenario)?.title);
+    } finally {
+      setSimulationRunning(false);
+    }
   };
 
   const handleApply = async () => {
@@ -133,7 +138,7 @@ export function WhatIfSimulatorView() {
               {hasApplied ? (
                 <>
                   <CheckCircle2 className="h-3.5 w-3.5" />
-                  <span>Applied to Master V2.0</span>
+                  <span>Applied to Working Draft</span>
                 </>
               ) : (
                 <>
@@ -152,7 +157,7 @@ export function WhatIfSimulatorView() {
             <span className="text-2xl font-bold font-mono text-stone-900 dark:text-zinc-100 tabular-nums">
               {whatIfSimulation.impact.affectedClassesCount}
             </span>
-            <span className="text-[10px] text-stone-400 dark:text-zinc-500 block mt-1">Out of 120 total</span>
+            <span className="text-[10px] text-stone-400 dark:text-zinc-500 block mt-1">Out of {sessions.length} visible timetable sessions</span>
           </div>
 
           <div className="p-3.5 bg-white dark:bg-zinc-950/60 rounded-xl border border-[#E5E2D9] dark:border-zinc-800 shadow-xs">
