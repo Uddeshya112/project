@@ -68,6 +68,12 @@ async function main() {
   console.log('✓ Registration creates a student account without auto-login');
 
   const registeredStudent = await loginCookie(email, 'Strong!Password2026');
+  const registeredBootstrap = await fetch(`${BASE_URL}/api/academic/bootstrap`, { headers: headers(registeredStudent) });
+  const registeredData = await registeredBootstrap.json().catch(() => ({}));
+  if (registeredBootstrap.status !== 200 || (registeredData.sessions?.length ?? 0) !== 0 || (registeredData.allocations?.length ?? 0) !== 0 || (registeredData.polls?.length ?? 0) !== 0) {
+    throw new Error('Unassigned registered students must not receive academic timetable data.');
+  }
+  console.log('✓ Unassigned registered students receive no academic timetable scope');
   await expectStatus('Registered student publish', await fetch(`${BASE_URL}/api/timetable/publish`, { method: 'POST', headers: { ...headers(registeredStudent), 'Content-Type': 'application/json' }, body: JSON.stringify({ versionId: 1 }) }), 403);
 
   const gmail = await fetch(`${BASE_URL}/api/auth/register`, {
