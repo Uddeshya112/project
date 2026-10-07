@@ -1631,349 +1631,40 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
   };
 
   // Transactional Master Excel Import
-  const commitMasterImport = (
+  const commitMasterImport = async (
     parsedData: ExcelImportPreview['parsedData'],
-    mode: 'upsert' | 'replace' = 'upsert'
-  ): { success: boolean; importedCount: number; message: string } => {
-    let totalImported = 0;
-
-    // 1. Departments
-    const deptCodeMap = new Map<string, string>();
-    departments.forEach(d => deptCodeMap.set(d.code.toUpperCase(), d.id));
-
-    if (parsedData.departments.length > 0) {
-      setDepartments(prev => {
-        const next = [...prev];
-        parsedData.departments.forEach(deptIn => {
-          const codeUpper = deptIn.code.toUpperCase();
-          const existingIdx = next.findIndex(d => d.code.toUpperCase() === codeUpper);
-          if (existingIdx >= 0) {
-            next[existingIdx] = { ...next[existingIdx], ...deptIn };
-            deptCodeMap.set(codeUpper, next[existingIdx].id);
-          } else {
-            const newId = `dept-${deptIn.code.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
-            const newDept: Department = { ...deptIn, id: newId };
-            next.push(newDept);
-            deptCodeMap.set(codeUpper, newId);
-          }
-          totalImported++;
-        });
-        return next;
+    mode: 'upsert' | 'replace' = 'upsert',
+  ): Promise<{ success: boolean; importedCount: number; message: string }> => {
+    try {
+      const res = await fetch(apiUrl('/api/academic/import'), {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ parsedData, mode }),
       });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.success === false) {
+        return {
+          success: false,
+          importedCount: Number(data.importedCount) || 0,
+          message: data.message || 'Master import was rejected by the server.',
+        };
+      }
+      await syncBootstrapData();
+      return {
+        success: true,
+        importedCount: Number(data.importedCount) || 0,
+        message: data.message || 'Master import completed successfully.',
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        importedCount: 0,
+        message: err?.message || 'Network error while importing the master workbook.',
+      };
     }
-
-    // 2. Programs
-    const progCodeMap = new Map<string, string>();
-    programs.forEach(p => progCodeMap.set(p.code.toUpperCase(), p.id));
-
-    if (parsedData.programs.length > 0) {
-      setPrograms(prev => {
-        const next = [...prev];
-        parsedData.programs.forEach(progIn => {
-          const codeUpper = progIn.code.toUpperCase();
-          const deptId = deptCodeMap.get(progIn.departmentCode?.toUpperCase()) || 'dept-cse';
-          const existingIdx = next.findIndex(p => p.code.toUpperCase() === codeUpper);
-          if (existingIdx >= 0) {
-            next[existingIdx] = { ...next[existingIdx], ...progIn, departmentId: deptId };
-            progCodeMap.set(codeUpper, next[existingIdx].id);
-          } else {
-            const newId = `prog-${progIn.code.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
-            const newProg: Program = {
-              id: newId,
-              name: progIn.name,
-              code: progIn.code,
-              departmentId: deptId,
-              durationYears: progIn.durationYears || 4,
-              totalSemesters: progIn.totalSemesters || 8,
-              status: 'Active',
-            };
-            next.push(newProg);
-            progCodeMap.set(codeUpper, newId);
-          }
-          totalImported++;
-        });
-        return next;
-      });
-    }
-
-    // 3. Faculty
-    const facEmailMap = new Map<string, string>();
-    facultyMembers.forEach(f => facEmailMap.set(f.email.toLowerCase(), f.id));
-
-    if (parsedData.faculty.length > 0) {
-      setFacultyMembers(prev => {
-        const next = [...prev];
-        parsedData.faculty.forEach(facIn => {
-          const emailLower = facIn.email.toLowerCase();
-          const deptId = deptCodeMap.get(facIn.departmentCode?.toUpperCase()) || 'dept-cse';
-          const existingIdx = next.findIndex(f => f.email.toLowerCase() === emailLower);
-          if (existingIdx >= 0) {
-            next[existingIdx] = {
-              ...next[existingIdx],
-              ...facIn,
-              departmentId: deptId,
-            };
-            facEmailMap.set(emailLower, next[existingIdx].id);
-          } else {
-            const newId = `fac-${emailLower.split('@')[0].replace(/[^a-z0-9]/g, '')}`;
-            const newFac: Faculty = {
-              id: newId,
-              name: facIn.name,
-              email: facIn.email,
-              departmentId: deptId,
-              designation: facIn.designation,
-              subjectsQualified: facIn.subjectsQualified || [],
-              maxDirectTeachingHours: facIn.maxDirectTeachingHours || 14,
-              weeklyHoursLimit: 40,
-              preferences: facIn.preferences || {
-                preferredDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
-                preferredPeriods: [1, 2, 3, 4, 6, 7],
-                protectedSlots: [],
-                maxConsecutivePeriods: 3,
-                availableForMakeup: true,
-                availableForTutorial: true,
-              },
-              status: 'Active',
-            };
-            next.push(newFac);
-            facEmailMap.set(emailLower, newId);
-          }
-          totalImported++;
-        });
-        return next;
-      });
-    }
-
-    // 4. Rooms
-    const roomNameMap = new Map<string, string>();
-    rooms.forEach(r => roomNameMap.set(r.name.toUpperCase(), r.id));
-
-    if (parsedData.rooms.length > 0) {
-      setRooms(prev => {
-        const next = [...prev];
-        parsedData.rooms.forEach(rmIn => {
-          const nameUpper = rmIn.name.toUpperCase();
-          const existingIdx = next.findIndex(r => r.name.toUpperCase() === nameUpper);
-          if (existingIdx >= 0) {
-            next[existingIdx] = { ...next[existingIdx], ...rmIn };
-            roomNameMap.set(nameUpper, next[existingIdx].id);
-          } else {
-            const newId = `room-${rmIn.name.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
-            const newRoom: Room = { ...rmIn, id: newId };
-            next.push(newRoom);
-            roomNameMap.set(nameUpper, newId);
-          }
-          totalImported++;
-        });
-        return next;
-      });
-    }
-
-    // 5. Courses
-    const courseCodeMap = new Map<string, string>();
-    courses.forEach(c => courseCodeMap.set(c.code.toUpperCase(), c.id));
-
-    if (parsedData.courses.length > 0) {
-      setCourses(prev => {
-        const next = [...prev];
-        parsedData.courses.forEach(crsIn => {
-          const codeUpper = crsIn.code.toUpperCase();
-          const deptId = deptCodeMap.get(crsIn.departmentCode?.toUpperCase()) || 'dept-cse';
-          const facId = (crsIn.primaryFacultyEmail && facEmailMap.get(crsIn.primaryFacultyEmail.toLowerCase())) || 'fac-sharma';
-          const existingIdx = next.findIndex(c => c.code.toUpperCase() === codeUpper);
-          if (existingIdx >= 0) {
-            next[existingIdx] = {
-              ...next[existingIdx],
-              ...crsIn,
-              departmentId: deptId,
-              primaryFacultyId: facId,
-            };
-            courseCodeMap.set(codeUpper, next[existingIdx].id);
-          } else {
-            const newId = `course-${crsIn.code.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
-            const newCourse: Course = {
-              id: newId,
-              code: crsIn.code,
-              name: crsIn.name,
-              departmentId: deptId,
-              credits: crsIn.credits || 4,
-              requiredLecturesPerWeek: crsIn.requiredLecturesPerWeek || 3,
-              requiredTutorialsPerWeek: crsIn.requiredTutorialsPerWeek || 0,
-              requiredLabsPerWeek: crsIn.requiredLabsPerWeek || 0,
-              totalSemesterHours: crsIn.totalSemesterHours || 45,
-              completedHours: 0,
-              cancelledHours: 0,
-              requiresLab: crsIn.requiresLab || (crsIn.requiredLabsPerWeek || 0) > 0,
-              requiredEquipment: crsIn.requiredEquipment || ['Projector'],
-              primaryFacultyId: facId,
-              status: 'Active',
-            };
-            next.push(newCourse);
-            courseCodeMap.set(codeUpper, newId);
-          }
-          totalImported++;
-        });
-        return next;
-      });
-    }
-
-    // 6. Groups & Subgroups
-    const groupCodeMap = new Map<string, string>();
-    const subgroupCodeMap = new Map<string, string>(); // "GROUP:SUBGROUP" -> subId
-    sections.forEach(s => {
-      groupCodeMap.set(s.name.toUpperCase(), s.id);
-      (s.subSections || []).forEach(sub => {
-        subgroupCodeMap.set(`${s.name.toUpperCase()}:${sub.name.toUpperCase()}`, sub.id);
-      });
-    });
-
-    if (parsedData.groups.length > 0) {
-      setSections(prev => {
-        const next = [...prev];
-        parsedData.groups.forEach(grpIn => {
-          const codeUpper = grpIn.name.toUpperCase();
-          const progId = progCodeMap.get(grpIn.program?.toUpperCase()) || '';
-
-          // Find declared subgroups for this group in parsedData
-          const declaredSubgroups = parsedData.subgroups.filter(
-            sub => sub.groupCode.toUpperCase() === codeUpper
-          );
-
-          const existingIdx = next.findIndex(s => s.name.toUpperCase() === codeUpper);
-          const secId = existingIdx >= 0 ? next[existingIdx].id : `sec-${grpIn.name.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
-          groupCodeMap.set(codeUpper, secId);
-
-          const builtSubgroups: SubSection[] = declaredSubgroups.map((sub, sIdx) => {
-            const subId = `sub-${secId}-${sub.name.toLowerCase()}`;
-            subgroupCodeMap.set(`${codeUpper}:${sub.name.toUpperCase()}`, subId);
-            return {
-              id: subId,
-              sectionId: secId,
-              name: sub.name,
-              studentCount: sub.studentCount || Math.ceil(grpIn.studentCount / 2),
-              type: sub.type || 'Lab',
-            };
-          });
-
-          // If no subgroups were explicitly listed in Subgroups sheet, create default A1/A2
-          if (builtSubgroups.length === 0) {
-            builtSubgroups.push(
-              { id: `sub-${secId}-1`, sectionId: secId, name: '1', studentCount: Math.ceil(grpIn.studentCount / 2), type: 'Lab' },
-              { id: `sub-${secId}-2`, sectionId: secId, name: '2', studentCount: Math.floor(grpIn.studentCount / 2), type: 'Lab' }
-            );
-            subgroupCodeMap.set(`${codeUpper}:1`, `sub-${secId}-1`);
-            subgroupCodeMap.set(`${codeUpper}:2`, `sub-${secId}-2`);
-          }
-
-          if (existingIdx >= 0) {
-            next[existingIdx] = {
-              ...next[existingIdx],
-              ...grpIn,
-              programId: progId,
-              subSections: builtSubgroups,
-            };
-          } else {
-            const newSec: StudentSection = {
-              id: secId,
-              name: grpIn.name,
-              departmentId: grpIn.departmentId || 'dept-cse',
-              program: grpIn.program,
-              programId: progId,
-              semester: grpIn.semester || 5,
-              batchYear: grpIn.batchYear || 2024,
-              studentCount: grpIn.studentCount,
-              targetSize: grpIn.targetSize || grpIn.studentCount,
-              maxSize: grpIn.maxSize || Math.ceil(grpIn.studentCount * 1.2),
-              subSections: builtSubgroups,
-              classRepresentative: grpIn.classRepresentative || {
-                name: 'Section Representative',
-                email: `cr.${grpIn.name.toLowerCase()}@thapar.edu`,
-                studentId: '102303001',
-              },
-              status: 'Active',
-            };
-            next.push(newSec);
-          }
-          totalImported++;
-        });
-        return next;
-      });
-    }
-
-    // 7. Course Allocations
-    if (parsedData.allocations.length > 0) {
-      setAllocations(prev => {
-        const next = mode === 'replace' ? [] : [...prev];
-        parsedData.allocations.forEach(allocIn => {
-          const courseId = courseCodeMap.get(allocIn.courseCode.toUpperCase()) || 'cs501';
-          const facultyId = facEmailMap.get(allocIn.facultyEmail.toLowerCase()) || 'fac-sharma';
-          const sectionId = groupCodeMap.get(allocIn.groupCode.toUpperCase()) || 'sec-cse-a';
-          const subSectionId = allocIn.subgroupName
-            ? subgroupCodeMap.get(`${allocIn.groupCode.toUpperCase()}:${allocIn.subgroupName.toUpperCase()}`)
-            : undefined;
-          const roomId = allocIn.roomName ? roomNameMap.get(allocIn.roomName.toUpperCase()) : undefined;
-
-          const allocId = `alloc-${courseId}-${sectionId}${subSectionId ? `-${subSectionId}` : ''}-${allocIn.sessionType.toLowerCase()}`;
-          const existingIdx = next.findIndex(a => a.id === allocId);
-
-          const newAlloc: CourseAllocation = {
-            id: allocId,
-            courseId,
-            facultyId,
-            sectionId,
-            subSectionId,
-            sessionType: allocIn.sessionType,
-            hoursPerWeek: allocIn.hoursPerWeek,
-            preferredRoomId: roomId,
-            status: 'Allocated',
-          };
-
-          if (existingIdx >= 0) {
-            next[existingIdx] = newAlloc;
-          } else {
-            next.push(newAlloc);
-          }
-          totalImported++;
-        });
-        return next;
-      });
-    }
-
-    // 8. Immutable Institutional Audit Log
-    setAuditLogs(prev => [
-      {
-        id: `log-excel-import-${Date.now()}`,
-        timestamp: new Date().toISOString(),
-        userId: 'coordinator',
-        userName: 'Academic Coordinator',
-        action: 'EXCEL_MASTER_IMPORT',
-        entityType: 'AcademicSetup',
-        entityId: 'master-workbook',
-        details: `Transactionally imported ${totalImported} academic records across sheets (Departments: ${parsedData.departments.length}, Programs: ${parsedData.programs.length}, Faculty: ${parsedData.faculty.length}, Rooms: ${parsedData.rooms.length}, Courses: ${parsedData.courses.length}, Groups: ${parsedData.groups.length}, Allocations: ${parsedData.allocations.length}).`,
-      },
-      ...prev,
-    ]);
-
-    // 9. Post to Supabase backend API for persistent PostgreSQL storage
-    fetch('/api/academic/import', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify({ parsedData, mode }),
-    }).catch(err => console.warn('[SUPABASE_API] Master import background sync notice:', err));
-
-    // 10. Re-run validation immediately so coordinator sees current status
-    setTimeout(() => {
-      runValidation();
-    }, 100);
-
-    return {
-      success: true,
-      importedCount: totalImported,
-      message: `Master setup data successfully synchronized with database (${totalImported} records processed).`,
-    };
   };
 
-  // Cancel Session & Trigger Self-Healing Pipeline
   const cancelSession = async (sessionId: string, reason: string): Promise<{ success: boolean }> => {
     try {
       const res = await fetch(apiUrl('/api/recovery/cancel-class'), {
