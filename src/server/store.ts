@@ -1311,6 +1311,17 @@ export class TimetableStore {
     this.mustExist(this.facultyMembers, candidate.facultyId, 'Faculty');
     this.mustExist(this.groups, candidate.sectionId, 'Group');
     this.mustExist(this.rooms, candidate.roomId, 'Room');
+    if (!staff) {
+      const permitted = [...this.allocations.values()].some((a) =>
+        a.facultyId === facultyId &&
+        a.courseId === candidate.courseId &&
+        a.sectionId === candidate.sectionId &&
+        (!candidate.subSectionId || !a.subSectionId || a.subSectionId === candidate.subSectionId),
+      );
+      if (!permitted) {
+        throw new HttpError(403, 'You can only add classes for courses and sections assigned to your faculty record.');
+      }
+    }
     if (!this.academicYear.workingDays.includes(candidate.day)) throw new ValidationError('That day is not a working day.');
     const slot = this.academicYear.timeSlots.find((t) => t.id === candidate.timeSlotId);
     if (!slot || slot.isBreak || slot.isLunch || slot.id === this.academicYear.lunchPeriodId) throw new ValidationError('Pick a teaching period (not a break).');
