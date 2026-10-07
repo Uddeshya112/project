@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useTimetable } from '../../context/TimetableContext';
 import { GeneratedCandidate } from '../../lib/optimizationEngine';
+import type { ClassSession } from '../../types';
 import { IndependentValidationReport } from '../../lib/independentValidator';
 import {
   Sparkles,
@@ -210,8 +211,6 @@ export function GenerateTimetablePage() {
       const result = await selectRoutineAPI(candidate.versionNumber!);
       if (!result.success) {
         setPublishFeedback({ success: false, message: result.message || 'The server rejected the selected timetable routine.' });
-      } else {
-        await setTimeout(() => {}, 0);
       }
       return;
     }
