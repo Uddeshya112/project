@@ -49,7 +49,7 @@ export class TimetableJobManager {
   }
 
   async createJob(payload: StoredJobPayload): Promise<string> {
-    const jobId = `job_\${Date.now()}_\${randomUUID().slice(0, 8)}`;
+    const jobId = `job_${Date.now()}_${randomUUID().slice(0, 8)}`;
     await this.db.query(
       `insert into intellischedule.timetable_jobs
        (job_id, status, progress, payload, created_at)
@@ -175,7 +175,7 @@ export class TimetableJobManager {
           `update intellischedule.timetable_jobs
            set status = 'FAILED', progress = 100, completed_at = now(), error = $2
            where job_id = $1 and status in ('PENDING','RUNNING')`,
-          [jobId, `Worker exited with code \${code}.`],
+          [jobId, `Worker exited with code ${code}.`],
         ).catch(() => {});
       }
     });
