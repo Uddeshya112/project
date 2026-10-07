@@ -8,7 +8,8 @@ import {
 } from '../src/lib/optimizationEngine';
 import { validateTimetableIndependently } from '../src/lib/independentValidator';
 import { validateAcademicSetup } from '../src/lib/timetableGenerator';
-import { timetableJobManager } from '../src/server/jobManager';
+import { TimetableJobManager } from '../src/server/jobManager';
+import { connectDb } from '../src/server/db';
 import { runDSATURSolver, runHeuristicRepairSolver, runFastGreedySolver } from '../src/lib/solvers';
 import {
   INITIAL_ACADEMIC_YEAR,
@@ -935,28 +936,32 @@ async function runFullPerformanceVerificationSuite() {
   // -------------------------------------------------------------
   console.log('\n--- 16. JOB API & LARGE-SCALE BENCHMARKS (300 - 1,500 ALLOCATIONS) ---');
   const jobDs = generateSyntheticDataset(30, 4, 10, 8);
-  const jobId = timetableJobManager.createJob(
-    jobDs.academicYear,
-    jobDs.allocations,
-    jobDs.facultyMembers,
-    jobDs.rooms,
-    jobDs.sections,
-    jobDs.courses,
-    INITIAL_CONSTRAINTS,
-    { budgetMode: 'FAST', timeBudgetMs: 500, seed: 7777 }
-  );
+  const jobDb = await connectDb('pglite:memory');
+  const timetableJobManager = new TimetableJobManager(jobDb);
+  await timetableJobManager.init();
+  const jobId = await timetableJobManager.createJob({
+    academicYear: jobDs.academicYear,
+    allocations: jobDs.allocations,
+    facultyMembers: jobDs.facultyMembers,
+    rooms: jobDs.rooms,
+    sections: jobDs.sections,
+    courses: jobDs.courses,
+    constraints: INITIAL_CONSTRAINTS,
+    options: { budgetMode: 'FAST', timeBudgetMs: 500, seed: 7777 },
+  });
 
-  // Poll job until completed
-  let jobState = timetableJobManager.getJob(jobId);
+  // Poll job until completed.
+  let jobState = await timetableJobManager.getJob(jobId);
   let pollAttempts = 0;
-  while (jobState && (jobState.status === 'PENDING' || jobState.status === 'RUNNING') && pollAttempts < 20) {
+  while (jobState && (jobState.status === 'PENDING' || jobState.status === 'RUNNING') && pollAttempts < 40) {
     pollAttempts++;
     await new Promise(r => setTimeout(r, 50));
-    jobState = timetableJobManager.getJob(jobId);
+    jobState = await timetableJobManager.getJob(jobId);
   }
 
   const jobApiPassed = Boolean(jobState && jobState.status === 'COMPLETED' && jobState.result?.isFeasible);
   console.log(`• Asynchronous Job API Lifecycle (Enqueue, Poll, Result): ${jobApiPassed ? 'VERIFIED (Job Completed Successfully)' : 'FAILED'}`);
+  await jobDb.close();
 
   // Large Scale Benchmark (300, 600, 1000, 1500 allocations)
   console.log('\n| Scale | Allocations | Execution Time (ms) | Feasible | Hard Violations |');
