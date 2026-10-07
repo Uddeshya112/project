@@ -818,46 +818,34 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
   };
 
   // Publish Status Lifecycle
-  const updatePublishStatus = async (status: TimetablePublishStatus, reviewerName?: string): Promise<{ success: boolean }> => {
-    setPublishStatus(status);
-    setAcademicYear(prev => ({
-      ...prev,
-      publishStatus: status,
-      approvedBy: status === 'Approved' || status === 'Published' ? reviewerName || 'Dean Academic Affairs' : prev.approvedBy,
-      approvedAt: status === 'Approved' ? new Date().toISOString() : prev.approvedAt,
-      publishedAt: status === 'Published' ? new Date().toISOString() : prev.publishedAt,
-    }));
+  const updatePublishStatus = async (status: TimetablePublishStatus, _reviewerName?: string): Promise<{ success: boolean }> => {
+    try {
+      let endpoint = '/api/timetable/review';
+      let body: Record<string, unknown> = { status };
 
-    setAuditLogs(prev => [
-      {
-        id: `log-${Date.now()}`,
-        timestamp: new Date().toLocaleString(),
-        userId: 'coordinator',
-        userName: 'Timetable Coordinator',
-        action: `TIMETABLE_STATUS_${status.toUpperCase()}`,
-        entityType: 'TimetablePublishStatus',
-        entityId: academicYear.id,
-        details: `Updated schedule lifecycle state to ${status}.`,
-      },
-      ...prev,
-    ]);
+      if (status === 'Approved') {
+        endpoint = '/api/timetable/approve';
+        body = {};
+      } else if (status === 'Published') {
+        endpoint = '/api/timetable/publish';
+        body = { versionId: activeVersionNumber };
+      }
 
-    if (status === 'Approved') {
-      fetch('/api/timetable/approve', {
+      const res = await fetch(apiUrl(endpoint), {
         method: 'POST',
         headers: getAuthHeaders(),
-        body: JSON.stringify({ versionId: `V${versions.length || 1}.0` }),
-      }).catch(err => console.warn('[SUPABASE_API] Approval persistence notice:', err));
-    } else if (status === 'Published') {
-      fetch('/api/timetable/publish', {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ versionId: `V${versions.length || 1}.0` }),
-      }).catch(err => console.warn('[SUPABASE_API] Publish persistence notice:', err));
+        credentials: 'include',
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) return { success: false };
+      await syncBootstrapData();
+      return { success: true };
+    } catch {
+      return { success: false };
     }
-
-    return { success: true };
   };
+
 
   // ---------------------------------------------------------------------------
   // Independent Validation & Controlled Manual Editing Pipeline
