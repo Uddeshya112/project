@@ -124,7 +124,7 @@ for (let i = 1; i <= 500; i++) {
   const lName = prng.choice(lastNames);
   const dept = prng.choice(DEPARTMENTS);
   const facId = `fac-${String(i).padStart(4, '0')}`;
-  const email = i === 1 ? 'arvind.sharma@thapar.edu' : `faculty.${facId}@thapar.edu`;
+  const email = i === 1 ? 'a.sharma@thapar.edu' : `faculty.${facId}@thapar.edu`;
 
   FACULTY_MEMBERS.push({
     id: facId,
