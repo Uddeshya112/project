@@ -754,6 +754,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
   // Timetable Generator Pipeline
   const generateDraftTimetable = async () => {
     const report = runValidation();
+    const totalHours = allocations.reduce((sum, allocation) => sum + Number(allocation.hoursPerWeek || 0), 0);
     if (!report.isReadyForGeneration) {
       return {
         isSuccess: false,
@@ -772,14 +773,13 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         sessionsGenerated: 0,
         conflicts: data.message ? [data.message] : ['Timetable generation failed on the server.'],
         scheduledHours: 0,
-        totalHours: report.totalHours,
+        totalHours,
       };
     }
 
     const sessionsGenerated = routine.sessions.length;
     const hardViolations = routine.validation?.hardViolations ?? 0;
     const unscheduled = routine.validation?.unscheduled ?? 0;
-    const totalHours = allocations.reduce((sum, allocation) => sum + Number(allocation.hoursPerWeek || 0), 0);
     return {
       isSuccess: hardViolations === 0 && sessionsGenerated > 0,
       sessionsGenerated,
