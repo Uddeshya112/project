@@ -1,18 +1,13 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { apiUrl } from './apiConfig';
 
-// Browser-safe Supabase configuration
-// NEVER include SUPABASE_SERVICE_ROLE_KEY here!
-const supabaseUrl =
-  import.meta.env.VITE_SUPABASE_URL ||
-  'https://oopbelkjbnhdjvskmplc.supabase.co';
-const supabaseAnonKey =
-  import.meta.env.VITE_SUPABASE_ANON_KEY ||
-  'sb_publishable_9lN0TL3pTk-1Q7xgL74Nyw_1v0q-u9T';
+// Browser-safe Supabase configuration - fails closed if env vars are missing
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
 /**
  * Public Supabase client for client-side subscriptions and public storage.
- * All privileged writes and master data queries route through the secure /api backend.
+ * Fails closed (null) if env vars are missing.
  */
 export const supabaseClient: SupabaseClient | null =
   supabaseUrl && supabaseAnonKey
@@ -26,7 +21,7 @@ export const supabaseClient: SupabaseClient | null =
     : null;
 
 /**
- * Retrieve the current Supabase access token directly from active session.
+ * Retrieve the current Supabase access token directly from active session if present.
  */
 export async function getSupabaseAccessToken(): Promise<string | null> {
   if (supabaseClient) {
@@ -44,23 +39,19 @@ export async function getSupabaseAccessToken(): Promise<string | null> {
 
 /**
  * Backend API Client Helper
- * Guarantees that all writes and reads go through server-side RBAC and Supabase persistence.
+ * Uses same-origin cookies and CSRF headers.
  */
 export async function apiFetch<T = any>(endpoint: string, options: RequestInit = {}): Promise<T> {
-  const token = await getSupabaseAccessToken();
-
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    'X-Requested-With': 'XMLHttpRequest',
     ...(options.headers as Record<string, string> || {}),
   };
-
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
 
   const targetUrl = apiUrl(endpoint);
 
   const response = await fetch(targetUrl, {
+    credentials: 'same-origin',
     ...options,
     headers,
   });

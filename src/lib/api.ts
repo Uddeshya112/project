@@ -14,11 +14,19 @@ export const SESSION_EXPIRED_EVENT = 'intellischedule:session-expired';
 
 export async function api<T = any>(path: string, options: { method?: string; body?: unknown } = {}): Promise<T> {
   let res: Response;
+  const method = options.method ?? (options.body === undefined ? 'GET' : 'POST');
+  const headers: Record<string, string> = {
+    'X-Requested-With': 'XMLHttpRequest',
+  };
+  if (options.body !== undefined) {
+    headers['Content-Type'] = 'application/json';
+  }
+
   try {
     res = await fetch(path, {
-      method: options.method ?? (options.body === undefined ? 'GET' : 'POST'),
+      method,
       credentials: 'same-origin',
-      headers: options.body === undefined ? undefined : { 'Content-Type': 'application/json' },
+      headers,
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
     });
   } catch {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert';
-import { isTestTokenAllowed } from '../server';
+import { isTestTokenAllowed } from '../src/server/testMode';
 
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:3000';
 

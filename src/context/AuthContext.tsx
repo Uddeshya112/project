@@ -485,9 +485,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         setIsAuthenticated(true);
         setAuthStatus('AUTHENTICATED');
-        if (data.token) {
-          localStorage.setItem('auth_token', data.token);
-        }
 
         return {
           success: true,
@@ -564,9 +561,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
 
         setIsAuthenticated(true);
-        if (data.token) {
-          localStorage.setItem('auth_token', data.token);
-        }
 
         return {
           success: true,
@@ -709,9 +703,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         setIsAuthenticated(true);
         setAuthStatus('AUTHENTICATED');
-        if (data.token) {
-          localStorage.setItem('auth_token', data.token);
-        }
 
         return {
           success: true,
@@ -850,11 +841,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setCurrentUserId(null);
     setAuthorizedWorkspaces(['Student']);
     setCurrentWorkspace('Student');
-    
-    // Clear user tokens from storage
-    localStorage.removeItem('auth_token');
-    localStorage.removeItem('app_session_token');
-    sessionStorage.clear();
   };
 
   const switchUser = (userId: string) => {
