@@ -1,5 +1,11 @@
 import type { Request, Response, NextFunction } from 'express';
 
+export function isTestTokenAllowed(req?: Pick<Request, 'headers'>): boolean {
+  return process.env.NODE_ENV === 'test'
+    && process.env.ALLOW_TEST_RESET_TOKEN === 'true'
+    && req?.headers['x-test-mode'] === 'true';
+}
+
 export type RoleCode = 'SUPER_ADMIN' | 'COLLEGE_ADMIN' | 'COORDINATOR' | 'HOD' | 'FACULTY' | 'CLASS_REPRESENTATIVE' | 'STUDENT';
 
 export interface AuthenticatedRequest extends Request {

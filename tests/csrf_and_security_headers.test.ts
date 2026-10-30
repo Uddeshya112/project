@@ -9,8 +9,12 @@ test('Security Headers and Strict CSP enforcement', async () => {
 
   const csp = res.headers.get('content-security-policy') || '';
   assert.ok(csp.length > 0, 'CSP header must be present');
-  assert.ok(!csp.includes('connect-src \'self\' https: wss:'), 'Wildcard https: and wss: must not be in connect-src');
-  assert.ok(csp.includes('connect-src \'self\' https://*.supabase.co'), 'Specific connect-src domains must be configured');
+  const connectSrc = csp.split(';').find(directive => directive.trim().startsWith('connect-src')) || '';
+  assert.ok(connectSrc.includes("'self'"), 'Same-origin API access must be allowed');
+  assert.ok(!connectSrc.split(/\s+/).some(source => source === 'https:' || source === 'wss:'), 'Unrestricted HTTPS and WebSocket sources must not be allowed');
+  if (process.env.SUPABASE_URL) {
+    assert.ok(connectSrc.includes(new URL(process.env.SUPABASE_URL).origin), 'Only the configured Supabase origin should be allowed');
+  }
 });
 
 test('Cookie-only session: login and demo-login do not expose token in JSON body', async () => {

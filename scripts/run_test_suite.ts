@@ -6,11 +6,10 @@ import { spawn, type ChildProcess } from 'child_process';
 const ROOT = process.cwd();
 const TEST_PORT = process.env.TEST_PORT || '3100';
 const BASE_URL = process.env.BASE_URL || `http://127.0.0.1:${TEST_PORT}`;
+const TSX_CLI = path.join(ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
 let ownedServer: ChildProcess | null = null;
 
 const randomTestPassword = () => crypto.randomBytes(24).toString('base64url') + 'A1!';
-const commandName = (command: string) => process.platform === 'win32' ? command + '.cmd' : command;
-
 async function isServerReady(): Promise<boolean> {
   try {
     const response = await fetch(BASE_URL + '/api/health/live');
@@ -32,9 +31,9 @@ async function waitForServer(timeoutMs = 30000): Promise<void> {
 }
 
 function startServer(testPassword: string): ChildProcess {
-  const child = spawn(commandName('tsx'), ['server.ts'], {
+  const child = spawn(process.execPath, [TSX_CLI, 'server.ts'], {
     cwd: ROOT,
-    env: { ...process.env, NODE_ENV: 'test', PORT: TEST_PORT, BASE_URL, ALLOW_TEST_RESET_TOKEN: 'true', SEED_USER_PASSWORD: testPassword, DEMO_ACCOUNT_PASSWORD: testPassword },
+    env: { ...process.env, NODE_ENV: 'test', PORT: TEST_PORT, BASE_URL, ALLOW_TEST_RESET_TOKEN: 'true', PUBLIC_DEMO_ENABLED: 'true', SEED_USER_PASSWORD: testPassword, DEMO_ACCOUNT_PASSWORD: testPassword },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   child.stdout?.on('data', chunk => process.stdout.write('[test-server] ' + chunk));
@@ -52,9 +51,9 @@ function stopServer(): Promise<void> {
   });
 }
 
-async function runCommand(command: string, args: string[], env?: NodeJS.ProcessEnv): Promise<number> {
+async function runCommand(args: string[], env?: NodeJS.ProcessEnv): Promise<number> {
   return new Promise(resolve => {
-    const child = spawn(commandName(command), args, {
+    const child = spawn(process.execPath, [TSX_CLI, ...args], {
       cwd: ROOT,
       env: env ? { ...process.env, ...env } : process.env,
       stdio: 'inherit',
@@ -81,14 +80,14 @@ async function main(): Promise<void> {
       await waitForServer();
     }
 
-    const testEnv = { NODE_ENV: 'test', PORT: TEST_PORT, BASE_URL, ALLOW_TEST_RESET_TOKEN: 'true', SEED_USER_PASSWORD: testPassword, DEMO_ACCOUNT_PASSWORD: testPassword };
-    const unitExit = await runCommand('tsx', ['--test', '--test-concurrency=1', ...testFiles], testEnv);
+    const testEnv = { NODE_ENV: 'test', PORT: TEST_PORT, BASE_URL, ALLOW_TEST_RESET_TOKEN: 'true', PUBLIC_DEMO_ENABLED: 'true', SEED_USER_PASSWORD: testPassword, DEMO_ACCOUNT_PASSWORD: testPassword };
+    const unitExit = await runCommand(['--test', '--test-concurrency=1', ...testFiles], testEnv);
     if (unitExit !== 0) {
       process.exitCode = unitExit;
       return;
     }
 
-    process.exitCode = await runCommand('tsx', ['scripts/run_e2e_tests.ts'], testEnv);
+    process.exitCode = await runCommand(['scripts/run_e2e_tests.ts'], testEnv);
   } finally {
     await stopServer();
     ownedServer = null;

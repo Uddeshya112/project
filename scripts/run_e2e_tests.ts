@@ -494,14 +494,14 @@ async function runTestSuite() {
   try {
     const logoutRes = await fetch(`${BASE_URL}/api/auth/logout`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${coordinatorToken}` },
+      headers: { Cookie: coordinatorCookie },
     });
     const logoutData = await logoutRes.json();
     assert(logoutRes.status === 200 && logoutData.success === true, 'Auth API', 'Logout endpoint revokes session');
 
     // Verify token is now invalid
     const meRes = await fetch(`${BASE_URL}/api/auth/me`, {
-      headers: { Authorization: `Bearer ${coordinatorToken}` },
+      headers: { Cookie: coordinatorCookie },
     });
     assert(meRes.status === 401, 'Auth API', 'Revoked session cannot access /api/auth/me');
   } catch (err) {

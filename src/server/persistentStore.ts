@@ -118,7 +118,8 @@ export class FileBackend implements StateBackend {
     }, 250);
   }
 
-  public flushSync(): void {
+  public flushSync(data?: any): void {
+    if (data !== undefined) this.pendingData = data;
     if (this.saveTimeout) {
       clearTimeout(this.saveTimeout);
       this.saveTimeout = null;
@@ -364,8 +365,7 @@ export class PersistentStore {
 
   public flushSync(): void {
     if (this.fileBackend) {
-      this.fileBackend.pendingData = this.serializeState();
-      this.fileBackend.flushSync();
+      this.fileBackend.flushSync(this.serializeState());
     }
   }
 

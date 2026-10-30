@@ -32,7 +32,6 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
   const {
     login,
     register,
-    loginWithGoogle,
     loginAsDemoRole,
     requestPasswordReset,
     resetPassword
@@ -125,24 +124,20 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
       return;
     }
 
-    const tokenFromUrl = params.get('token');
-    if (tokenFromUrl) {
-      window.history.replaceState({}, document.title, window.location.pathname);
-    }
-
-    // Verify if already authenticated via session cookie or token (e.g. returning from Google OAuth)
+    // Verify the application session cookie (e.g. after returning from Google OAuth).
     const checkSession = async () => {
       try {
-        const headers: Record<string, string> = {};
-        if (tokenFromUrl) {
-          headers['Authorization'] = `Bearer ${tokenFromUrl}`;
-        }
-        const resp = await fetch('/api/auth/me', { headers });
+        const resp = await fetch('/api/auth/me', {
+          credentials: 'same-origin',
+          headers: { Accept: 'application/json' },
+        });
         if (resp.ok) {
           const data = await resp.json();
-          if (data.authenticated && data.role) {
-            setCurrentRole(data.role);
-            onSuccessLogin(data.authorizedWorkspaces);
+          if (data.authenticated && data.user) {
+            const roleKey = data.role || data.user.roleKey;
+            const workspaces = data.authorizedWorkspaces || data.user.authorizedWorkspaces;
+            if (roleKey) setCurrentRole(roleKey);
+            onSuccessLogin(workspaces);
           }
         }
       } catch {
@@ -153,38 +148,33 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
 
     // Listen for cross-origin popup postMessage events from OAuth callback
     const handleAuthMessage = async (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+
       if (event.data?.type === 'GOOGLE_AUTH_SUCCESS') {
         setIsGoogleLoading(true);
         setErrorMessage(null);
         setSuccessMessage('Google authentication successful! Loading dashboard...');
         
         try {
-          const headers: Record<string, string> = {};
-          if (event.data.token) {
-            headers['Authorization'] = `Bearer ${event.data.token}`;
-          }
-          const resp = await fetch('/api/auth/me', { headers });
+          const resp = await fetch('/api/auth/me', {
+            credentials: 'same-origin',
+            headers: { Accept: 'application/json' },
+          });
           if (resp.ok) {
             const data = await resp.json();
-            if (data.authenticated && data.role) {
-              setCurrentRole(data.role);
+            if (data.authenticated && data.user) {
+              const roleKey = data.role || data.user.roleKey;
+              const workspaces = data.authorizedWorkspaces || data.user.authorizedWorkspaces;
+              if (roleKey) setCurrentRole(roleKey);
               setTimeout(() => {
-                onSuccessLogin(data.authorizedWorkspaces);
+                onSuccessLogin(workspaces);
               }, 300);
               return;
             }
           }
-          if (event.data.roleKey) {
-            setCurrentRole(event.data.roleKey);
-            setTimeout(() => {
-              onSuccessLogin(event.data.authorizedWorkspaces);
-            }, 300);
-          }
+          setErrorMessage('Google sign-in finished, but the application session could not be verified. Please try again.');
         } catch {
-          if (event.data.roleKey) {
-            setCurrentRole(event.data.roleKey);
-            onSuccessLogin(event.data.authorizedWorkspaces);
-          }
+          setErrorMessage('Could not verify the Google sign-in session. Please try again.');
         } finally {
           setIsGoogleLoading(false);
         }
@@ -309,6 +299,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
 
     try {
       const resp = await fetch('/api/auth/google/authorize', {
+        credentials: 'same-origin',
         headers: { Accept: 'application/json' },
       });
 
@@ -334,31 +325,16 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
             window.location.href = data.redirectUrl;
           }
           return;
-        } else if (data.message) {
-          setErrorMessage(data.message);
-          setIsGoogleLoading(false);
-          return;
         }
+        setErrorMessage(data.message || 'Google sign-in could not be started. Please try again.');
+        setIsGoogleLoading(false);
+        return;
       }
-    } catch {
-      // Backend unreachable, proceed with client-side Google authentication fallback
-    }
-
-    // Direct Google authentication client fallback for static/preview hosting
-    try {
-      const googleEmail = 'bhaukaalgaming44@gmail.com';
-      const res = await loginWithGoogle(googleEmail, 'Bhaukaal Gaming');
+      setErrorMessage('Google sign-in returned an unexpected response. Please try again.');
       setIsGoogleLoading(false);
-      if (res.success && res.authorizedWorkspaces) {
-        setSuccessMessage('Signed in with Google successfully!');
-        onSuccessLogin?.(res.authorizedWorkspaces);
-      } else {
-        setSuccessMessage('Signed in with Google as Student!');
-        onSuccessLogin?.(['Student']);
-      }
     } catch {
       setIsGoogleLoading(false);
-      onSuccessLogin?.(['Student']);
+      setErrorMessage('Google sign-in is unavailable right now. Please try again later.');
     }
   };
 
