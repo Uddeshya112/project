@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useTimetable } from '../../context/TimetableContext';
-import { evaluatePasswordPolicy } from '../../lib/passwordUtils';
+import { evaluatePasswordPolicy } from '../../lib/passwordPolicy';
 import { Building, X, Edit3, CheckCircle2, Lock, AlertCircle } from 'lucide-react';
 
 interface UserProfileModalProps {

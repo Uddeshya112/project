@@ -123,3 +123,31 @@
 4. Reconfirm production deployment configuration, one-instance constraint, health checks, and rollback readiness with environment-level evidence.
 5. Perform a fresh security review of auth, role/ownership checks, bootstrap data visibility, and any production credential exposure risk.
 6. Update the layer table and release status only when each claim has new objective evidence.
+
+## 7. Current Session — Login and Auth Repair (2026-10-30)
+
+### Scope
+
+- **REQUESTED SCOPE:** Diagnose and fix login errors across password, demo, restored-session, and Google sign-in flows.
+- **NECESSARY SUPPORTING SCOPE:** Enforce the documented cookie-only session contract, reject cross-site state-changing requests, tighten CSP network sources, and make the existing verification harness work on Windows.
+- **NOT CHANGED:** Database schema, dependency versions, deployment configuration, or production environment.
+
+### Changes
+
+- **VERIFIED IN CODE:** Authenticated users are reconciled by backend ID and email, with role and workspace fields read from the API response and membership state updated from the authoritative role.
+- **VERIFIED IN CODE:** Session restore now checks `/api/auth/me` with the application cookie. Stale browser Supabase sessions no longer independently mark the app authenticated.
+- **VERIFIED IN CODE:** Password and demo login use the same cookie-backed flow; login response bodies no longer expose session tokens.
+- **VERIFIED IN CODE:** Google callback completion requires same-origin messages and a successful cookie-backed `/api/auth/me` check. Removed the hardcoded client-side fake-login fallback.
+- **VERIFIED IN CODE:** State-changing cross-site `/api` requests receive `403 CSRF_ORIGIN_DENIED`; CSP `connect-src` is limited to same-origin and the configured Supabase endpoint.
+- **VERIFIED IN CODE:** Test runner invokes the TSX CLI through Node on Windows; test-only demo mode is enabled explicitly. Logout coverage now exercises the session cookie.
+- **VERIFIED IN CODE:** `PersistentStore.flushSync` no longer reaches into a private `FileBackend` field; the test-only token gate is exported from its dedicated module.
+
+### Verification
+
+- **VERIFIED:** `git diff --check` passed.
+- **VERIFIED:** `pnpm run lint` passed.
+- **VERIFIED:** `pnpm run build` passed; Vite reported the existing browser `crypto` externalization notice and a bundle-size warning.
+- **VERIFIED:** Unit suite passed, 24/24.
+- **VERIFIED:** Auth, session-cookie, CSRF, and CSP checks passed in the end-to-end audit, including logout revocation.
+- **UNVERIFIED / FAILED GATE:** Full end-to-end audit passed 55/56 checks. The remaining failure was a timing benchmark: solver p95 62.23 ms against the existing 50 ms threshold. The benchmark varied substantially between runs; no threshold was weakened.
+- **UNVERIFIED:** No production credentials, hosted deployment, real Supabase project, database migration, browser OAuth provider, or production session was exercised.

@@ -3,7 +3,7 @@ import { ShieldCheck, Users, Activity, Plus, Search, Loader2, Lock, Unlock, LogO
 import { useAuth, type RoleCode } from '../../context/AuthContext';
 import { ROLES } from '../../lib/authData';
 import { api } from '../../lib/api';
-import { evaluatePasswordPolicy } from '../../lib/passwordUtils';
+import { evaluatePasswordPolicy } from '../../lib/passwordPolicy';
 
 interface AdminUser {
   id: string;

@@ -10,6 +10,8 @@ import { fileURLToPath } from 'url';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { OAuth2Client } from 'google-auth-library';
 import { persistentStore, StoredSession } from './src/server/persistentStore';
+import { isTestTokenAllowed } from './src/server/testMode';
+export { isTestTokenAllowed };
 import {
   hashPasswordBcrypt,
   hashPasswordBcryptSync,
@@ -95,6 +97,9 @@ const allowedOrigins = new Set(
     .map(origin => origin.trim())
     .filter(Boolean)
 );
+if (process.env.APP_URL) {
+  try { allowedOrigins.add(new URL(process.env.APP_URL).origin); } catch {}
+}
 
 const corsOptions: cors.CorsOptions = {
   origin: (origin, callback) => {
@@ -107,16 +112,39 @@ const corsOptions: cors.CorsOptions = {
 
 app.set('trust proxy', Number(process.env.TRUST_PROXY ?? 0));
 app.use(cookieParser());
+app.use('/api', (req: Request, res: Response, next: NextFunction) => {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+  const origin = req.get('origin');
+  if (!origin || allowedOrigins.has(origin) || origin === `${req.protocol}://${req.get('host')}`) return next();
+  return res.status(403).json({
+    success: false,
+    error: 'CSRF_ORIGIN_DENIED',
+    message: 'Cross-site state-changing requests are not allowed.',
+  });
+});
+const connectSources = ["'self'"];
+const configuredSupabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+if (configuredSupabaseUrl) {
+  try {
+    const supabaseOrigin = new URL(configuredSupabaseUrl);
+    connectSources.push(supabaseOrigin.origin);
+    if (supabaseOrigin.protocol === 'https:') connectSources.push(`wss://${supabaseOrigin.host}`);
+    if (supabaseOrigin.protocol === 'http:') connectSources.push(`ws://${supabaseOrigin.host}`);
+  } catch {
+    console.warn('[SECURITY] Ignoring invalid Supabase URL when constructing Content-Security-Policy.');
+  }
+}
 app.use(
   helmet({
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'"],
-        styleSrc: ["'self'", "'unsafe-inline'"],
-        imgSrc: ["'self'", "data:", "blob:"],
-        connectSrc: ["'self'", "https:", "wss:"],
-        fontSrc: ["'self'", "data:"],
+        styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+        imgSrc: ["'self'", "data:", "blob:", "https://images.unsplash.com"],
+        // Explicit allow-list; custom API hosts can be added via CSP_CONNECT_SRC.
+        connectSrc: [...connectSources, ...(process.env.CSP_CONNECT_SRC || "").split(",").map(v => v.trim()).filter(Boolean)],
+        fontSrc: ["'self'", "data:", "https://fonts.gstatic.com"],
         objectSrc: ["'none'"],
         frameAncestors: ["'none'"],
       },
@@ -125,6 +153,28 @@ app.use(
 );
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
+
+// CSRF defence for cookie-authenticated sessions: browsers always attach an Origin header to cross-site
+// state-changing requests, so reject any whose Origin is neither same-host nor explicitly allow-listed.
+// Requests without an Origin header (curl, server-to-server, test harness) are not browser CSRF vectors.
+const CSRF_SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+app.use('/api', (req: Request, res: Response, next: NextFunction) => {
+  if (CSRF_SAFE_METHODS.has(req.method)) return next();
+  const origin = req.headers.origin;
+  if (!origin) return next();
+  let sameHost = false;
+  try {
+    sameHost = new URL(origin).host === req.headers.host;
+  } catch {
+    sameHost = false;
+  }
+  if (sameHost || allowedOrigins.has(origin)) return next();
+  return res.status(403).json({
+    success: false,
+    error: 'CSRF_ORIGIN_DENIED',
+    message: 'Cross-origin state-changing request denied.',
+  });
+});
 app.use(express.json({ limit: '1mb' }));
 app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
   res.setHeader('Cache-Control', 'no-store');
@@ -453,14 +503,6 @@ function validateOneTimeToken(rawToken: string, expectedPurpose: OneTimeTokenPur
   return persistentStore.validateOneTimeToken(rawToken, expectedPurpose);
 }
 
-export function isTestTokenAllowed(req?: Request): boolean {
-  return (
-    process.env.NODE_ENV === 'test' &&
-    process.env.ALLOW_TEST_RESET_TOKEN === 'true' &&
-    Boolean(req && req.headers['x-test-mode'] === 'true')
-  );
-}
-
 function resolveWorkspacesForUser(user: StoredUser): WorkspaceType[] {
   if (user.authorizedWorkspaces && user.authorizedWorkspaces.length > 0) {
     return user.authorizedWorkspaces;
@@ -711,7 +753,6 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
     return res.json({
       success: true,
       message: `Welcome, ${user.name}`,
-      token: sessionToken,
       role: roleKey,
       roleCode: user.roleCode,
       roleName: user.roleName,
@@ -843,7 +884,6 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
     return res.json({
       success: true,
       message: `Welcome, ${user.name}`,
-      token: sessionToken,
       role: roleKey,
       roleCode: user.roleCode,
       roleName: user.roleName,
@@ -920,7 +960,6 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
   return res.json({
     success: true,
     message: `Welcome, ${user.name}`,
-    token: sessionToken,
     role: roleKey,
     roleCode: user.roleCode,
     roleName: user.roleName,
@@ -1265,7 +1304,6 @@ app.post('/api/auth/demo-login', async (req: Request, res: Response) => {
   return res.json({
     success: true,
     message: `Authenticated as ${user.name} (${user.roleName})`,
-    token: sessionToken,
     role: resolvedRoleKey,
     roleCode: user.roleCode,
     roleName: user.roleName,

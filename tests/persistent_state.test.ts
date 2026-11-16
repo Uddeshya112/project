@@ -35,7 +35,7 @@ test('Persistent store token, session, and rate-limit persistence and TTL', asyn
   assert.strictEqual(expiredSessValid, null);
 });
 
-test('FileBackend enforces safe file mode 0o600 and dir mode 0o700 with atomic writes', async () => {
+test('FileBackend writes state safely and atomically', async () => {
   const testDir = path.join(process.cwd(), 'data', 'test_mode_' + Date.now());
   const testFile = path.join(testDir, 'test_state.json');
 
@@ -50,11 +50,12 @@ test('FileBackend enforces safe file mode 0o600 and dir mode 0o700 with atomic w
     const dirStat = fs.statSync(testDir);
 
     // Mode mask checking: 0o600 for file (read/write by owner only), 0o700 for directory
-    const filePerms = fileStat.mode & 0o777;
-    const dirPerms = dirStat.mode & 0o777;
-
-    assert.strictEqual(filePerms, 0o600, 'File mode must be 0o600');
-    assert.strictEqual(dirPerms, 0o700, 'Dir mode must be 0o700');
+    if (process.platform !== 'win32') {
+      const filePerms = fileStat.mode & 0o777;
+      const dirPerms = dirStat.mode & 0o777;
+      assert.strictEqual(filePerms, 0o600, 'File mode must be 0o600');
+      assert.strictEqual(dirPerms, 0o700, 'Dir mode must be 0o700');
+    }
   } finally {
     try {
       if (fs.existsSync(testFile)) fs.unlinkSync(testFile);
