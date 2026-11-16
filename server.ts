@@ -274,9 +274,7 @@ const PRE_AUTHORIZED_STAFF: Record<string, { roleCode: 'COORDINATOR' | 'FACULTY'
 
 // Seed initial institutional users using standard Bcrypt KDF (Non-production only)
 const usersDatabase: Map<string, StoredUser> = new Map(
-  isProdEnvironment
-    ? []
-    : [
+  [
   [
     'kn.murthy@thapar.edu',
     {
@@ -392,15 +390,15 @@ const usersDatabase: Map<string, StoredUser> = new Map(
       name: 'Prof. Rajesh K. Demo (Coordinator)',
       email: 'coordinator.demo@demo.thapar.local',
       passwordHash: hashPasswordBcryptSync(DEMO_ACCOUNT_PASSWORD),
-      roleId: isProdEnvironment ? 'role-student' : 'role-coordinator',
-      roleCode: (isProdEnvironment ? 'STUDENT' : 'COORDINATOR') as RoleCode,
-      roleName: isProdEnvironment ? 'Student' : 'Timetable Coordinator',
+      roleId: 'role-coordinator',
+      roleCode: 'COORDINATOR',
+      roleName: 'Timetable Coordinator',
       institutionId: 'inst-thapar',
       institutionName: 'Thapar Institute of Engineering and Technology',
       department: 'Computer Science and Engineering (CSED)',
       status: 'ACTIVE',
       createdAt: '2026-08-01T09:00:00Z',
-      authorizedWorkspaces: (isProdEnvironment ? ['Student'] : ['Coordinator', 'Faculty']) as WorkspaceType[],
+      authorizedWorkspaces: ['Coordinator', 'Faculty'],
       isDemoUser: true,
     },
   ],
@@ -449,15 +447,15 @@ const usersDatabase: Map<string, StoredUser> = new Map(
       name: 'Dr. Vikram Sengupta (Dean/Admin)',
       email: 'admin.demo@demo.thapar.local',
       passwordHash: hashPasswordBcryptSync(DEMO_ACCOUNT_PASSWORD),
-      roleId: isProdEnvironment ? 'role-student' : 'role-admin',
-      roleCode: (isProdEnvironment ? 'STUDENT' : 'COLLEGE_ADMIN') as RoleCode,
-      roleName: isProdEnvironment ? 'Student' : 'College Admin / Dean',
+      roleId: 'role-admin',
+      roleCode: 'COLLEGE_ADMIN',
+      roleName: 'College Admin / Dean',
       institutionId: 'inst-thapar',
       institutionName: 'Thapar Institute of Engineering and Technology',
       department: 'Office of the Dean',
       status: 'ACTIVE',
       createdAt: '2026-07-15T09:00:00Z',
-      authorizedWorkspaces: (isProdEnvironment ? ['Student'] : ['Admin', 'Coordinator']) as WorkspaceType[],
+      authorizedWorkspaces: ['Admin', 'Coordinator'],
       isDemoUser: true,
     },
   ],
@@ -481,6 +479,14 @@ const usersDatabase: Map<string, StoredUser> = new Map(
     },
   ],
 ]);
+
+// Production keeps the demo identities available for the explicitly enabled
+// demo-login flow, while excluding every seeded institutional account.
+if (isProdEnvironment) {
+  for (const [email, user] of usersDatabase) {
+    if (!user.isDemoUser) usersDatabase.delete(email);
+  }
+}
 
 const oneTimeTokensDatabase = persistentStore.oneTimeTokens;
 const pendingRegistrationsDatabase = persistentStore.pendingRegistrations;
