@@ -3271,7 +3271,9 @@ app.all(/^\/api\/.*/, (_req: Request, res: Response) => {
 async function setupApp() {
   if (process.env.NODE_ENV === 'production' || process.env.RENDER) {
     app.use(express.static(path.join(__dirname, 'dist')));
-    app.get('*', (_req, res, next) => {
+    // Express 5's path-to-regexp rejects the legacy `'*'` wildcard.
+    // Keep the SPA fallback out of API paths so API 404s remain JSON responses.
+    app.get(/^\/(?!api\/).*/, (_req, res, next) => {
       if (_req.path.startsWith('/api/')) {
         return next();
       }
