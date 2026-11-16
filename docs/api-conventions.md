@@ -55,7 +55,9 @@ Roles per endpoint: [permissions.md](permissions.md).
 
 **Timetable**: `POST /api/academic/generate` `{ budgetMode?, timeBudgetMs?, routines? }`; `POST /api/timetable/select-routine` `{ versionNumber }`; `POST /api/timetable/move` `{ sessionId, targetDay, targetTimeSlotId, targetRoomId, reason? }`; `POST /api/timetable/swap` `{ sessionAId, sessionBId, reason? }`; `POST /api/timetable/sessions` (add a class); `POST /api/timetable/sessions/:id/lock` `{ reason? }` (toggles); `POST /api/timetable/status` `{ status: "Draft" | "Review" }`; `POST /api/timetable/approve`; `POST /api/timetable/publish`; `POST /api/timetable/versions/:n/restore`.
 
-**Recovery, polls, notifications**: `POST /api/recovery/cancel-class` `{ sessionId, reason? }`; `POST /api/recovery/schedule-makeup` `{ opportunityId }`; `POST /api/recovery/decline` `{ opportunityId }`; `POST /api/voting/polls` `{ question, options[2..6], sectionId? }`; `POST /api/voting/vote` `{ pollId, optionId }`; `POST /api/notifications` `{ title, message, type?, category?, recipientRole? }` (10 per minute); `POST /api/notifications/:id/read`.
+**Recovery, polls, notifications**: `POST /api/recovery/cancel-class` `{ sessionId, reason? }`; `POST /api/recovery/schedule-makeup` `{ opportunityId }`; `POST /api/recovery/decline` `{ opportunityId }`; `POST /api/voting/polls` `{ sectionId, courseId?, question, options[2..6] }`; `POST /api/voting/polls/:id/close`; `POST /api/voting/vote` `{ pollId, optionId }` (a voter may change their choice while the poll is active); `POST /api/notifications` `{ title, message, type?, category?, recipientRole? }` (10 per minute); `POST /api/notifications/:id/read`.
+
+**Administrative / review**: `GET /api/admin/users`; `POST /api/admin/users`; `PATCH /api/admin/users/:id`; `DELETE /api/admin/users/:id`; `POST /api/admin/users/:id/revoke-sessions`; `GET /api/admin/sessions`; `POST /api/timetable/department-approval` (HOD department sign-off; does not replace final Admin approval).
 
 ## Rate limits
 

@@ -262,10 +262,11 @@ for (let c = 1; c <= 80; c++) {
   const topic = courseTopics[(c - 1) % courseTopics.length];
   const dept = DEPARTMENTS[(c - 1) % DEPARTMENTS.length];
   const isLabRequired = c % 2 === 0;
+  const coursePrefix: Record<string, string> = { CSED: 'CS', ECED: 'EC', MED: 'ME', CED: 'CE', EED: 'EE' };
 
   COURSES.push({
     id: `CS${300 + c}`,
-    code: `CS${300 + c}`,
+    code: `${coursePrefix[dept.code] || dept.code}${300 + c}`,
     name: `${topic} ${c > 16 ? `Advanced II` : 'I'}`,
     departmentId: dept.id,
     credits: 4,

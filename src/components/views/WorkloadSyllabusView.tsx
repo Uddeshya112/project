@@ -8,17 +8,6 @@ import {
   Info
 } from 'lucide-react';
 
-// Sample content shown until real data exists — edit freely.
-const SAMPLE_EXAM_COUNTDOWN = 'Semester Exam in 21 Days';
-
-function SampleBadge() {
-  return (
-    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-stone-100 dark:bg-zinc-800 text-stone-500 dark:text-zinc-400 border border-[#E5E2D9] dark:border-zinc-700 font-sans">
-      Sample
-    </span>
-  );
-}
-
 /** Length of a period in hours from its "HH:MM" start/end (1 if unparseable). */
 const slotHours = (slot?: TimeSlot) => {
   if (!slot) return 1;
@@ -67,7 +56,7 @@ export function WorkloadSyllabusView() {
             <span>Syllabus Completion & Exam Readiness Radar</span>
           </h2>
           <span className="text-xs text-stone-500 dark:text-zinc-400 font-mono flex items-center gap-1.5">
-            {SAMPLE_EXAM_COUNTDOWN} <SampleBadge />
+            Progress uses timetable sessions marked Completed or Cancelled.
           </span>
         </div>
 
@@ -80,21 +69,24 @@ export function WorkloadSyllabusView() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {courses.map(course => {
             const faculty = facultyMembers.find(f => f.id === course.primaryFacultyId);
-            const remaining = Math.max(0, course.totalSemesterHours - course.completedHours);
+            const courseSessions = sessions.filter(session => session.courseId === course.id);
+            const completedHours = courseSessions.filter(session => session.status === 'Completed').reduce((sum, session) => sum + slotHours(slotById.get(session.timeSlotId)), 0);
+            const cancelledHours = courseSessions.filter(session => session.status === 'Cancelled').reduce((sum, session) => sum + slotHours(slotById.get(session.timeSlotId)), 0);
+            const remaining = Math.max(0, course.totalSemesterHours - completedHours);
             const completionPercent = course.totalSemesterHours > 0
-              ? Math.min(100, Math.round((course.completedHours / course.totalSemesterHours) * 100))
+              ? Math.min(100, Math.round((completedHours / course.totalSemesterHours) * 100))
               : 0;
 
             // Risk from cancelled (not yet recovered) hours
             let risk: 'GREEN' | 'YELLOW' | 'RED' = 'GREEN';
             let riskNote = 'No cancelled hours';
 
-            if (course.cancelledHours >= 2) {
+            if (cancelledHours >= 2) {
               risk = 'RED';
-              riskNote = `${course.cancelledHours}h cancelled — make-up classes needed`;
-            } else if (course.cancelledHours === 1) {
+              riskNote = `${fmtHrs(cancelledHours)}h cancelled — make-up classes needed`;
+            } else if (cancelledHours > 0) {
               risk = 'YELLOW';
-              riskNote = '1h cancelled — schedule a make-up class';
+              riskNote = `${fmtHrs(cancelledHours)}h cancelled — schedule a make-up class`;
             }
 
             return (
@@ -150,11 +142,11 @@ export function WorkloadSyllabusView() {
                   </div>
                   <div className="p-1.5 bg-white dark:bg-zinc-950/60 rounded border border-[#E5E2D9] dark:border-zinc-800">
                     <span className="text-stone-500 dark:text-zinc-500 block">Done</span>
-                    <span className="text-emerald-700 dark:text-emerald-400 font-bold">{course.completedHours}h</span>
+                    <span className="text-emerald-700 dark:text-emerald-400 font-bold">{fmtHrs(completedHours)}h</span>
                   </div>
                   <div className="p-1.5 bg-white dark:bg-zinc-950/60 rounded border border-[#E5E2D9] dark:border-zinc-800">
                     <span className="text-stone-500 dark:text-zinc-500 block">Cancelled</span>
-                    <span className="text-rose-700 dark:text-rose-400 font-bold">{course.cancelledHours}h</span>
+                    <span className="text-rose-700 dark:text-rose-400 font-bold">{fmtHrs(cancelledHours)}h</span>
                   </div>
                   <div className="p-1.5 bg-white dark:bg-zinc-950/60 rounded border border-[#E5E2D9] dark:border-zinc-800">
                     <span className="text-stone-500 dark:text-zinc-500 block">Remain</span>

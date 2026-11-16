@@ -85,6 +85,7 @@ export function Sidebar({
 
   const isStudent = currentWorkspace === 'Student' || currentWorkspace === 'CR';
   const isFaculty = currentWorkspace === 'Faculty';
+  const isHod = currentWorkspace === 'HOD';
   const isCoordinator = currentWorkspace === 'Coordinator';
   const isAdmin = currentWorkspace === 'Admin';
 
@@ -99,7 +100,7 @@ export function Sidebar({
               Thapar Timetable
             </h2>
             <p className="text-[10px] text-stone-500 dark:text-zinc-400 mt-0.5 font-medium">
-              {isStudent ? 'Academic Schedule' : isFaculty ? 'Faculty Portal' : isAdmin ? 'Admin Console' : 'Coordinator'}
+              {isStudent ? 'Academic Schedule' : isFaculty ? 'Faculty Portal' : isHod ? 'HOD Portal' : isAdmin ? 'Admin Console' : 'Coordinator'}
             </p>
           </div>
         </div>
@@ -230,6 +231,22 @@ export function Sidebar({
               <User className="h-4 w-4 shrink-0" />
               <span>My Availability</span>
             </button>
+          </div>
+        )}
+
+        {isHod && (
+          <div className="space-y-1">
+            {([
+              ['overview', 'Department Overview', Users],
+              ['grid', 'Timetable', Clock],
+              ['syllabus', 'Syllabus Progress', BookOpen],
+              ['recovery', 'Requests & Disruptions', Bell],
+            ] as const).map(([view, label, Icon]) => (
+              <button key={view} onClick={() => handleSelect(view)} className={`w-full text-left px-3 py-2 rounded-lg transition-all font-medium flex items-center gap-2 ${activeView === view ? 'bg-[#8C1B2E] text-white font-semibold shadow-xs' : 'hover:bg-stone-100 dark:hover:bg-zinc-800 text-stone-800 dark:text-zinc-200'}`}>
+                <Icon className="h-4 w-4 shrink-0" />
+                <span>{label}</span>
+              </button>
+            ))}
           </div>
         )}
 

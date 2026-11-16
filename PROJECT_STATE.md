@@ -151,3 +151,30 @@
 - **VERIFIED:** Auth, session-cookie, CSRF, and CSP checks passed in the end-to-end audit, including logout revocation.
 - **UNVERIFIED / FAILED GATE:** Full end-to-end audit passed 55/56 checks. The remaining failure was a timing benchmark: solver p95 62.23 ms against the existing 50 ms threshold. The benchmark varied substantially between runs; no threshold was weakened.
 - **UNVERIFIED:** No production credentials, hosted deployment, real Supabase project, database migration, browser OAuth provider, or production session was exercised.
+
+## 8. Current Session — Portal Sync and Runtime Repair (2026-11-17)
+
+### Scope and changes
+
+- **REQUESTED SCOPE:** Address the attached end-to-end audit of login/session stability, timetable persistence and cross-portal sync, demo reset, admin user APIs, HOD workspace, polls, and portal UI defects.
+- **VERIFIED IN CODE:** The active legacy `server.ts` runtime uses `src/server/supabaseStore.ts` in memory; it is not wired to the documented modular `src/server/store.ts`. Added a versioned `legacy_academic_runtime` JSONB persistence document in `intellischedule.app_state`, with serialized writes and conflict/error responses. Production startup waits for DB-backed initialization before listening.
+- **VERIFIED IN CODE:** Added server-validated class creation, wired manual slot entry to wait for the persisted result, replaced invalid form defaults with seeded entity IDs, and fixed equal timetable table columns.
+- **VERIFIED IN CODE:** Added demo dataset reset, admin user/session endpoints, HOD department workspace and department sign-off endpoint. Final timetable approval remains Admin-only; Coordinator publication is supported as requested. HOD sign-off is recorded separately and cannot publish globally.
+- **VERIFIED IN CODE:** Bootstrap refresh runs every 10 seconds and accepts empty arrays, student timetable visibility follows the published state, poll vote changes persist with per-user option state, and poll create/close endpoints persist to the shared store.
+- **VERIFIED IN CODE:** Removed fake sample requests, student announcements/mentor/roll ranges/syllabus text, and attendance values. Syllabus completion/cancellation display is computed from session statuses; non-CSED course display codes now use department prefixes.
+
+### Verification and live services
+
+- **VERIFIED:** `npx tsc --noEmit --pretty false` passed after the current code changes.
+- **VERIFIED:** `npm run build` passed; Vite reported the existing large-chunk warning.
+- **VERIFIED:** Offline unit tests passed 17/17 (`password.test.ts`, `engine.test.ts`, `persistent_state.test.ts`).
+- **BLOCKED BY SANDBOX:** Full `npm test` and HTTP integration tests could not connect to `127.0.0.1`; the OS returned `EACCES`, despite the local test server reporting that it was listening. The full suite timed out waiting for `/api/health/live`. The HTTP tests in the attempted direct subset failed for the same network restriction; these are not counted as product failures.
+- **VERIFIED FROM RENDER CONNECTOR:** The Render service for `Uddeshya112/project` is `Tiet-timetable`, configured for one instance and auto-deploy from `main`; current live commit is `a2e1d9b`. There is no Render Postgres instance in the connected workspace. Recent Render application log retrieval returned 503, so production request logs were unavailable.
+- **REQUIRES USER ACTION:** Vercel denied project access for team `uddeshya` (403). A single-use team consent link was generated; after approval, Vercel deployment/runtime checks can be retried. No Supabase management connector is available in this session, so Supabase project/database health and production data were not directly verified.
+- **NOT CHANGED:** No deployment, environment variables, database schema, or remote branch was changed. All code changes remain local on `fix/full-e2e-sync`.
+
+### Remaining gaps / release risks
+
+- **UNVERIFIED:** No live browser-to-API-to-Supabase flow was completed; Vercel team access and direct Supabase inspection are still pending.
+- **NOT IMPLEMENTED IN THIS SESSION:** Route-based URLs/deep-link Back/Forward navigation, PDF/CSV/ICS timetable exports, applying a winning poll to the timetable, dynamic What-If solver output, coordinator/faculty poll creation UI, and persisted approve/reject request decisions still need work.
+- **REQUIRES REVIEW:** The compatibility persistence layer stores all legacy academic data in one JSON document and requires a single active app instance. The modular normalized store remains unwired; revisit this design before scaling.

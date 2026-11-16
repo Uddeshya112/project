@@ -16,33 +16,6 @@ import {
   Printer,
 } from 'lucide-react';
 
-// Sample content shown until real data exists — edit freely.
-const SAMPLE_MENTOR = 'Prof. Arvind Sharma';
-// Sample roll-number range per lab batch, in batch order — edit freely.
-const SAMPLE_BATCH_ROLL_RANGES = ['102303001–102303026', '102303027–102303052'];
-const SAMPLE_ANNOUNCEMENTS = [
-  {
-    title: 'DBMS Lab Practical Assignment Submission',
-    when: 'Yesterday',
-    body: 'Batch A1 practical scheduled for Thursday 13:00 will take place in Turing Lab 301. Bring your completed Lab 3 queries.',
-  },
-  {
-    title: 'Rescheduled DBMS Lecture Consensus Vote',
-    when: '2 days ago',
-    body: "Voting for Monday's cancelled DBMS class is currently live on your student dashboard. Please submit your preferred time.",
-  },
-];
-const SAMPLE_SYLLABUS_TEXT =
-  'Relational Algebra, SQL DDL/DML, Normalization (1NF to BCNF), Transaction Processing (ACID), Concurrency Control, and Indexing with B+ Trees.';
-
-function SampleBadge() {
-  return (
-    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-stone-100 dark:bg-zinc-800 text-stone-500 dark:text-zinc-400 border border-[#E5E2D9] dark:border-zinc-700">
-      Sample
-    </span>
-  );
-}
-
 const dayName = (d: Date) => d.toLocaleDateString('en-US', { weekday: 'long' });
 
 export function StudentPortalView() {
@@ -57,6 +30,7 @@ export function StudentPortalView() {
     facultyMembers,
     rooms,
     polls,
+    notifications,
     votePoll,
     activeView,
     setActiveView,
@@ -162,6 +136,11 @@ export function StudentPortalView() {
   const subName = (id?: string) => (id ? currentSection.subSections?.find(x => x.id === id)?.name : undefined);
   const isNowSlot = (day: string, t: TimeSlot) => day === todayName && t.startTime <= nowTime && nowTime < t.endTime;
   const homeRoom = currentSection.homeRoomId ? roomOf(currentSection.homeRoomId) : undefined;
+  const facultyMentor = sectionSessions.map(session => facultyMembers.find(faculty => faculty.id === session.facultyId)).find(Boolean);
+  const sectionAnnouncements = notifications.filter(item =>
+    ['cancellation', 'makeup_request', 'poll_created'].includes(item.type) &&
+    item.message.toLowerCase().includes(currentSection.name.toLowerCase()),
+  );
 
   // Today
   const todaySessions = isWorkingDay ? sectionSessions.filter(s => s.day === todayName) : [];
@@ -512,7 +491,7 @@ export function StudentPortalView() {
                   Choose a replacement class time
                 </h2>
                 <p className="text-xs text-stone-500 dark:text-zinc-400 mt-0.5">
-                  Select the time that works best for your section.
+                  Cast or change your vote until the poll closes.
                 </p>
               </div>
 
@@ -557,14 +536,14 @@ export function StudentPortalView() {
                               <div className="shrink-0">
                                 <button
                                   onClick={() => handleVote(poll.id, opt.id)}
-                                  disabled={poll.userHasVoted || votingPollId === poll.id}
+                                  disabled={isSelected || votingPollId === poll.id}
                                   className={`px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
                                     isSelected
                                       ? 'bg-[#8C1B2E] text-white cursor-default'
                                       : 'bg-white dark:bg-zinc-800 border border-[#E5E2D9] dark:border-zinc-700 hover:bg-[#8C1B2E] hover:text-white text-stone-800 dark:text-zinc-200 disabled:opacity-50 disabled:pointer-events-none'
                                   }`}
                                 >
-                                  {isSelected ? 'Selected' : 'Select this time'}
+                                  {isSelected ? 'Selected' : poll.userHasVoted ? 'Change to this time' : 'Select this time'}
                                 </button>
                               </div>
                             </div>
@@ -576,7 +555,7 @@ export function StudentPortalView() {
                     {poll.userHasVoted && (
                       <div className="p-3 rounded-lg bg-[#F4F2EC] dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 text-stone-700 dark:text-zinc-300 text-xs flex items-center gap-2">
                         <CheckCircle2 className="h-4 w-4 text-[#8C1B2E] shrink-0" />
-                        <span>Your choice has been recorded.</span>
+                        <span>Your vote is recorded. You can change it while the poll is active.</span>
                       </div>
                     )}
                   </div>
@@ -977,10 +956,10 @@ export function StudentPortalView() {
 
             <div className="p-4 rounded-xl bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800">
               <span className="text-[11px] text-stone-500 dark:text-zinc-400 mb-0.5 flex items-center gap-1.5">
-                Faculty Mentor <SampleBadge />
+                Faculty Mentor
               </span>
               <span className="text-xs font-semibold text-stone-900 dark:text-zinc-100 truncate block">
-                {SAMPLE_MENTOR}
+                {facultyMentor?.name || 'Not assigned'}
               </span>
             </div>
           </div>
@@ -1000,18 +979,11 @@ export function StudentPortalView() {
                   const labRooms = [
                     ...new Set(sessions.filter(s => s.subSectionId === sub.id).map(s => roomOf(s.roomId)?.name).filter(Boolean)),
                   ].join(', ');
-                  const rollRange = SAMPLE_BATCH_ROLL_RANGES[i];
                   return (
                     <div key={sub.id} className="p-4 rounded-xl bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800">
                       <div className="flex items-center justify-between gap-2 font-semibold text-stone-900 dark:text-zinc-100 mb-1">
                         <span className="flex flex-wrap items-center gap-1.5">
                           <span>Batch {sub.name}</span>
-                          {rollRange && (
-                            <>
-                              <span className="font-normal text-stone-500 dark:text-zinc-400">(Roll No {rollRange})</span>
-                              <SampleBadge />
-                            </>
-                          )}
                         </span>
                         {sub.id === subSectionId && (
                           <span className="text-[#8C1B2E] dark:text-red-400 text-[11px] font-bold shrink-0">Your Batch</span>
@@ -1030,20 +1002,13 @@ export function StudentPortalView() {
           {/* Section Notices */}
           <div className="space-y-3">
             <h3 className="text-sm font-bold text-stone-900 dark:text-zinc-100 font-serif flex items-center gap-2">
-              Section Announcements <SampleBadge />
+              Section Announcements
             </h3>
             <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl divide-y divide-[#E5E2D9] dark:divide-zinc-800 text-xs">
-              {SAMPLE_ANNOUNCEMENTS.map(a => (
-                <div key={a.title} className="p-4 space-y-1">
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-stone-900 dark:text-zinc-100">
-                      {a.title}
-                    </span>
-                    <span className="text-[10px] text-stone-400">{a.when}</span>
-                  </div>
-                  <p className="text-stone-600 dark:text-zinc-400 leading-relaxed">
-                    {a.body}
-                  </p>
+              {sectionAnnouncements.length === 0 ? <p className="p-4 text-stone-500 dark:text-zinc-400">No section announcements.</p> : sectionAnnouncements.map(item => (
+                <div key={item.id} className="p-4 space-y-1">
+                  <div className="flex items-center justify-between"><span className="font-semibold text-stone-900 dark:text-zinc-100">{item.title}</span><time className="text-[10px] text-stone-400">{new Date(item.timestamp).toLocaleString()}</time></div>
+                  <p className="text-stone-600 dark:text-zinc-400 leading-relaxed">{item.message}</p>
                 </div>
               ))}
             </div>
@@ -1182,10 +1147,10 @@ export function StudentPortalView() {
 
               <div className="p-3 bg-white dark:bg-zinc-950 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 space-y-1">
                 <span className="text-[11px] font-semibold text-stone-900 dark:text-zinc-100 flex items-center gap-1.5">
-                  Course Syllabus Coverage <SampleBadge />
+                  Course Syllabus Coverage
                 </span>
                 <p className="text-[11px] text-stone-500 dark:text-zinc-400 leading-relaxed">
-                  {SAMPLE_SYLLABUS_TEXT}
+                  Syllabus details have not been entered for this course.
                 </p>
               </div>
             </div>

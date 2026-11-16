@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useTimetable } from '../../context/TimetableContext';
 import { TIME_SLOTS } from '../../lib/initialData';
 import { DayOfWeek, ClassSession } from '../../types';
@@ -43,9 +43,9 @@ export function TimetableGridView() {
   const [cancellationReasonInput, setCancellationReasonInput] = useState('');
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [scheduleSlotTarget, setScheduleSlotTarget] = useState<{ day: DayOfWeek; timeSlotId: string } | null>(null);
-  const [newCourseId, setNewCourseId] = useState('CS501');
-  const [newFacultyId, setNewFacultyId] = useState('fac-sharma');
-  const [newRoomId, setNewRoomId] = useState('room-204');
+  const [newCourseId, setNewCourseId] = useState(() => courses.find(c => c.code === 'CS501')?.id || courses[0]?.id || '');
+  const [newFacultyId, setNewFacultyId] = useState(() => facultyMembers.find(f => f.id === 'fac-0001')?.id || facultyMembers[0]?.id || '');
+  const [newRoomId, setNewRoomId] = useState(() => rooms.find(r => r.name === 'LT-101')?.id || rooms[0]?.id || '');
   const [newSectionId, setNewSectionId] = useState('sec-cse-a');
   const [newType, setNewType] = useState<'Lecture' | 'Lab' | 'Tutorial'>('Lecture');
   const [scheduleError, setScheduleError] = useState<string | null>(null);
@@ -55,6 +55,13 @@ export function TimetableGridView() {
   const [publishFeedback, setPublishFeedback] = useState<string | null>(null);
 
   const days: DayOfWeek[] = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+
+  useEffect(() => {
+    if (!courses.some(c => c.id === newCourseId)) setNewCourseId(courses.find(c => c.code === 'CS501')?.id || courses[0]?.id || '');
+    if (!facultyMembers.some(f => f.id === newFacultyId)) setNewFacultyId(facultyMembers.find(f => f.id === 'fac-0001')?.id || facultyMembers[0]?.id || '');
+    if (!rooms.some(r => r.id === newRoomId)) setNewRoomId(rooms.find(r => r.name === 'LT-101')?.id || rooms[0]?.id || '');
+    if (!sections.some(s => s.id === newSectionId)) setNewSectionId(sections.find(s => s.name === 'CSE-A')?.id || sections[0]?.id || '');
+  }, [courses, facultyMembers, rooms, sections, newCourseId, newFacultyId, newRoomId, newSectionId]);
 
   const hardViolationsCount = validationReport.hardViolationsCount ?? validationReport.errorCount;
   const canPublish = sessions.length > 0 && hardViolationsCount === 0;
@@ -275,7 +282,7 @@ export function TimetableGridView() {
       {/* Timetable Grid Table (Canonical Matrix) */}
       <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl overflow-hidden shadow-xs">
         <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-left text-xs min-w-[850px]">
+          <table className="w-full table-fixed border-collapse text-left text-xs min-w-[850px]">
             <thead>
               <tr className="bg-[#F4F2EC] dark:bg-zinc-950/70 border-b border-[#E5E2D9] dark:border-zinc-800 text-stone-800 dark:text-zinc-300">
                 <th className="p-3 font-semibold w-24 text-stone-500 dark:text-zinc-400 border-r border-[#E5E2D9] dark:border-zinc-800 font-mono text-[11px]">
@@ -672,8 +679,9 @@ export function TimetableGridView() {
                 Cancel
               </button>
               <button
-                onClick={() => {
-                  const result = addSession({
+                onClick={async () => {
+                  setScheduleError(null);
+                  const result = await addSession({
                     courseId: newCourseId,
                     facultyId: newFacultyId,
                     roomId: newRoomId,

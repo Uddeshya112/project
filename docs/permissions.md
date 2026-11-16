@@ -20,12 +20,13 @@ Y = allowed, - = refused (403). "own" = restricted by the server to the user's o
 | Student roster, audit log, version details, solver benchmark | Y | Y | Y | - | - | - |
 | Academic data create/update/delete, bulk groups, subgroups, academic year, Excel import, toggle soft constraints | Y | Y | - | - | - | - |
 | Generate, select routine, move, swap, lock/unlock, restore version, set Draft/Review | Y | Y | - | - | - | - |
-| Approve, publish | Y | - | - | - | - | - |
+| Final approval / publish (`/api/timetable/approve`, `/api/timetable/publish`) | Y | Y (publish) | - | - | - | - |
+| Department sign-off (`/api/timetable/department-approval`) | - | - | own department | - | - | - |
 | Add a class (`POST /api/timetable/sessions`) | Y (draft) | Y (draft) | Y (draft) | own (live) | - | - |
 | Cancel a class, accept or decline a make-up option | Y | Y | Y | own | - | - |
 | Toggle unavailable periods | any faculty | any faculty | any faculty | own | - | - |
-| Open a poll | any section | any section | any section | - | own section | - |
-| Vote in a poll (once) | - | - | - | - | own section | own section |
+| Open / close a poll | any section | any section | any section | any section | own section | - |
+| Vote or change own vote while open | - | - | - | - | own section | own section |
 | Post a request / announcement | Y | Y | Y | Y | Y | - |
 | Users & Roles, active sessions (`/api/admin/*`) | Y | - | - | - | - | - |
 
@@ -44,9 +45,9 @@ The server returns the workspaces each role may open (`authorizedWorkspaces`); t
 | --- | --- |
 | Super Admin, College Admin | Admin, Coordinator |
 | Coordinator | Coordinator, Faculty |
-| HOD | Coordinator, Faculty |
+| HOD | HOD, Faculty |
 | Faculty | Faculty |
 | Class Representative | Student, CR |
 | Student | Student |
 
-Workspaces only decide what the UI shows. What a user can change is decided by the matrix above, so an HOD in the Coordinator workspace still cannot edit master data.
+Workspaces only decide what the UI shows. What a user can change is decided by the matrix above, so an HOD in the HOD workspace can submit a department sign-off but cannot publish or edit master data.
