@@ -11,7 +11,7 @@ export interface Db {
   close(): Promise<void>;
 }
 
-const SCHEMA_FILE = path.join(process.cwd(), 'supabase', 'migrations', '20261006000000_runtime_store.sql');
+const MIGRATIONS_DIR = path.join(process.cwd(), 'supabase', 'migrations');
 
 /**
  * DATABASE_URL: Supabase Postgres connection string (Project Settings -> Database).
@@ -19,10 +19,13 @@ const SCHEMA_FILE = path.join(process.cwd(), 'supabase', 'migrations', '20261006
  */
 export async function connectDb(url: string): Promise<Db> {
   const db = url.startsWith('pglite:') ? await connectPglite(url.slice('pglite:'.length)) : await connectPg(url);
-  const schema = fs.readFileSync(SCHEMA_FILE, 'utf8');
-  await db.tx(async (q) => {
-    await q(schema);
-  });
+  const migrations = fs.readdirSync(MIGRATIONS_DIR)
+    .filter((file) => file.endsWith('.sql'))
+    .sort();
+  for (const migration of migrations) {
+    const schema = fs.readFileSync(path.join(MIGRATIONS_DIR, migration), 'utf8');
+    await db.tx((q) => q(schema));
+  }
   return db;
 }
 
