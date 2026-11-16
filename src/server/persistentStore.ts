@@ -296,8 +296,7 @@ export class PersistentStore {
         if (!dbUrl) {
           throw new Error('[PERSISTENT STORE] Postgres is required in production (DATABASE_URL missing). Refusing to boot.');
         }
-        // Lazy initialize or connect
-        throw new Error('[PERSISTENT STORE] Postgres DATABASE_URL provided in production must be connected via initializePostgresBackend().');
+        throw new Error('[PERSISTENT STORE] Production Postgres backend was not initialized.');
       }
 
       this.fileBackend = new FileBackend();
@@ -577,4 +576,20 @@ export class PersistentStore {
   }
 }
 
-export const persistentStore = new PersistentStore();
+async function createPersistentStore(): Promise<PersistentStore> {
+  if (process.env.NODE_ENV !== 'production') return new PersistentStore();
+
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    throw new Error('[PERSISTENT STORE] Postgres is required in production (DATABASE_URL missing). Refusing to boot.');
+  }
+
+  const { connectDb } = await import('./db');
+  const db = await connectDb(databaseUrl);
+  const store = new PersistentStore(new PostgresBackend(db));
+  await store.initAsync();
+  return store;
+}
+
+// Wait for the durable session store and its schema before server.ts can accept requests.
+export const persistentStore = await createPersistentStore();
