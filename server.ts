@@ -702,7 +702,7 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
   let user = usersDatabase.get(normalizedEmail);
 
   if (user && user.passwordHash !== 'SUPABASE_AUTH_MANAGED') {
-    if (user.isDemoUser && process.env.NODE_ENV === 'production' && (user.roleCode === 'COLLEGE_ADMIN' || user.roleCode === 'COORDINATOR')) {
+    if (user.isDemoUser && process.env.NODE_ENV === 'production' && process.env.ALLOW_DEMO_IN_PRODUCTION !== 'true' && (user.roleCode === 'COLLEGE_ADMIN' || user.roleCode === 'COORDINATOR')) {
       return res.status(403).json({
         success: false,
         message: 'Administrative and coordinator demo accounts are prohibited in production.',
@@ -844,7 +844,7 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
       user.id = authUser.id;
     }
 
-    if (user.isDemoUser && process.env.NODE_ENV === 'production' && (user.roleCode === 'COLLEGE_ADMIN' || user.roleCode === 'COORDINATOR')) {
+    if (user.isDemoUser && process.env.NODE_ENV === 'production' && process.env.ALLOW_DEMO_IN_PRODUCTION !== 'true' && (user.roleCode === 'COLLEGE_ADMIN' || user.roleCode === 'COORDINATOR')) {
       return res.status(403).json({
         success: false,
         message: 'Administrative and coordinator demo accounts are prohibited in production.',
@@ -909,7 +909,7 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
     });
   }
 
-  if (user.isDemoUser && process.env.NODE_ENV === 'production' && (user.roleCode === 'COLLEGE_ADMIN' || user.roleCode === 'COORDINATOR')) {
+  if (user.isDemoUser && process.env.NODE_ENV === 'production' && process.env.ALLOW_DEMO_IN_PRODUCTION !== 'true' && (user.roleCode === 'COLLEGE_ADMIN' || user.roleCode === 'COORDINATOR')) {
     return res.status(403).json({
       success: false,
       message: 'Administrative and coordinator demo accounts are prohibited in production.',
@@ -1198,7 +1198,7 @@ app.get('/api/demo/status', (_req: Request, res: Response) => {
     },
   ];
 
-  if (isProd) {
+  if (isProd && !allowInProd) {
     accounts = accounts.filter(a => a.roleKey !== 'Admin' && a.roleKey !== 'Coordinator');
   }
 
@@ -1232,7 +1232,7 @@ app.post('/api/auth/demo-login', async (req: Request, res: Response) => {
   }
 
   const { roleKey } = req.body;
-  if (isProd && (roleKey === 'Admin' || roleKey === 'Coordinator')) {
+  if (isProd && !allowInProd && (roleKey === 'Admin' || roleKey === 'Coordinator')) {
     return res.status(403).json({
       success: false,
       message: 'Administrative and coordinator demo roles are prohibited in production.',
@@ -1277,7 +1277,7 @@ app.post('/api/auth/demo-login', async (req: Request, res: Response) => {
     });
   }
 
-  if (isProd && (user.roleCode === 'COLLEGE_ADMIN' || user.roleCode === 'COORDINATOR')) {
+  if (isProd && !allowInProd && (user.roleCode === 'COLLEGE_ADMIN' || user.roleCode === 'COORDINATOR')) {
     return res.status(403).json({
       success: false,
       message: 'Administrative and coordinator demo roles are prohibited in production.',
