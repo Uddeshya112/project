@@ -8,7 +8,9 @@ export function checkMailerConfiguration() {
 
   if (!smtpUrl && !resendApiKey && !mailerServiceUrl) {
     if (isProd) {
-      throw new Error('[MAILER FATAL] No email provider configured in production (SMTP_URL, RESEND_API_KEY, or MAILER_SERVICE_URL required).');
+      // Email delivery is optional for application startup: missing mail config must not
+      // take down login or other routes that do not send email.
+      console.warn('[MAILER NOTICE] No email provider configured in production. Email-dependent actions will not deliver messages.');
     } else {
       console.info('[MAILER NOTICE] No email provider configured in development. Links will be printed to server console.');
     }
