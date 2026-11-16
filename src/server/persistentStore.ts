@@ -119,7 +119,9 @@ export class FileBackend implements StateBackend {
   }
 
   public flushSync(data?: any): void {
-    if (data !== undefined) this.pendingData = data;
+    if (data !== undefined) {
+      this.pendingData = data;
+    }
     if (this.saveTimeout) {
       clearTimeout(this.saveTimeout);
       this.saveTimeout = null;

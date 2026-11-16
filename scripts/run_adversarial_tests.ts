@@ -25,12 +25,17 @@ function recordTest(passed: boolean, category: string, name: string, httpStatus:
   }
 }
 
+/** Session is delivered as an HttpOnly cookie; return the "name=value" pair for use in a Cookie request header. */
+function sessionCookieFrom(res: Response): string {
+  return (res.headers.get('set-cookie') || '').split(';')[0] || '';
+}
+
 async function runAdversarialSuite() {
   console.log('================================================================');
   console.log('INTELLISCHEDULE ADVERSARIAL RED-TEAM VERIFICATION SUITE');
   console.log('================================================================\n');
 
-  const BASE_URL = 'http://localhost:3000';
+  const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
 
   // -------------------------------------------------------------
   // SETUP: Authenticate distinct personas
@@ -48,7 +53,7 @@ async function runAdversarialSuite() {
     body: JSON.stringify({ email: 'aarav.m@thapar.edu', password: seedPassword }),
   });
   const studentData = await studentLoginRes.json();
-  const studentToken = studentData.token;
+  const studentCookie = sessionCookieFrom(studentLoginRes);
 
   // Faculty: Prof. Arvind Sharma
   const facultyLoginRes = await fetch(`${BASE_URL}/api/auth/login`, {
@@ -57,7 +62,7 @@ async function runAdversarialSuite() {
     body: JSON.stringify({ email: 'a.sharma@thapar.edu', password: seedPassword }),
   });
   const facultyData = await facultyLoginRes.json();
-  const facultyToken = facultyData.token;
+  const facultyCookie = sessionCookieFrom(facultyLoginRes);
 
   // Coordinator: Dr. K. N. Murthy
   const coordLoginRes = await fetch(`${BASE_URL}/api/auth/login`, {
@@ -66,7 +71,7 @@ async function runAdversarialSuite() {
     body: JSON.stringify({ email: 'kn.murthy@thapar.edu', password: seedPassword }),
   });
   const coordData = await coordLoginRes.json();
-  const coordToken = coordData.token;
+  const coordCookie = sessionCookieFrom(coordLoginRes);
 
   // Admin / Dean: Dr. Vikram Sengupta
   const adminLoginRes = await fetch(`${BASE_URL}/api/auth/login`, {
@@ -75,7 +80,7 @@ async function runAdversarialSuite() {
     body: JSON.stringify({ email: 'dean@thapar.edu', password: seedPassword }),
   });
   const adminData = await adminLoginRes.json();
-  const adminToken = adminData.token;
+  const adminCookie = sessionCookieFrom(adminLoginRes);
 
   console.log(`  ✓ Personas Authenticated: Student, Faculty, Coordinator, Admin.\n`);
 
@@ -127,14 +132,14 @@ async function runAdversarialSuite() {
   // 3.1 Student attempting Timetable Generation
   const studentGen = await fetch(`${BASE_URL}/api/timetable/generate`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${studentToken}` },
+    headers: { Cookie: studentCookie },
   });
   recordTest(studentGen.status === 403, 'Privilege Escalation', 'Student attempting master timetable generation', studentGen.status, 403);
 
   // 3.2 Student attempting Master Timetable Publish
   const studentPub = await fetch(`${BASE_URL}/api/timetable/publish`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${studentToken}`, 'Content-Type': 'application/json' },
+    headers: { Cookie: studentCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({ versionId: 'V1.0' }),
   });
   recordTest(studentPub.status === 403, 'Privilege Escalation', 'Student attempting master timetable publishing', studentPub.status, 403);
@@ -142,7 +147,7 @@ async function runAdversarialSuite() {
   // 3.3 Student attempting Department Creation
   const studentDept = await fetch(`${BASE_URL}/api/academic/departments`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${studentToken}`, 'Content-Type': 'application/json' },
+    headers: { Cookie: studentCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: 'Malicious Department', code: 'MAL_DEPT' }),
   });
   recordTest(studentDept.status === 403, 'Privilege Escalation', 'Student attempting department creation', studentDept.status, 403);
@@ -150,7 +155,7 @@ async function runAdversarialSuite() {
   // 3.4 Student attempting Course Allocation
   const studentAlloc = await fetch(`${BASE_URL}/api/academic/allocations`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${studentToken}`, 'Content-Type': 'application/json' },
+    headers: { Cookie: studentCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({ courseId: 'CS501', facultyId: 'fac-sharma', sectionId: 'sec-cse-a' }),
   });
   recordTest(studentAlloc.status === 403, 'Privilege Escalation', 'Student attempting course allocation modification', studentAlloc.status, 403);
@@ -158,7 +163,7 @@ async function runAdversarialSuite() {
   // 3.5 Faculty attempting Timetable Publish (Coordinator/Dean only)
   const facultyPub = await fetch(`${BASE_URL}/api/timetable/publish`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${facultyToken}`, 'Content-Type': 'application/json' },
+    headers: { Cookie: facultyCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({ versionId: 'V1.0' }),
   });
   recordTest(facultyPub.status === 403, 'Privilege Escalation', 'Faculty attempting timetable publishing', facultyPub.status, 403);
@@ -166,7 +171,7 @@ async function runAdversarialSuite() {
   // 3.6 Coordinator attempting Timetable Publish (Only Dean/Admin can publish)
   const coordPub = await fetch(`${BASE_URL}/api/timetable/publish`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${coordToken}`, 'Content-Type': 'application/json' },
+    headers: { Cookie: coordCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({ versionId: 'V1.0' }),
   });
   recordTest(coordPub.status === 403, 'Privilege Escalation', 'Coordinator attempting timetable publishing (Admin/Dean only)', coordPub.status, 403);
@@ -220,11 +225,11 @@ async function runAdversarialSuite() {
     body: JSON.stringify({ email: injectedRegEmail, password: 'AttackerPassword2026!' }),
   });
   const injectLoginData = await injectLoginRes.json();
-  const injectedToken = injectLoginData.token;
+  const injectedCookie = sessionCookieFrom(injectLoginRes);
   
   const injectAdminAccess = await fetch(`${BASE_URL}/api/timetable/publish`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${injectedToken}` },
+    headers: { Cookie: injectedCookie },
   });
   recordTest(
     injectLoginData.roleCode === 'STUDENT' && injectAdminAccess.status === 403,
@@ -294,7 +299,7 @@ async function runAdversarialSuite() {
   // 7.1 Coordinator generates timetable
   const coordGen = await fetch(`${BASE_URL}/api/timetable/generate`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${coordToken}` },
+    headers: { Cookie: coordCookie },
   });
   const coordGenData = await coordGen.json();
   recordTest(coordGen.status === 200, 'Authorized Role', 'Coordinator successfully generates draft timetable', coordGen.status, 200);
@@ -302,7 +307,7 @@ async function runAdversarialSuite() {
   // 7.2 Admin / Dean approves and publishes timetable
   const adminPub = await fetch(`${BASE_URL}/api/timetable/publish`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${adminToken}`, 'Content-Type': 'application/json' },
+    headers: { Cookie: adminCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({ versionId: 'V1.0' }),
   });
   recordTest(adminPub.status === 200, 'Authorized Role', 'Admin / Dean successfully publishes master timetable', adminPub.status, 200);
@@ -310,7 +315,7 @@ async function runAdversarialSuite() {
   // 7.3 Faculty cancels class session for recovery
   // Fetch active session from bootstrap to guarantee valid session ID
   const bootstrapRes = await fetch(`${BASE_URL}/api/academic/bootstrap`, {
-    headers: { Authorization: `Bearer ${facultyToken}` },
+    headers: { Cookie: facultyCookie },
   });
   const bootstrapData = await bootstrapRes.json();
   const facultyProfile = (bootstrapData.facultyMembers || []).find(
@@ -318,7 +323,7 @@ async function runAdversarialSuite() {
   );
   const generatedSessionList = (coordGenData.routines || []).flatMap((r: any) => Array.isArray(r.sessions) ? r.sessions : []);
   const versionsRes = await fetch(`${BASE_URL}/api/timetable/versions`, {
-    headers: { Authorization: `Bearer ${facultyToken}` },
+    headers: { Cookie: facultyCookie },
   });
   const versionsData = await versionsRes.json();
   const versionList = versionsData.versions || [];
@@ -330,7 +335,7 @@ async function runAdversarialSuite() {
 
   const facultyCancel = await fetch(`${BASE_URL}/api/recovery/cancel-class`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${facultyToken}`, 'Content-Type': 'application/json' },
+    headers: { Cookie: facultyCookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({ sessionId: sessionToCancel, reason: 'Conference Attendance' }),
   });
   recordTest(facultyCancel.status === 200, 'Authorized Role', 'Faculty successfully initiates class cancellation', facultyCancel.status, 200);

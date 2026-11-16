@@ -722,7 +722,7 @@ async function runTestSuite() {
     building: 'Turing Block',
     floor: 1,
     capacity: 20, // Only 20 seats
-    type: 'Classroom' as const,
+    type: 'LectureHall' as const,
     equipment: ['Projector'],
     isAvailable: true,
   };

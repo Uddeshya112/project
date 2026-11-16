@@ -10,6 +10,8 @@ import { fileURLToPath } from 'url';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { OAuth2Client } from 'google-auth-library';
 import { persistentStore, StoredSession } from './src/server/persistentStore';
+import { isTestTokenAllowed } from './src/server/testMode';
+export { isTestTokenAllowed };
 import {
   hashPasswordBcrypt,
   hashPasswordBcryptSync,
@@ -33,8 +35,6 @@ import {
 import { supabaseStore } from './src/server/supabaseStore';
 import { timetableJobManager } from './src/server/jobManager';
 import { sendEmail, checkMailerConfiguration } from './src/server/mailer';
-import { isTestTokenAllowed } from './src/server/testMode';
-export { isTestTokenAllowed } from './src/server/testMode';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -140,10 +140,11 @@ app.use(
       directives: {
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'"],
-        styleSrc: ["'self'", "'unsafe-inline'"],
-        imgSrc: ["'self'", "data:", "blob:"],
-        connectSrc: connectSources,
-        fontSrc: ["'self'", "data:"],
+        styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+        imgSrc: ["'self'", "data:", "blob:", "https://images.unsplash.com"],
+        // Explicit allow-list; custom API hosts can be added via CSP_CONNECT_SRC.
+        connectSrc: [...connectSources, ...(process.env.CSP_CONNECT_SRC || "").split(",").map(v => v.trim()).filter(Boolean)],
+        fontSrc: ["'self'", "data:", "https://fonts.gstatic.com"],
         objectSrc: ["'none'"],
         frameAncestors: ["'none'"],
       },
@@ -152,6 +153,28 @@ app.use(
 );
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
+
+// CSRF defence for cookie-authenticated sessions: browsers always attach an Origin header to cross-site
+// state-changing requests, so reject any whose Origin is neither same-host nor explicitly allow-listed.
+// Requests without an Origin header (curl, server-to-server, test harness) are not browser CSRF vectors.
+const CSRF_SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+app.use('/api', (req: Request, res: Response, next: NextFunction) => {
+  if (CSRF_SAFE_METHODS.has(req.method)) return next();
+  const origin = req.headers.origin;
+  if (!origin) return next();
+  let sameHost = false;
+  try {
+    sameHost = new URL(origin).host === req.headers.host;
+  } catch {
+    sameHost = false;
+  }
+  if (sameHost || allowedOrigins.has(origin)) return next();
+  return res.status(403).json({
+    success: false,
+    error: 'CSRF_ORIGIN_DENIED',
+    message: 'Cross-origin state-changing request denied.',
+  });
+});
 app.use(express.json({ limit: '1mb' }));
 app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
   res.setHeader('Cache-Control', 'no-store');

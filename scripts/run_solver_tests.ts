@@ -19,7 +19,7 @@ import {
   COURSES,
   INITIAL_CONSTRAINTS
 } from '../src/lib/initialData';
-import { CourseAllocation, Course, Faculty, Room, StudentSection, AcademicYearConfig, DayOfWeek } from '../src/types';
+import { CourseAllocation, Course, Faculty, Room, StudentSection, AcademicYearConfig, DayOfWeek, AcademicConstraint } from '../src/types';
 
 // ---------------------------------------------------------------------------
 // 0. Dataset Scalability Generator (Realistic Feasible University Structures)
@@ -120,6 +120,8 @@ function generateSyntheticDataset(
       completedHours: 0,
       cancelledHours: 0,
       requiresLab: i % 3 === 0,
+      requiredEquipment: [],
+      primaryFacultyId: facultyMembers[i % facultyMembers.length]?.id ?? '',
       status: 'Active',
     });
   }

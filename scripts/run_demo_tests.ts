@@ -6,7 +6,7 @@
 
 import http from 'node:http';
 
-const BASE_URL = 'http://localhost:3000';
+const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
 
 interface HttpResponse {
   status: number;
@@ -18,7 +18,7 @@ function request(
   method: string,
   path: string,
   data?: any,
-  token?: string
+  cookie?: string
 ): Promise<HttpResponse> {
   return new Promise((resolve, reject) => {
     const postData = data ? JSON.stringify(data) : '';
@@ -31,8 +31,8 @@ function request(
       headers['Content-Length'] = Buffer.byteLength(postData);
     }
 
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
+    if (cookie) {
+      headers['Cookie'] = cookie;
     }
 
     const req = http.request(
@@ -67,9 +67,19 @@ function request(
   });
 }
 
+/** Sessions are HttpOnly cookies; extract the "name=value" pair from a login response. */
+function sessionCookieFrom(res: HttpResponse): string {
+  const raw = res.headers['set-cookie'];
+  const first = Array.isArray(raw) ? raw[0] : raw;
+  return (first || '').split(';')[0] || '';
+}
+
+let failureCount = 0;
+
 function assert(condition: boolean, message: string) {
   if (!condition) {
     console.error(`  ❌ [FAIL] ${message}`);
+    failureCount++;
     process.exitCode = 1;
   } else {
     console.log(`  ✓ [PASS] ${message}`);
@@ -107,8 +117,9 @@ async function runDemoAudit() {
     assert(demoRes.body?.roleCode === r.expectedCode, `Server-authoritative roleCode is ${r.expectedCode}`);
     assert(demoRes.body?.user?.email === r.email, `Demo identity is ${r.email}`);
     assert(demoRes.body?.user?.isDemoUser === true, `User is explicitly flagged as isDemoUser=true`);
-    assert(Boolean(demoRes.body?.token), `Issued cryptographic session token for ${r.key}`);
-    sessionTokens[r.key] = demoRes.body?.token;
+    assert(demoRes.body?.token === undefined, `Session token is not exposed in the JSON body for ${r.key}`);
+    sessionTokens[r.key] = sessionCookieFrom(demoRes);
+    assert(sessionTokens[r.key].startsWith('intellischedule_session='), `HttpOnly session cookie issued for ${r.key}`);
   }
 
   // 3. Bcrypt Password Verification with Configured Demo Password
@@ -134,7 +145,7 @@ async function runDemoAudit() {
   console.log('\n--- 4. Testing Session Verification & Revocation ---');
   const coordToken = sessionTokens['Coordinator'];
   const meRes = await request('GET', '/api/auth/me', null, coordToken);
-  assert(meRes.status === 200, '/api/auth/me accepts demo Bearer token and returns profile');
+  assert(meRes.status === 200, '/api/auth/me accepts demo session cookie and returns profile');
   assert(meRes.body?.user?.email === 'coordinator.demo@demo.thapar.local', 'Profile email matches coordinator demo');
 
   const logoutRes = await request('POST', '/api/auth/logout', null, coordToken);
@@ -165,7 +176,7 @@ async function runDemoAudit() {
   console.log('\n--- 6. Testing Timetable Engine on Demo Dataset ---');
   // Re-login coordinator for generation test
   const freshCoordLogin = await request('POST', '/api/auth/demo-login', { roleKey: 'Coordinator' });
-  const freshCoordToken = freshCoordLogin.body.token;
+  const freshCoordToken = sessionCookieFrom(freshCoordLogin);
 
   const generateRes = await request('POST', '/api/timetables/generate', {}, freshCoordToken);
   assert(generateRes.status === 200, 'Coordinator triggers /api/timetables/generate successfully');
@@ -187,7 +198,7 @@ async function runDemoAudit() {
   assert(afterResetLogin.status === 200, 'Coordinator demo can log in with demo password after dataset reset');
 
   console.log('\n================================================================');
-  console.log('DEMO AUDIT RESULT: ALL TESTS PASSED');
+  console.log(failureCount === 0 ? 'DEMO AUDIT RESULT: ALL TESTS PASSED' : `DEMO AUDIT RESULT: ${failureCount} TEST(S) FAILED`);
   console.log('================================================================\n');
 }
 

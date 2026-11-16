@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useTimetable } from '../../context/TimetableContext';
 import { ThaparLogo } from '../ThaparLogo';
-import { evaluatePasswordPolicy } from '../../lib/passwordUtils';
+import { evaluatePasswordPolicy } from '../../lib/passwordPolicy';
 import { supabaseClient, apiFetch } from '../../lib/supabaseClient';
 import {
   Mail,
