@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import {
   Department,
@@ -44,7 +45,7 @@ import {
   validateProposedSessionSwap,
 } from '../lib/independentValidator';
 import { executeOptimizationEngine } from '../lib/optimizationEngine';
-import { findSelfHealingRecoverySlots } from '../lib/recoveryEngine';
+import { checkHardConstraints, findSelfHealingRecoverySlots } from '../lib/recoveryEngine';
 import { ExcelImportPreview } from '../lib/excelMasterService';
 
 // Initialize Supabase Client if environment variables are provided
@@ -95,6 +96,54 @@ class SupabaseRelationalStore {
     this.seedInitialDatabase();
   }
 
+  /** Snapshot the live store so production writes can be committed to Postgres. */
+  public exportPersistedState() {
+    return {
+      academicYear: this.academicYear,
+      departments: [...this.departments.values()],
+      programs: [...this.programs.values()],
+      courses: [...this.courses.values()],
+      facultyMembers: [...this.facultyMembers.values()],
+      rooms: [...this.rooms.values()],
+      groups: [...this.groups.values()],
+      students: [...this.students.values()],
+      allocations: [...this.allocations.values()],
+      constraints: [...this.constraints.values()],
+      versions: this.versions,
+      activeSessions: this.activeSessions,
+      notifications: this.notifications,
+      auditEvents: this.auditEvents,
+      makeupTasks: this.makeupTasks,
+      recoveryOpportunities: this.recoveryOpportunities,
+      replacementPolls: this.replacementPolls,
+      replacementVotes: [...this.replacementVotes.entries()],
+    };
+  }
+
+  /** Restore a snapshot previously written by this store. */
+  public restorePersistedState(snapshot: Record<string, any>) {
+    const asMap = <T extends { id: string }>(items: unknown): Map<string, T> =>
+      new Map((Array.isArray(items) ? items : []).filter((item): item is T => Boolean(item && typeof item.id === 'string')).map((item) => [item.id, item]));
+    this.academicYear = snapshot.academicYear || { ...INITIAL_ACADEMIC_YEAR };
+    this.departments = asMap<Department>(snapshot.departments);
+    this.programs = asMap<Program>(snapshot.programs);
+    this.courses = asMap<Course>(snapshot.courses);
+    this.facultyMembers = asMap<Faculty>(snapshot.facultyMembers);
+    this.rooms = asMap<Room>(snapshot.rooms);
+    this.groups = asMap<StudentSection>(snapshot.groups);
+    this.students = asMap<StudentRecord>(snapshot.students);
+    this.allocations = asMap<CourseAllocation>(snapshot.allocations);
+    this.constraints = asMap<AcademicConstraint>(snapshot.constraints);
+    this.versions = Array.isArray(snapshot.versions) ? snapshot.versions : [];
+    this.activeSessions = Array.isArray(snapshot.activeSessions) ? snapshot.activeSessions : [];
+    this.notifications = Array.isArray(snapshot.notifications) ? snapshot.notifications : [];
+    this.auditEvents = Array.isArray(snapshot.auditEvents) ? snapshot.auditEvents : [];
+    this.makeupTasks = Array.isArray(snapshot.makeupTasks) ? snapshot.makeupTasks : [];
+    this.recoveryOpportunities = Array.isArray(snapshot.recoveryOpportunities) ? snapshot.recoveryOpportunities : [];
+    this.replacementPolls = Array.isArray(snapshot.replacementPolls) ? snapshot.replacementPolls : [];
+    this.replacementVotes = new Map(Array.isArray(snapshot.replacementVotes) ? snapshot.replacementVotes : []);
+  }
+
   /**
    * Seed the relational database with institutional baseline records
    */
@@ -110,6 +159,22 @@ class SupabaseRelationalStore {
     // 3. Faculty
     this.facultyMembers.clear();
     FACULTY_MEMBERS.forEach(f => this.facultyMembers.set(f.id, { ...f }));
+    const demoNehaTemplate = this.facultyMembers.get('fac-0005') || FACULTY_MEMBERS[0];
+    const demoHodTemplate = this.facultyMembers.get('fac-0003') || FACULTY_MEMBERS[1];
+    this.facultyMembers.set('fac-demo-neha', {
+      ...demoNehaTemplate,
+      id: 'fac-demo-neha',
+      name: 'Dr. Neha Agarwal',
+      email: 'faculty.demo@demo.thapar.local',
+      departmentId: 'dept-cse',
+    });
+    this.facultyMembers.set('fac-demo-hod', {
+      ...demoHodTemplate,
+      id: 'fac-demo-hod',
+      name: 'Dr. Sunita Rao',
+      email: 'hod.demo@demo.thapar.local',
+      departmentId: 'dept-cse',
+    });
 
     // 4. Rooms
     this.rooms.clear();
@@ -135,6 +200,19 @@ class SupabaseRelationalStore {
     // 6b. Students Roster (1,280 Students)
     this.students.clear();
     STUDENTS.forEach(st => this.students.set(st.id, { ...st }));
+    this.students.set('stu-demo-student', {
+      id: 'stu-demo-student',
+      studentId: '102303999',
+      name: 'Rohan Sharma',
+      email: 'student.demo@demo.thapar.local',
+      programCode: 'BTECH-CSE',
+      batchYear: 2024,
+      semester: 5,
+      sectionId: 'sec-cse-a',
+      sectionName: 'CSE-A',
+      subSectionId: 'sub-sec-cse-a-1',
+      subSectionName: 'A1',
+    });
 
     // 7. Allocations
     this.allocations.clear();
@@ -145,8 +223,16 @@ class SupabaseRelationalStore {
     INITIAL_CONSTRAINTS.forEach(c => this.constraints.set(c.id, { ...c }));
 
     // 9. Timetable Versions & Sessions
-    this.activeSessions = [...INITIAL_SESSIONS];
-    this.versions = [...INITIAL_VERSIONS];
+    const linkDemoFaculty = (session: ClassSession): ClassSession => ({
+      ...session,
+      facultyId: session.facultyId === 'fac-0005'
+        ? 'fac-demo-neha'
+        : session.facultyId === 'fac-0003'
+          ? 'fac-demo-hod'
+          : session.facultyId,
+    });
+    this.activeSessions = INITIAL_SESSIONS.map(linkDemoFaculty);
+    this.versions = INITIAL_VERSIONS.map((version) => ({ ...version, sessions: version.sessions.map(linkDemoFaculty) }));
 
     // 10. Notifications & Tasks
     this.notifications = [...INITIAL_NOTIFICATIONS];
@@ -176,7 +262,7 @@ class SupabaseRelationalStore {
   // MASTER DATA QUERIES
   // --------------------------------------------------------------------------
 
-  public getBootstrapState() {
+  public getBootstrapState(userId?: string) {
     return {
       academicYear: this.academicYear,
       departments: Array.from(this.departments.values()),
@@ -194,10 +280,32 @@ class SupabaseRelationalStore {
       notifications: this.notifications,
       makeupTasks: this.makeupTasks,
       recoveryOpportunities: this.recoveryOpportunities,
-      polls: this.replacementPolls,
+      polls: this.replacementPolls.map((poll) => {
+        const vote = userId ? this.replacementVotes.get(`${poll.id}:${userId}`) : undefined;
+        return { ...poll, userHasVoted: Boolean(vote), userVotedOptionId: vote };
+      }),
       auditLogs: this.auditEvents,
       publishStatus: this.academicYear.publishStatus,
     };
+  }
+
+  public validateCurrentTimetable() {
+    return validateTimetableIndependently(this.activeSessions, {
+      academicYear: this.academicYear,
+      allocations: Array.from(this.allocations.values()),
+      facultyMembers: Array.from(this.facultyMembers.values()),
+      rooms: Array.from(this.rooms.values()),
+      sections: Array.from(this.groups.values()),
+      courses: Array.from(this.courses.values()),
+      constraints: Array.from(this.constraints.values()),
+    });
+  }
+
+  public recordDepartmentApproval(departmentId: string, versionId: string, reviewerName = 'Department Head') {
+    const timestamp = new Date().toISOString();
+    this.logAudit(reviewerName, 'HOD_DEPARTMENT_SIGNED_OFF', 'DepartmentTimetable', `${departmentId}:${versionId}`,
+      `Department ${departmentId} signed off timetable ${versionId}.`);
+    return { timestamp };
   }
 
   public getAcademicState() {
@@ -1070,6 +1178,37 @@ class SupabaseRelationalStore {
     };
   }
 
+  /** Add an explicitly selected class to the shared timetable after server-side validation. */
+  public addClassSession(input: Omit<ClassSession, 'id' | 'version'>, userId = 'coordinator'):
+    { success: boolean; session?: ClassSession; error?: string } {
+    const check = checkHardConstraints(input, this.activeSessions,
+      Array.from(this.rooms.values()), Array.from(this.facultyMembers.values()),
+      Array.from(this.groups.values()), Array.from(this.courses.values()));
+    if (!check.isFeasible) return { success: false, error: check.violations.join(' | ') };
+    const session: ClassSession = { ...input, id: `sess-${crypto.randomUUID()}`, version: 1 };
+    this.activeSessions = [...this.activeSessions, session];
+    if (this.academicYear.publishStatus === 'Published') this.academicYear.publishStatus = 'Draft';
+    const versionNumber = this.versions.length + 1;
+    this.versions.unshift({
+      versionNumber,
+      versionLabel: `Draft V${versionNumber}.0`,
+      createdAt: new Date().toISOString(),
+      createdBy: userId,
+      changeSummary: `Added ${input.courseId} for ${input.sectionId} on ${input.day} at ${input.timeSlotId}.`,
+      reason: 'Manual class assignment',
+      isPublished: false,
+      healthScore: 98,
+      sessions: this.activeSessions,
+    });
+    this.logAudit(userId, 'CLASS_SESSION_ADDED', 'ClassSession', session.id,
+      `Added ${input.courseId} / ${input.facultyId} / ${input.roomId} for ${input.sectionId} at ${input.day} ${input.timeSlotId}.`);
+    return { success: true, session };
+  }
+
+  public resetDemoDataset() {
+    this.seedInitialDatabase();
+  }
+
   // Controlled Manual Session Move with Independent Validation
   public moveSessionWithValidation(
     sessionId: string,
@@ -1412,13 +1551,22 @@ class SupabaseRelationalStore {
 
   public castReplacementVote(pollId: string, studentId: string, optionId: string): { success: boolean; message: string } {
     const voteKey = `${pollId}:${studentId}`;
-    if (this.replacementVotes.has(voteKey)) {
-      return { success: false, message: 'You have already voted in this poll. Duplicate voting is prohibited.' };
-    }
-
     const poll = this.replacementPolls.find(p => p.id === pollId);
     if (!poll || !poll.isActive) {
       return { success: false, message: 'This replacement poll is inactive or expired.' };
+    }
+    if (!poll.options.some(option => option.id === optionId)) {
+      return { success: false, message: 'The selected option does not belong to this poll.' };
+    }
+
+    const previousOptionId = this.replacementVotes.get(voteKey);
+    if (previousOptionId === optionId) return { success: true, message: 'Your existing vote is already recorded.' };
+    if (previousOptionId) {
+      poll.options = poll.options.map(option => option.id === previousOptionId
+        ? { ...option, votes: Math.max(0, option.votes - 1) }
+        : option.id === optionId ? { ...option, votes: option.votes + 1 } : option);
+      this.replacementVotes.set(voteKey, optionId);
+      return { success: true, message: 'Your replacement slot vote has been updated.' };
     }
 
     this.replacementVotes.set(voteKey, optionId);
@@ -1428,6 +1576,48 @@ class SupabaseRelationalStore {
     );
 
     return { success: true, message: 'Your replacement slot vote has been securely recorded.' };
+  }
+
+  public createReplacementPoll(input: { sectionId: string; courseId: string; question: string; options: Array<{ day: DayOfWeek; timeSlotLabel: string }> }, userId = 'coordinator') {
+    const poll: StudentPoll = {
+      id: `poll-${crypto.randomUUID()}`,
+      makeupTaskId: '',
+      courseId: input.courseId,
+      sectionId: input.sectionId,
+      question: input.question,
+      options: input.options.map((option) => ({
+        id: `opt-${crypto.randomUUID()}`,
+        day: option.day,
+        timeSlotLabel: option.timeSlotLabel,
+        votes: 0,
+        isSystemRecommended: false,
+      })),
+      totalEligibleStudents: this.groups.get(input.sectionId)?.studentCount || 0,
+      votedStudentsCount: 0,
+      isActive: true,
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    };
+    this.replacementPolls.unshift(poll);
+    this.notifications.unshift({
+      id: `notif-${crypto.randomUUID()}`,
+      recipientRole: 'Student',
+      type: 'poll_created',
+      title: 'New class time poll',
+      message: `${input.question} (${this.groups.get(input.sectionId)?.name || input.sectionId})`,
+      timestamp: new Date().toISOString(),
+      read: false,
+      category: 'Info',
+    });
+    this.logAudit(userId, 'REPLACEMENT_POLL_CREATED', 'StudentPoll', poll.id, `Opened poll for ${input.courseId} in ${input.sectionId}.`);
+    return poll;
+  }
+
+  public closeReplacementPoll(pollId: string, userId = 'coordinator') {
+    const poll = this.replacementPolls.find(item => item.id === pollId);
+    if (!poll || !poll.isActive) return false;
+    poll.isActive = false;
+    this.logAudit(userId, 'REPLACEMENT_POLL_CLOSED', 'StudentPoll', poll.id, 'Closed replacement time poll.');
+    return true;
   }
 
   public markNotificationRead(id: string): boolean {

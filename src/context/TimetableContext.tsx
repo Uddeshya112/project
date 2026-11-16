@@ -195,7 +195,7 @@ interface TimetableContextType {
 
   // Validation & Generation Engine
   runValidation: () => ValidationReport;
-  resetDemoAcademicData: () => void;
+  resetDemoAcademicData: () => Promise<{ success: boolean; message?: string }>;
   generateDraftTimetable: () => {
     isSuccess: boolean;
     sessionsGenerated: number;
@@ -228,13 +228,13 @@ interface TimetableContextType {
   setFacultyProtectedSlot: (facultyId: string, day: DayOfWeek, periodId: string, reason: 'Research' | 'Lunch' | 'Personal' | 'Department' | 'Meeting') => Promise<{ success: boolean }>;
   restoreVersion: (versionNumber: number) => void;
   applySimulation: () => void;
-  markNotificationRead: (id: string) => void;
+  markNotificationRead: (id: string) => Promise<void>;
   triggerAutoMatchAll: () => void;
   requestStudentMakeup: (courseId: string, sectionId: string) => Promise<{ success: boolean }>;
   declineOpportunity: (opportunityId: string) => Promise<{ success: boolean }>;
   claimMarketplaceSlot: (courseId: string, sectionId: string, day: DayOfWeek, timeSlotId: string, roomId: string, type: string) => Promise<{ success: boolean }>;
   requestSubstituteCover: (substituteFacultyId: string, courseId: string, sectionId: string, day: DayOfWeek, timeSlotId: string) => Promise<{ success: boolean }>;
-  addSession: (sessionData: Omit<ClassSession, 'id' | 'version'>) => { isSuccess: boolean; error?: string };
+  addSession: (sessionData: Omit<ClassSession, 'id' | 'version'>) => Promise<{ isSuccess: boolean; error?: string }>;
 
   // Independent Validation & Controlled Machine Editing
   runIndependentValidation: (targetSessions?: ClassSession[]) => IndependentValidationReport;
@@ -333,9 +333,9 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
 
   const [currentRole, setCurrentRole] = useState<UserRole>('Coordinator');
   const [activeView, setActiveView] = useState<ViewTab>('overview');
-  const [selectedFacultyId, setSelectedFacultyId] = useState<string>('fac-sharma');
+  const [selectedFacultyId, setSelectedFacultyId] = useState<string>('fac-0001');
   const [selectedSectionId, setSelectedSectionId] = useState<string>('sec-cse-a');
-  const [selectedRoomId, setSelectedRoomId] = useState<string>('room-204');
+  const [selectedRoomId, setSelectedRoomId] = useState<string>('room-cr-1');
   const [latestGeneratedRoutines, setLatestGeneratedRoutines] = useState<GenerationRoutine[] | null>(null);
 
   const getAuthHeaders = (): Record<string, string> => {
@@ -362,21 +362,21 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
           const data = await res.json();
           if (data.success && isMounted) {
             if (data.academicYear) setAcademicYear(data.academicYear);
-            if (data.departments && data.departments.length > 0) setDepartments(data.departments);
-            if (data.programs && data.programs.length > 0) setPrograms(data.programs);
-            if (data.courses && data.courses.length > 0) setCourses(data.courses);
-            if (data.facultyMembers && data.facultyMembers.length > 0) setFacultyMembers(data.facultyMembers);
-            if (data.rooms && data.rooms.length > 0) setRooms(data.rooms);
-            if (data.sections && data.sections.length > 0) setSections(data.sections);
-            if (data.allocations && data.allocations.length > 0) setAllocations(data.allocations);
-            if (data.constraints && data.constraints.length > 0) setConstraints(data.constraints);
-            if (data.sessions && data.sessions.length > 0) setSessions(data.sessions);
-            if (data.versions && data.versions.length > 0) setVersions(data.versions);
-            if (data.notifications && data.notifications.length > 0) setNotifications(data.notifications);
-            if (data.makeupTasks && data.makeupTasks.length > 0) setMakeupTasks(data.makeupTasks);
-            if (data.recoveryOpportunities && data.recoveryOpportunities.length > 0) setRecoveryOpportunities(data.recoveryOpportunities);
-            if (data.polls && data.polls.length > 0) setPolls(data.polls);
-            if (data.auditLogs && data.auditLogs.length > 0) setAuditLogs(data.auditLogs);
+            if (Array.isArray(data.departments)) setDepartments(data.departments);
+            if (Array.isArray(data.programs)) setPrograms(data.programs);
+            if (Array.isArray(data.courses)) setCourses(data.courses);
+            if (Array.isArray(data.facultyMembers)) setFacultyMembers(data.facultyMembers);
+            if (Array.isArray(data.rooms)) setRooms(data.rooms);
+            if (Array.isArray(data.sections)) setSections(data.sections);
+            if (Array.isArray(data.allocations)) setAllocations(data.allocations);
+            if (Array.isArray(data.constraints)) setConstraints(data.constraints);
+            if (Array.isArray(data.sessions)) setSessions(data.sessions);
+            if (Array.isArray(data.versions)) setVersions(data.versions);
+            if (Array.isArray(data.notifications)) setNotifications(data.notifications);
+            if (Array.isArray(data.makeupTasks)) setMakeupTasks(data.makeupTasks);
+            if (Array.isArray(data.recoveryOpportunities)) setRecoveryOpportunities(data.recoveryOpportunities);
+            if (Array.isArray(data.polls)) setPolls(data.polls);
+            if (Array.isArray(data.auditLogs)) setAuditLogs(data.auditLogs);
             if (data.publishStatus) setPublishStatus(data.publishStatus);
           }
         }
@@ -385,8 +385,10 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       }
     };
     loadBootstrapData();
+    const syncTimer = window.setInterval(() => { void loadBootstrapData(); }, 10_000);
     return () => {
       isMounted = false;
+      window.clearInterval(syncTimer);
     };
   }, []);
 
@@ -874,6 +876,18 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
 
   // Publish Status Lifecycle
   const updatePublishStatus = async (status: TimetablePublishStatus, reviewerName?: string): Promise<{ success: boolean }> => {
+    if (status === 'Approved' || status === 'Published') {
+      try {
+        const endpoint = status === 'Approved' ? '/api/timetable/approve' : '/api/timetable/publish';
+        const response = await fetch(apiUrl(endpoint), {
+          method: 'POST', credentials: 'same-origin', headers: getAuthHeaders(),
+          body: JSON.stringify({ versionId: `V${versions[0]?.versionNumber || 1}.0` }),
+        });
+        if (!response.ok) return { success: false };
+      } catch {
+        return { success: false };
+      }
+    }
     setPublishStatus(status);
     setAcademicYear(prev => ({
       ...prev,
@@ -896,20 +910,6 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       },
       ...prev,
     ]);
-
-    if (status === 'Approved') {
-      fetch('/api/timetable/approve', {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ versionId: `V${versions.length || 1}.0` }),
-      }).catch(err => console.warn('[SUPABASE_API] Approval persistence notice:', err));
-    } else if (status === 'Published') {
-      fetch('/api/timetable/publish', {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ versionId: `V${versions.length || 1}.0` }),
-      }).catch(err => console.warn('[SUPABASE_API] Publish persistence notice:', err));
-    }
 
     return { success: true };
   };
@@ -1287,6 +1287,17 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       };
     }
 
+    try {
+      const response = await fetch(apiUrl('/api/timetable/publish'), {
+        method: 'POST', credentials: 'same-origin', headers: getAuthHeaders(),
+        body: JSON.stringify({ versionId: `V${versions[0]?.versionNumber || 1}.0` }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) return { success: false, error: data.message || `Publishing failed (${response.status}).` };
+    } catch {
+      return { success: false, error: 'Could not reach the server. The timetable was not published.' };
+    }
+
     setPublishStatus('Published');
     setAcademicYear(prev => ({
       ...prev,
@@ -1440,7 +1451,16 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     return diffs;
   };
 
-  const resetDemoAcademicData = () => {
+  const resetDemoAcademicData = async (): Promise<{ success: boolean; message?: string }> => {
+    try {
+      const response = await fetch(apiUrl('/api/demo/reset'), {
+        method: 'POST', credentials: 'same-origin', headers: getAuthHeaders(), body: JSON.stringify({}),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) return { success: false, message: data.message || `Reset failed (${response.status}).` };
+    } catch {
+      return { success: false, message: 'Could not reach the server. Demo data was not reset.' };
+    }
     setAcademicYear(INITIAL_ACADEMIC_YEAR);
     setDepartments(DEPARTMENTS);
     setPrograms(PROGRAMS);
@@ -1458,6 +1478,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     setVersions(INITIAL_VERSIONS);
     setWhatIfSimulation(INITIAL_WHAT_IF_SIMULATION);
     setPublishStatus('Published');
+    return { success: true, message: 'Demo data restored to the seeded starting state.' };
   };
 
   // Bulk Import Helper
@@ -2189,28 +2210,33 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
   };
 
   const votePoll = async (pollId: string, optionId: string): Promise<{ success: boolean }> => {
-    setPolls(prev =>
-      prev.map(p => {
-        if (p.id !== pollId) return p;
+    const poll = polls.find(item => item.id === pollId);
+    if (!poll || !poll.isActive) return { success: false };
+    try {
+      const response = await fetch(apiUrl('/api/voting/vote'), {
+        method: 'POST', credentials: 'same-origin', headers: getAuthHeaders(),
+        body: JSON.stringify({ pollId, optionId }),
+      });
+      if (!response.ok) return { success: false };
+      setPolls(prev => prev.map(item => {
+        if (item.id !== pollId) return item;
+        const oldOptionId = item.userVotedOptionId;
+        if (oldOptionId === optionId) return item;
         return {
-          ...p,
-          votedStudentsCount: p.votedStudentsCount + 1,
+          ...item,
+          votedStudentsCount: item.votedStudentsCount + (oldOptionId ? 0 : 1),
           userHasVoted: true,
           userVotedOptionId: optionId,
-          options: p.options.map(opt =>
-            opt.id === optionId ? { ...opt, votes: opt.votes + 1 } : opt
-          ),
+          options: item.options.map(option => ({
+            ...option,
+            votes: option.votes + (option.id === optionId ? 1 : 0) - (option.id === oldOptionId ? 1 : 0),
+          })),
         };
-      })
-    );
-
-    fetch('/api/voting/vote', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify({ pollId, optionId }),
-    }).catch(err => console.warn('[SUPABASE_API] Vote persistence notice:', err));
-
-    return { success: true };
+      }));
+      return { success: true };
+    } catch {
+      return { success: false };
+    }
   };
 
   const toggleSessionLock = (sessionId: string, reason = 'Administrative Lock') => {
@@ -2289,7 +2315,11 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     ]);
   };
 
-  const markNotificationRead = (id: string) => {
+  const markNotificationRead = async (id: string) => {
+    const response = await fetch(apiUrl(`/api/notifications/${encodeURIComponent(id)}/read`), {
+      method: 'POST', credentials: 'same-origin', headers: getAuthHeaders(), body: JSON.stringify({}),
+    });
+    if (!response.ok) return;
     setNotifications(prev => prev.map(n => (n.id === id ? { ...n, read: true } : n)));
   };
 
@@ -2392,7 +2422,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     return { success: true };
   };
 
-  const addSession = (sessionData: Omit<ClassSession, 'id' | 'version'>): { isSuccess: boolean; error?: string } => {
+  const addSession = async (sessionData: Omit<ClassSession, 'id' | 'version'>): Promise<{ isSuccess: boolean; error?: string }> => {
     const check = checkHardConstraints(
       sessionData,
       sessions,
@@ -2406,14 +2436,21 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       return { isSuccess: false, error: check.violations.join(' | ') };
     }
 
-    const newId = `sess-${sessionData.day.slice(0, 3).toLowerCase()}-${Date.now().toString().slice(-4)}`;
-    const newSession: ClassSession = {
-      ...sessionData,
-      id: newId,
-      version: 1,
-    };
-
-    setSessions(prev => [...prev, newSession]);
+    try {
+      const response = await fetch(apiUrl('/api/timetable/sessions'), {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(sessionData),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success || !data.session) {
+        return { isSuccess: false, error: data.message || `Could not save class (${response.status}).` };
+      }
+      setSessions(prev => prev.some(session => session.id === data.session.id) ? prev : [...prev, data.session]);
+    } catch {
+      return { isSuccess: false, error: 'Could not reach the server. The class was not saved.' };
+    }
     return { isSuccess: true };
   };
 
@@ -2517,7 +2554,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         unpublishMasterTimetable,
         compareTimetableVersions,
         activeVersionNumber: 1,
-        publishedSessions: sessions.filter(s => s.status === 'Published'),
+        publishedSessions: publishStatus === 'Published' ? sessions.filter(s => s.status !== 'Cancelled') : [],
         refresh: async () => {},
         isLoading: false,
         loadError: null,

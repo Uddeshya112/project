@@ -60,6 +60,14 @@ export function WorkspaceSelectionView({
           icon: LayoutDashboard,
           badge: 'Operations',
         };
+      case 'HOD':
+        return {
+          title: 'HOD Department Portal',
+          subtitle: 'Department Workload & Approvals',
+          description: 'Review faculty workloads, syllabus progress, class disruptions, and department timetable sign-off.',
+          icon: LayoutDashboard,
+          badge: 'Department',
+        };
       case 'Admin':
         return {
           title: 'Admin / Operations System',

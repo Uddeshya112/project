@@ -7,24 +7,12 @@ import {
   Users,
   Calendar,
   Clock,
-  CheckCircle2,
   Vote,
   ThumbsUp,
   Send,
   Plus,
   X
 } from 'lucide-react';
-
-// Sample content shown until real data exists — edit freely.
-const SAMPLE_ATTENDANCE = { average: '90.4%', status: 'Normal' };
-
-function SampleBadge() {
-  return (
-    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-stone-100 dark:bg-zinc-800 text-stone-500 dark:text-zinc-400 border border-[#E5E2D9] dark:border-zinc-700">
-      Sample
-    </span>
-  );
-}
 
 type PollOptionDraft = { day: DayOfWeek; timeSlotId: string };
 const DEFAULT_POLL_QUESTION = 'Which time works best for the replacement class?';
@@ -224,13 +212,13 @@ export function CRPortalView() {
 
         <div className="p-4 bg-[#FAF9F5] dark:bg-zinc-900/50 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl space-y-1 shadow-xs">
           <div className="text-xs text-stone-500 dark:text-zinc-400 font-medium flex items-center gap-1.5">
-            Average Attendance <SampleBadge />
+            Attendance data
           </div>
           <div className="text-2xl font-serif font-bold text-emerald-700 dark:text-emerald-400">
-            {SAMPLE_ATTENDANCE.average}
+            —
           </div>
           <div className="text-[11px] text-emerald-700 dark:text-emerald-400 flex items-center gap-1 font-medium">
-            <CheckCircle2 className="h-3.5 w-3.5" /> {SAMPLE_ATTENDANCE.status}
+            Not tracked in this timetable
           </div>
         </div>
 
@@ -402,7 +390,7 @@ export function CRPortalView() {
                             </div>
                             <button
                               onClick={() => handleVote(poll.id, opt.id)}
-                              disabled={poll.userHasVoted || votingPollId === poll.id}
+                              disabled={isSelected || votingPollId === poll.id}
                               className={`w-full mt-1 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center justify-center gap-1.5 ${
                                 isSelected
                                   ? 'bg-emerald-700 text-white'
@@ -410,7 +398,7 @@ export function CRPortalView() {
                               }`}
                             >
                               <ThumbsUp className="h-3.5 w-3.5" />
-                              <span>{isSelected ? 'Your Vote' : 'Vote for this time'}</span>
+                              <span>{isSelected ? 'Your Vote' : poll.userHasVoted ? 'Change vote to this time' : 'Vote for this time'}</span>
                             </button>
                           </div>
                         );

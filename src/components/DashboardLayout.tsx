@@ -23,6 +23,7 @@ import { SettingsView } from './views/SettingsView';
 import { WhatIfSimulatorView } from './views/WhatIfSimulatorView';
 import { WorkloadSyllabusView } from './views/WorkloadSyllabusView';
 import { RequestsView } from './views/RequestsView';
+import { HodPortalView } from './views/HodPortalView';
 
 import {
   Menu,
@@ -38,6 +39,7 @@ import {
   X,
   AlertCircle,
   CheckCircle2,
+  RotateCcw,
 } from 'lucide-react';
 
 interface DashboardLayoutProps {
@@ -58,6 +60,7 @@ export function DashboardLayout({
     refresh,
     notice,
     dismissNotice,
+    resetDemoAcademicData,
   } = useTimetable();
 
   const {
@@ -74,6 +77,7 @@ export function DashboardLayout({
   const [inboxOpen, setInboxOpen] = useState(false);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
   const [showWorkspaceMenu, setShowWorkspaceMenu] = useState(false);
+  const [resettingDemo, setResettingDemo] = useState(false);
 
   const unreadCount = notifications.filter(n => !n.read).length;
 
@@ -91,6 +95,10 @@ export function DashboardLayout({
       case 'Faculty':
         setActiveView('faculty_portal');
         setCurrentRole('Faculty');
+        break;
+      case 'HOD':
+        setActiveView('overview');
+        setCurrentRole('HOD');
         break;
       case 'Coordinator':
         setActiveView('overview');
@@ -133,6 +141,7 @@ export function DashboardLayout({
       case 'Faculty': return 'Faculty Portal';
       case 'Coordinator': return 'Coordinator';
       case 'Admin': return 'Operations & Governance';
+      case 'HOD': return 'Department Portal';
     }
   };
 
@@ -170,6 +179,23 @@ export function DashboardLayout({
 
         {/* Right: Multi-Role Switcher + Theme Toggle + Notifications + User Profile */}
         <div className="flex items-center gap-2">
+          {currentUser?.isDemoUser && (
+            <button
+              type="button"
+              disabled={resettingDemo}
+              onClick={async () => {
+                if (!window.confirm('Restore the shared demo timetable and academic data to its seeded state?')) return;
+                setResettingDemo(true);
+                const result = await resetDemoAcademicData();
+                setResettingDemo(false);
+                window.alert(result.message || (result.success ? 'Demo data reset.' : 'Demo data could not be reset.'));
+              }}
+              className="inline-flex items-center gap-1 rounded-md border border-[#E5E2D9] bg-white px-2 py-1 text-[10px] font-semibold text-stone-600 hover:text-[#8C1B2E] disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+              title="Restore the shared demo dataset"
+            >
+              <RotateCcw className={`h-3 w-3 ${resettingDemo ? 'animate-spin' : ''}`} />{resettingDemo ? 'Resetting…' : 'Reset Demo'}
+            </button>
+          )}
           {/* Quick Workspace Switcher */}
           {authorizedWorkspaces.length > 1 && (
             <div className="relative">
@@ -291,6 +317,14 @@ export function DashboardLayout({
           {currentWorkspace === 'CR' && <CRPortalView />}
           {currentWorkspace === 'Faculty' && <FacultyPortalView />}
           {currentWorkspace === 'Admin' && <AdminPortalView />}
+          {currentWorkspace === 'HOD' && (
+            <>
+              {activeView === 'overview' && <HodPortalView />}
+              {activeView === 'syllabus' && <WorkloadSyllabusView />}
+              {activeView === 'recovery' && <RequestsView />}
+              {activeView === 'grid' && <TimetableGridView />}
+            </>
+          )}
 
           {currentWorkspace === 'Coordinator' && (
             <>

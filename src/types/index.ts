@@ -380,7 +380,7 @@ export interface Institution {
   establishedYear: number;
 }
 
-export type WorkspaceType = 'Student' | 'CR' | 'Faculty' | 'Coordinator' | 'Admin';
+export type WorkspaceType = 'Student' | 'CR' | 'Faculty' | 'Coordinator' | 'HOD' | 'Admin';
 
 export type RoleCode =
   | 'SUPER_ADMIN'

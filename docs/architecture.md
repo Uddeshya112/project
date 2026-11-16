@@ -1,5 +1,7 @@
 # Architecture
 
+> **As-built runtime note (verified 2026-11-17):** The current `server.ts` does not wire the modular `src/server/auth.ts` / `src/server/store.ts` path shown below. It serves auth and APIs directly and uses `src/server/supabaseStore.ts` as an in-memory working store. The current fix persists that legacy store as one versioned JSON document (`legacy_academic_runtime`) in `intellischedule.app_state` when `DATABASE_URL` is configured. Writes are serialized in-process and committed before JSON success responses. This is a compatibility layer, not the normalized four-document store described below; do not treat the diagram as evidence that the modular runtime is active.
+
 One Node.js 22 process (Express 5) serves both the JSON API under `/api` and the React 19 single-page app. There are no other services besides the Postgres database.
 
 ```
@@ -32,13 +34,13 @@ In production `DATABASE_URL` is required and `pglite:` URLs are refused.
 
 ## Request flow
 
-- `auth.loadUser` runs for every `/api` request. It hashes the `tt_session` cookie with SHA-256 and looks it up in `auth_sessions` joined with `users` (unexpired session, `ACTIVE` user). This is the only database read on a normal request.
+- In the current runtime, `server.ts` authenticates the `intellischedule_session` cookie using `persistentStore`; production configures its PostgreSQL backend. The modular `auth.loadUser` path described in the target diagram is not currently active.
 - Route guards in `server.ts` check the role (matrix in [permissions.md](permissions.md)). Ownership checks (faculty acting on their own classes, class representatives on their own section) are in `store.ts`.
-- Reads (`GET /api/academic/bootstrap` etc.) are served from the in-memory copy.
-- Writes to `/api/academic`, `/api/timetable`, `/api/recovery`, `/api/voting` and `/api/notifications` change the in-memory copy, then `store.persist()` saves all changed documents, new versions, publish-flag changes and audit entries in one transaction **before** the response is sent. Saves are serialised.
-  - If another writer changed a document first (version mismatch) the request fails with 409 and the store reloads from the database.
-  - If the save fails for another reason (database unreachable) the request fails with 503; the change stays in memory and is written by the next successful save.
-- User and session endpoints (`/api/auth/*`, `/api/admin/*`) read and write Postgres directly and do not go through the store.
+- Reads (`GET /api/academic/bootstrap` etc.) are served from the `supabaseStore` in-memory copy.
+- Writes to the covered `/api/academic`, `/api/timetable`, `/api/recovery`, `/api/voting`, `/api/notifications` and `/api/demo/reset` paths are serialized in-process; the server snapshots the legacy store to the `legacy_academic_runtime` JSONB row before returning JSON success.
+  - If another server process changed the JSON row first, the request fails with 409 and the in-memory store reloads.
+  - If the save fails, the request returns 503 and restores its previous in-memory snapshot.
+- Authenticated user administration remains in the legacy `server.ts` path; session persistence uses the `persistentStore` Postgres backend in production. Do not infer external Supabase Auth or Vercel project state from this code description.
 
 Because of the in-memory copy, run exactly one instance. See [ADR 0001](decisions/0001-modular-monolith-and-academic-scheduling-engine.md).
 
