@@ -296,3 +296,18 @@
 - **UNVERIFIED:** No interactive browser acceptance run, production Render/Supabase/Vercel inspection, live database reset, or end-to-end account/session check was performed. Seed-state and view behavior are code-reviewed only; no external production data was changed.
 - **UNVERIFIED:** No performance measurement or security scan was performed.
 - **NOT PUSHED:** These cleanup changes are uncommitted on `fix/full-e2e-sync`; the branch is one commit ahead of `origin/fix/full-e2e-sync`. No deployment was performed.
+
+## 14. Current Session — Generic Pending-Account Login Failure (2026-11-17)
+
+### Implemented
+
+- **VERIFIED IN CODE:** Login attempts for pending registrations now return the same generic HTTP 401 response as other invalid credentials, instead of 403 with an account-specific verification message. This closes the observed mismatch and avoids disclosing pending-registration status from the login response.
+- **VERIFIED IN CODE:** The login screen retains a resend-verification action alongside the generic credential failure, using the existing enumeration-safe resend endpoint.
+
+### Verification and release status
+
+- **VERIFIED:** `npm test` passed, 56/56 assertions (24 unit/API tests and the repository's E2E/API audit suite).
+- **VERIFIED:** `npm run lint` passed.
+- **VERIFIED:** `npm run build` passed; the existing Vite large-chunk warning remains (main JavaScript bundle approximately 1.30 MB minified).
+- **VERIFIED:** `git -c core.whitespace=cr-at-eol diff --check` passed. The repository's Windows working tree uses CRLF line endings.
+- **UNVERIFIED:** GitHub Actions was not rerun yet; no production login attempt or hosted service change was performed.

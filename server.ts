@@ -911,10 +911,9 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
   let user = usersDatabase.get(normalizedEmail);
 
   if (!user && pendingRegistrationsDatabase.has(normalizedEmail)) {
-    return res.status(403).json({
+    return res.status(401).json({
       success: false,
-      error: 'EMAIL_NOT_VERIFIED',
-      message: 'This account is waiting for email verification. Use the verification link we sent, or resend it from the registration screen.',
+      message: 'Invalid institutional credentials. Please check your email and password.',
     });
   }
 
@@ -936,7 +935,7 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
     if (user.emailVerified === false) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid credentials or unverified account.',
+        message: 'Invalid institutional credentials. Please check your email and password.',
       });
     }
 
@@ -944,7 +943,7 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
     if (!passwordVerification.isValid) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid credentials or unverified account.',
+        message: 'Invalid institutional credentials. Please check your email and password.',
       });
     }
 
@@ -1165,7 +1164,7 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
   if (user.emailVerified === false) {
     return res.status(401).json({
       success: false,
-      message: 'Invalid credentials or unverified account.',
+      message: 'Invalid institutional credentials. Please check your email and password.',
     });
   }
 
@@ -1173,7 +1172,7 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
   if (!passwordVerification.isValid) {
     return res.status(401).json({
       success: false,
-      message: 'Invalid credentials or unverified account.',
+      message: 'Invalid institutional credentials. Please check your email and password.',
     });
   }
 
