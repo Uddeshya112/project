@@ -325,7 +325,7 @@
 
 - Added an idempotent migration to enable RLS on `public.roles` and revoke browser-role table grants when the legacy table exists. It is safe on installations where that table is absent.
 - Removed the raw email address and provider error details from failed Supabase login logs.
-- Kept the resend-verification action available for the older production API's explicit “waiting for email verification” response as well as the newer generic invalid-credentials response.
+- **CURRENT USER CHANGE:** Removed the resend-verification button from the login error alert. The separate registration-success recovery action remains available.
 - Documented Render's required mail-provider setup and the pending-account recovery flow in `docs/runbooks/deploy.md`.
 
 ### Verification and release status
