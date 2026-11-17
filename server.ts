@@ -36,6 +36,7 @@ import { supabaseStore } from './src/server/supabaseStore';
 import { timetableJobManager } from './src/server/jobManager';
 import { sendEmail, checkMailerConfiguration } from './src/server/mailer';
 import { connectDb, type Db } from './src/server/db';
+import type { DayOfWeek } from './src/types';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -107,6 +108,7 @@ async function initializeAcademicPersistence() {
   }
   academicDb = await connectDb(process.env.DATABASE_URL);
   await loadAcademicState();
+  await loadPersistedUsers();
 }
 
 // Initialize Server-side Supabase Clients
@@ -322,6 +324,7 @@ interface StoredUser {
   isDemoUser?: boolean;
   emailVerified?: boolean;
   profile?: Record<string, unknown>;
+  lastLoginAt?: string;
 }
 
 export type { StoredSession } from './src/server/persistentStore';
@@ -546,7 +549,7 @@ const usersDatabase: Map<string, StoredUser> = new Map(
     'student.demo@demo.thapar.local',
     {
       id: 'usr-demo-student',
-      name: 'Rohan Sharma (Student)',
+      name: 'Rohan Sharma',
       email: 'student.demo@demo.thapar.local',
       passwordHash: hashPasswordBcryptSync(DEMO_ACCOUNT_PASSWORD),
       roleId: 'role-student',
@@ -615,6 +618,82 @@ const oneTimeTokensDatabase = persistentStore.oneTimeTokens;
 const pendingRegistrationsDatabase = persistentStore.pendingRegistrations;
 const userIdentitiesDatabase: Map<string, StoredUserIdentity> = new Map();
 const googleOAuthStates: Map<string, { createdAt: number }> = new Map();
+
+async function createDurableSession(rawToken: string, user: StoredUser): Promise<boolean> {
+  try {
+    persistentStore.createSession(rawToken, user.id, user.roleCode);
+    await persistentStore.persistSession(rawToken);
+    return true;
+  } catch (err) {
+    persistentStore.revokeSession(rawToken);
+    console.error('[AUTH] Could not persist login session:', err instanceof Error ? err.message : 'unknown error');
+    return false;
+  }
+}
+
+async function loadPersistedUsers() {
+  if (!academicDb) return;
+  const rows = await academicDb.query<any>(
+    'select id, email, name, role_code, department, password_hash, google_sub, status, is_demo, profile, created_at, last_login_at from intellischedule.users',
+  );
+  for (const row of rows) {
+    const email = String(row.email || '').trim().toLowerCase();
+    if (!email || !row.id) continue;
+    const existing = usersDatabase.get(email);
+    const user: StoredUser = {
+      ...existing,
+      id: String(row.id),
+      name: String(row.name || existing?.name || email.split('@')[0]),
+      email,
+      passwordHash: row.password_hash || 'SUPABASE_AUTH_MANAGED',
+      roleId: `role-${String(row.role_code || 'STUDENT').toLowerCase()}`,
+      roleCode: row.role_code || 'STUDENT',
+      roleName: existing?.roleName || (row.role_code === 'COORDINATOR' ? 'Timetable Coordinator' : row.role_code === 'FACULTY' ? 'Faculty Member' : row.role_code === 'COLLEGE_ADMIN' ? 'College Admin / Dean' : row.role_code === 'HOD' ? 'Head of Department' : 'Student'),
+      institutionId: existing?.institutionId || 'inst-thapar',
+      institutionName: existing?.institutionName || 'Thapar Institute of Engineering and Technology',
+      department: String(row.department || existing?.department || ''),
+      status: row.status === 'LOCKED' ? 'LOCKED' : 'ACTIVE',
+      createdAt: new Date(row.created_at || existing?.createdAt || Date.now()).toISOString(),
+      authorizedWorkspaces: existing?.authorizedWorkspaces,
+      isDemoUser: Boolean(row.is_demo),
+      emailVerified: true,
+      profile: row.profile && typeof row.profile === 'object' ? row.profile : existing?.profile || {},
+      lastLoginAt: row.last_login_at ? new Date(row.last_login_at).toISOString() : existing?.lastLoginAt,
+    };
+    usersDatabase.set(email, user);
+  }
+}
+
+async function persistUserRecord(user: StoredUser) {
+  if (!academicDb) {
+    if (process.env.NODE_ENV === 'production') throw new Error('Database is not initialized; account changes cannot be saved.');
+    return;
+  }
+  await academicDb.query(
+    `insert into intellischedule.users
+       (id, email, name, role_code, department, password_hash, status, is_demo, profile, created_at, last_login_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11)
+     on conflict (email) do update set
+       id = excluded.id, name = excluded.name, role_code = excluded.role_code,
+       department = excluded.department,
+       password_hash = coalesce(excluded.password_hash, intellischedule.users.password_hash),
+       status = excluded.status, is_demo = excluded.is_demo, profile = excluded.profile,
+       last_login_at = coalesce(excluded.last_login_at, intellischedule.users.last_login_at)`,
+    [
+      user.id,
+      user.email.trim().toLowerCase(),
+      user.name,
+      user.roleCode,
+      user.department,
+      user.passwordHash === 'SUPABASE_AUTH_MANAGED' ? null : user.passwordHash,
+      user.status,
+      Boolean(user.isDemoUser),
+      JSON.stringify(user.profile || {}),
+      user.createdAt,
+      user.lastLoginAt || null,
+    ],
+  );
+}
 
 function issueOneTimeToken(
   email: string,
@@ -866,8 +945,18 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
       usersDatabase.set(normalizedEmail, user);
     }
 
+    user.lastLoginAt = new Date().toISOString();
+    try {
+      await persistUserRecord(user);
+    } catch (err) {
+      console.error('[AUTH] Could not persist account login state:', err instanceof Error ? err.message : 'unknown error');
+      return res.status(503).json({ success: false, message: 'Your account could not be loaded from durable storage. Please retry.' });
+    }
+
     const sessionToken = 'jwt_live_' + crypto.randomBytes(32).toString('hex');
-    persistentStore.createSession(sessionToken, user.id, user.roleCode);
+    if (!(await createDurableSession(sessionToken, user))) {
+      return res.status(503).json({ success: false, message: 'Could not save your login session. Please retry.' });
+    }
 
     res.cookie('intellischedule_session', sessionToken, {
       httpOnly: true,
@@ -975,6 +1064,14 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
       user.id = authUser.id;
     }
 
+    user.lastLoginAt = new Date().toISOString();
+    try {
+      await persistUserRecord(user);
+    } catch (err) {
+      console.error('[AUTH] Could not persist Supabase-authenticated account:', err instanceof Error ? err.message : 'unknown error');
+      return res.status(503).json({ success: false, message: 'Your account could not be saved to the application database. Please retry.' });
+    }
+
     if (user.isDemoUser && process.env.NODE_ENV === 'production' && process.env.ALLOW_DEMO_IN_PRODUCTION !== 'true' && (user.roleCode === 'COLLEGE_ADMIN' || user.roleCode === 'COORDINATOR')) {
       return res.status(403).json({
         success: false,
@@ -999,7 +1096,9 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
     }
 
     // Generate session
-    persistentStore.createSession(sessionToken, user.id, user.roleCode);
+    if (!(await createDurableSession(sessionToken, user))) {
+      return res.status(503).json({ success: false, message: 'Could not save your login session. Please retry.' });
+    }
 
     res.cookie('intellischedule_session', sessionToken, {
       httpOnly: true,
@@ -1076,7 +1175,9 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
   }
 
   const sessionToken = 'jwt_live_' + crypto.randomBytes(32).toString('hex');
-  persistentStore.createSession(sessionToken, user.id, user.roleCode);
+  if (!(await createDurableSession(sessionToken, user))) {
+    return res.status(503).json({ success: false, message: 'Could not save your login session. Please retry.' });
+  }
 
   res.cookie('intellischedule_session', sessionToken, {
     httpOnly: true,
@@ -1181,6 +1282,38 @@ function getAuthenticatedUser(req: Request): StoredUser | null {
   }
   return null;
 }
+
+app.put('/api/auth/profile', async (req: Request, res: Response) => {
+  const user = getAuthenticatedUser(req);
+  if (!user) return res.status(401).json({ success: false, message: 'Please sign in to update your profile.' });
+
+  const fields = ['phone', 'officeLocation', 'officeHours'] as const;
+  const nextProfile = { ...(user.profile || {}) };
+  for (const field of fields) {
+    if (req.body?.[field] === undefined) continue;
+    if (typeof req.body[field] !== 'string' || req.body[field].length > 200) {
+      return res.status(400).json({ success: false, message: `${field} must be text with at most 200 characters.` });
+    }
+    nextProfile[field] = req.body[field].trim();
+  }
+
+  const previousProfile = user.profile;
+  user.profile = nextProfile;
+  try {
+    await persistUserRecord(user);
+  } catch (err) {
+    user.profile = previousProfile;
+    console.error('[AUTH] Could not persist profile update:', err instanceof Error ? err.message : 'unknown error');
+    return res.status(503).json({ success: false, message: 'Profile changes could not be saved. Please retry.' });
+  }
+  usersDatabase.set(user.email.toLowerCase(), user);
+
+  return res.json({
+    success: true,
+    message: 'Profile updated and saved.',
+    user: { id: user.id, name: user.name, email: user.email, department: user.department, profile: user.profile },
+  });
+});
 
 // GET /api/me (Current Authenticated User Profile)
 app.get('/api/me', (req: Request, res: Response) => {
@@ -1422,7 +1555,14 @@ app.post('/api/auth/demo-login', async (req: Request, res: Response) => {
     user.id = authUserId;
   }
 
-  persistentStore.createSession(sessionToken, user.id, user.roleCode);
+  if (user.roleCode === 'STUDENT') {
+    const seededStudent = supabaseStore.getBootstrapState().students?.find((student: any) => student.email?.toLowerCase() === user.email.toLowerCase());
+    if (seededStudent?.name) user.name = seededStudent.name;
+  }
+
+  if (!(await createDurableSession(sessionToken, user))) {
+    return res.status(503).json({ success: false, message: 'Could not save your login session. Please retry.' });
+  }
 
   res.cookie('intellischedule_session', sessionToken, {
     httpOnly: true,
@@ -1491,6 +1631,22 @@ app.post('/api/demo/reset', requireAuth, (req: AuthenticatedRequest, res: Respon
     message: 'Demo dataset and accounts safely restored to pristine initial state.',
     timestamp: new Date().toISOString(),
   });
+});
+
+app.post('/api/academic/faculty/:id/availability', requireAuth, requireRole(['FACULTY', 'HOD', 'COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
+  const { day, periodId, reason } = req.body || {};
+  const facultyId = String(req.params.id);
+  const allowedReasons = ['Research', 'Lunch', 'Personal', 'Department', 'Meeting'];
+  if (!day || typeof day !== 'string' || !periodId || typeof periodId !== 'string' || !allowedReasons.includes(reason)) {
+    return res.status(400).json({ success: false, message: 'A valid day, period, and availability reason are required.' });
+  }
+  const ownFacultyId = req.authenticatedUser?.profile?.facultyId;
+  if (req.authenticatedUser?.roleCode === 'FACULTY' && ownFacultyId !== facultyId) {
+    return res.status(403).json({ success: false, message: 'Faculty may only update their own availability.' });
+  }
+  const faculty = supabaseStore.toggleFacultyProtectedSlot(facultyId, day as DayOfWeek, periodId, reason);
+  if (!faculty) return res.status(404).json({ success: false, message: 'Faculty record not found.' });
+  return res.json({ success: true, faculty });
 });
 
 // -------------------------------------------------------------
@@ -1637,6 +1793,15 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
   pendingRegistrationsDatabase.set(normalizedEmail, pending);
 
   const { rawToken } = issueOneTimeToken(normalizedEmail, 'email_verification', 24 * 60 * 60 * 1000);
+  try {
+    await Promise.all([
+      persistentStore.persistPendingRegistration(normalizedEmail),
+      persistentStore.persistOneTimeToken(rawToken),
+    ]);
+  } catch (err) {
+    console.error('[REGISTRATION] Could not persist pending signup:', err instanceof Error ? err.message : 'unknown error');
+    return res.status(503).json({ success: false, message: 'Registration could not be saved. Please try again.' });
+  }
 
   const appUrl = process.env.APP_URL || 'http://localhost:3000';
   setImmediate(() => {
@@ -1688,6 +1853,12 @@ app.post('/api/auth/verify-email', async (req: Request, res: Response) => {
       message: 'Invalid or expired verification token.',
     });
   }
+  try {
+    await persistentStore.persistOneTimeToken(token);
+  } catch (err) {
+    console.error('[AUTH] Could not persist consumed verification token:', err instanceof Error ? err.message : 'unknown error');
+    return res.status(503).json({ success: false, message: 'Verification could not be completed. Please retry.' });
+  }
 
   let user = usersDatabase.get(record.email);
   const pending = pendingRegistrationsDatabase.get(record.email);
@@ -1707,7 +1878,14 @@ app.post('/api/auth/verify-email', async (req: Request, res: Response) => {
       status: 'ACTIVE',
       createdAt: new Date().toISOString(),
       emailVerified: true,
+      profile: {},
     };
+    try {
+      await persistUserRecord(user);
+    } catch (err) {
+      console.error('[AUTH] Could not persist verified account:', err instanceof Error ? err.message : 'unknown error');
+      return res.status(503).json({ success: false, message: 'Your account could not be saved yet. Please retry verification.' });
+    }
     usersDatabase.set(pending.email, user);
     pendingRegistrationsDatabase.delete(pending.email);
   } else if (user) {
@@ -1757,6 +1935,12 @@ app.post('/api/auth/resend-verification', async (req: Request, res: Response) =>
 
   if (user && user.emailVerified === false) {
     rawToken = dummyToken.rawToken;
+    try {
+      await persistentStore.persistOneTimeToken(rawToken);
+    } catch (err) {
+      console.error('[REGISTRATION] Could not persist resend token:', err instanceof Error ? err.message : 'unknown error');
+      return res.status(503).json({ success: false, message: 'Verification email could not be prepared. Please retry.' });
+    }
 
     const appUrl = process.env.APP_URL || 'http://localhost:3000';
     setImmediate(() => {
@@ -2016,9 +2200,19 @@ app.get('/api/auth/google/callback', async (req: Request, res: Response) => {
       }
     }
 
+    user.lastLoginAt = new Date().toISOString();
+    try {
+      await persistUserRecord(user);
+    } catch (persistError) {
+      console.error('[AUTH] Could not persist Google-authenticated account:', persistError instanceof Error ? persistError.message : 'unknown error');
+      return returnError(503, 'Your account could not be saved to the application database. Please retry.', 'ACCOUNT_PERSISTENCE_FAILED');
+    }
+
     // Create session
     const sessionToken = 'jwt_live_' + crypto.randomBytes(32).toString('hex');
-    persistentStore.createSession(sessionToken, user.id, user.roleCode);
+    if (!(await createDurableSession(sessionToken, user))) {
+      return returnError(503, 'Could not save your login session. Please retry.', 'SESSION_PERSISTENCE_FAILED');
+    }
 
     // Set cookie with same options as other login routes: sameSite: 'lax', secure in production
     res.cookie('intellischedule_session', sessionToken, {
@@ -2111,10 +2305,16 @@ const handleForgotPassword = async (req: Request, res: Response) => {
     rawToken = dummyToken.rawToken;
     const tokenToSend = rawToken;
 
+    try {
+      await persistentStore.persistOneTimeToken(rawToken);
+    } catch (err) {
+      console.error('[AUTH] Could not persist password reset token:', err instanceof Error ? err.message : 'unknown error');
+      // Keep the public response generic, and do not send an unusable link.
+      rawToken = undefined;
+    }
+
     // Send token by email
-    setImmediate(() => {
-      sendResetEmail(normalizedEmail, tokenToSend).catch(() => {});
-    });
+    if (rawToken) setImmediate(() => { sendResetEmail(normalizedEmail, tokenToSend).catch(() => {}); });
   } else {
     oneTimeTokensDatabase.delete(dummyToken.record.tokenHash);
   }
@@ -2185,6 +2385,12 @@ app.post('/api/auth/reset-password', async (req: Request, res: Response) => {
       message: 'Invalid or expired password reset token. Please request a new one.',
     });
   }
+  try {
+    await persistentStore.persistOneTimeToken(token);
+  } catch (err) {
+    console.error('[AUTH] Could not persist consumed password token:', err instanceof Error ? err.message : 'unknown error');
+    return res.status(503).json({ success: false, message: 'Password reset could not be completed. Please request a new link.' });
+  }
 
   const user = usersDatabase.get(record.email);
   if (!user) {
@@ -2195,8 +2401,17 @@ app.post('/api/auth/reset-password', async (req: Request, res: Response) => {
   }
 
   // Update password in database with modern Bcrypt KDF
+  const previousPasswordHash = user.passwordHash;
   user.passwordHash = hashPasswordBcryptSync(String(newPassword));
   usersDatabase.set(record.email, user);
+  try {
+    await persistUserRecord(user);
+  } catch (err) {
+    user.passwordHash = previousPasswordHash;
+    usersDatabase.set(record.email, user);
+    console.error('[AUTH] Could not persist password reset:', err instanceof Error ? err.message : 'unknown error');
+    return res.status(503).json({ success: false, message: 'Password reset could not be saved. Please try again.' });
+  }
 
   // Sync password with Supabase Auth
   if (supabaseAdmin) {

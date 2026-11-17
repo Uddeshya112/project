@@ -244,3 +244,35 @@
 - **NOT IMPLEMENTED:** Redis/edge caching and publish/cancel invalidation, durable distributed job queue, PgBouncer configuration, and horizontal scaling. The current server keeps timetable state in one in-memory store backed by one JSONB snapshot and explicitly requires one app instance; an in-process worker does not remove that deployment constraint or provide job durability across restart/scale-out.
 - **REQUIRES HUMAN ACTION:** Configure `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and the matching redirect URI to expose Google sign-in. Do not consider OAuth verified until a live callback test succeeds.
 - **REQUIRES HUMAN ACTION:** Review these changes and deploy via the normal release process before replaying the report against production. No production state was changed here.
+
+## 11. Previous Session — Persist Accounts and Profile Data (2026-11-17)
+
+### Root cause and changes
+
+- **CONFIRMED IN CODE:** After email verification, new accounts were only inserted into the in-memory `usersDatabase` map; restarts lost them. Profile edits also only updated React state.
+- **CONFIRMED IN CODE:** PostgreSQL session writes were fire-and-forget and swallowed failures, so login could succeed in memory without confirming that its session had been saved.
+- **IMPLEMENTED:** On startup, load account rows from the existing private `intellischedule.users` table. Save verified registrations, login metadata, password resets, and profile contact fields there. Profile saves now use an authenticated server endpoint and update the UI only after the database acknowledges them.
+- **IMPLEMENTED:** Password and Google sign-ins wait for the account and session database writes and return an error instead of claiming success if persistence fails. Registration and token flows similarly confirm their required database writes before reporting success or sending verification links.
+- **SECURITY:** Passwords remain bcrypt hashes in the private database; raw passwords are never stored.
+
+### Verification and limits
+
+- **VERIFIED:** `pnpm run lint` passed; `pnpm run build` passed with the existing large JavaScript chunk warning.
+- **UNVERIFIED:** No connection to the user's live Supabase database was available, so the live table contents and production login were not queried or tested. These changes require deployment to the Render API service and a configured `DATABASE_URL` before production behavior changes.
+- **NOT DEPLOYED OR PUSHED:** These fixes are local and uncommitted on `fix/full-e2e-sync`.
+
+## 12. Current Session — Final Five Polish Fixes (2026-11-17)
+
+### Implemented
+
+- Demo reset UI now uses a `finally` cleanup path and a success/error toast. The reset API's successful response is followed by an authoritative academic bootstrap refetch; cancelled sessions, edits, polls, notifications, and versions are replaced from the seeded server state.
+- Faculty roster now renders 20 rows per page, supports text search and department filtering, and shows the page count.
+- Student demo identity is normalized from the seeded student record; the existing Profile action opens the profile modal with student roll, program, semester, and section details. Disruption announcement creation uses an ISO timestamp, and display has a safe fallback for old invalid values.
+- Restore Version now marks the selected snapshot as the active published production version in the persisted store and client state; the badge follows its published flag.
+- Added a dedicated faculty availability weekly grid. Protected period toggles/release are persisted through the authenticated, role-checked academic API. Removed the stale Google sign-in wording from the login subtitle.
+
+### Verification and release status
+
+- **VERIFIED:** `npm run build` passed (existing Vite large-chunk warning remains); `npm run lint` passed after fixing a route parameter type. `git diff --check` passed before final small view changes and will be rerun before commit.
+- **UNVERIFIED:** No interactive browser acceptance run or live Render/Supabase/Vercel verification was performed. These updates change production app behavior only after deployment.
+- **PENDING:** User requested pushing these changes; commit/push to `fix/full-e2e-sync` after final diff and validation.

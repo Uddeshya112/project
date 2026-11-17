@@ -13,6 +13,7 @@ import { CoordinatorView } from './views/CoordinatorView';
 import { TimetableGridView } from './views/TimetableGridView';
 import { RecoveryEngineView } from './views/RecoveryEngineView';
 import { FacultyPortalView } from './views/FacultyPortalView';
+import { FacultyAvailabilityView } from './views/FacultyAvailabilityView';
 import { StudentPortalView } from './views/StudentPortalView';
 import { CRPortalView } from './views/CRPortalView';
 import { AdminPortalView } from './views/AdminPortalView';
@@ -78,6 +79,7 @@ export function DashboardLayout({
   const [profileModalOpen, setProfileModalOpen] = useState(false);
   const [showWorkspaceMenu, setShowWorkspaceMenu] = useState(false);
   const [resettingDemo, setResettingDemo] = useState(false);
+  const [resetToast, setResetToast] = useState<{ success: boolean; message: string } | null>(null);
 
   const unreadCount = notifications.filter(n => !n.read).length;
 
@@ -199,9 +201,14 @@ export function DashboardLayout({
               onClick={async () => {
                 if (!window.confirm('Restore the shared demo timetable and academic data to its seeded state?')) return;
                 setResettingDemo(true);
-                const result = await resetDemoAcademicData();
-                setResettingDemo(false);
-                window.alert(result.message || (result.success ? 'Demo data reset.' : 'Demo data could not be reset.'));
+                try {
+                  const result = await resetDemoAcademicData();
+                  setResetToast({ success: result.success, message: result.message || (result.success ? 'Demo data reset.' : 'Demo data could not be reset.') });
+                } catch (error) {
+                  setResetToast({ success: false, message: error instanceof Error ? error.message : 'Demo data could not be reset.' });
+                } finally {
+                  setResettingDemo(false);
+                }
               }}
               className="inline-flex items-center gap-1 rounded-md border border-[#E5E2D9] bg-white px-2 py-1 text-[10px] font-semibold text-stone-600 hover:text-[#8C1B2E] disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
               title="Restore the shared demo dataset"
@@ -328,7 +335,7 @@ export function DashboardLayout({
           <>
           {currentWorkspace === 'Student' && <StudentPortalView />}
           {currentWorkspace === 'CR' && <CRPortalView />}
-          {currentWorkspace === 'Faculty' && (activeView === 'grid' ? <TimetableGridView /> : <FacultyPortalView />)}
+          {currentWorkspace === 'Faculty' && (activeView === 'grid' ? <TimetableGridView /> : activeView === 'availability' ? <FacultyAvailabilityView /> : <FacultyPortalView />)}
           {currentWorkspace === 'Admin' && <AdminPortalView />}
           {currentWorkspace === 'HOD' && (
             <>
@@ -384,6 +391,12 @@ export function DashboardLayout({
           <button onClick={dismissNotice} aria-label="Dismiss message" className="p-0.5 rounded hover:bg-black/5">
             <X className="h-3.5 w-3.5" />
           </button>
+        </div>
+      )}
+      {resetToast && (
+        <div role={resetToast.success ? 'status' : 'alert'} className={`fixed bottom-4 right-4 left-4 sm:left-auto sm:max-w-sm z-[71] rounded-xl border p-3 text-xs shadow-lg ${resetToast.success ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-200' : 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-800 dark:bg-rose-950 dark:text-rose-200'}`}>
+          {resetToast.message}
+          <button type="button" onClick={() => setResetToast(null)} className="ml-3 font-semibold underline">Dismiss</button>
         </div>
       )}
 

@@ -617,7 +617,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
                 Sign in to your account
               </h2>
               <p className="text-xs text-stone-500 dark:text-zinc-400">
-                Use your institutional email and password, or continue with Google.
+                Use your institutional email and password.
               </p>
             </div>
 

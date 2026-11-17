@@ -217,7 +217,7 @@ export class PostgresBackend implements StateBackend {
        values ($1, $2, $3, $4, $5, $6)
        on conflict (token_hash) do update set is_used = $5, expires_at = $4`,
       [token.tokenHash, token.email, token.purpose, token.expiresAt, token.isUsed, token.createdAt]
-    ).catch(err => console.error('[POSTGRES STORE] saveOneTimeToken error:', err));
+    );
   }
 
   async deleteOneTimeToken(tokenHash: string): Promise<void> {
@@ -230,7 +230,7 @@ export class PostgresBackend implements StateBackend {
        values ($1, $2, $3, $4, $5, $6)
        on conflict (token_hash) do update set is_revoked = $6, expires_at = $5`,
       [session.tokenHash, session.userId, session.roleCode, session.createdAt, session.expiresAt, session.isRevoked]
-    ).catch(err => console.error('[POSTGRES STORE] saveSession error:', err));
+    );
   }
 
   async deleteSession(tokenHash: string): Promise<void> {
@@ -243,7 +243,7 @@ export class PostgresBackend implements StateBackend {
        values ($1, $2, $3, $4, $5, $6, $7)
        on conflict (email) do update set name = $2, password_hash = $3, role_code = $4, role_name = $5, department = $6, created_at = $7`,
       [pending.email, pending.name, pending.passwordHash, pending.roleCode, pending.roleName, pending.department, pending.createdAt]
-    ).catch(err => console.error('[POSTGRES STORE] savePendingRegistration error:', err));
+    );
   }
 
   async deletePendingRegistration(email: string): Promise<void> {
@@ -406,6 +406,12 @@ export class PersistentStore {
     return { rawToken, record };
   }
 
+  public async persistOneTimeToken(rawToken: string): Promise<void> {
+    const token = this.oneTimeTokens.get(this.hashToken(rawToken));
+    if (!token) throw new Error('One-time token was not created.');
+    await this.backend.saveOneTimeToken(token);
+  }
+
   public consumeOneTimeToken(rawToken: string, expectedPurpose: OneTimeTokenPurpose): StoredOneTimeToken | null {
     if (!rawToken || typeof rawToken !== 'string') return null;
     const tokenHash = this.hashToken(rawToken);
@@ -458,8 +464,13 @@ export class PersistentStore {
     };
     this.sessions.set(tokenHash, session);
     this.saveToDisk();
-    this.backend.saveSession(session).catch(() => {});
     return session;
+  }
+
+  public async persistSession(rawToken: string): Promise<void> {
+    const session = this.sessions.get(this.hashToken(rawToken));
+    if (!session) throw new Error('Session was not created.');
+    await this.backend.saveSession(session);
   }
 
   public getSession(rawToken: string): StoredSession | null {
@@ -511,6 +522,12 @@ export class PersistentStore {
     this.pendingRegistrations.set(normalized, pending);
     this.saveToDisk();
     this.backend.savePendingRegistration(pending).catch(() => {});
+  }
+
+  public async persistPendingRegistration(email: string): Promise<void> {
+    const pending = this.pendingRegistrations.get(email.trim().toLowerCase());
+    if (!pending) throw new Error('Pending registration was not created.');
+    await this.backend.savePendingRegistration(pending);
   }
 
   public getPendingRegistration(email: string): PendingRegistration | null {

@@ -177,6 +177,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       subSectionId: apiUser.profile?.subSectionId ?? apiUser.subSectionId ?? existing?.subSectionId,
       crSectionId: apiUser.profile?.crSectionId ?? apiUser.crSectionId ?? existing?.crSectionId,
       facultyId: apiUser.profile?.facultyId ?? apiUser.facultyId ?? existing?.facultyId,
+      phone: apiUser.profile?.phone ?? apiUser.phone ?? existing?.phone,
+      officeLocation: apiUser.profile?.officeLocation ?? apiUser.officeLocation ?? existing?.officeLocation,
+      officeHours: apiUser.profile?.officeHours ?? apiUser.officeHours ?? existing?.officeHours,
       authorizedWorkspaces: resolvedWorkspaces,
       isDemoUser: apiUser.isDemoUser ?? existing?.isDemoUser,
       roleCode: resolvedRoleCode,
@@ -591,10 +594,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       updates = userIdOrUpdates;
     }
     if (!targetUserId) return { success: false, message: 'No active user' };
-    setAllUsers(prev =>
-      prev.map(u => (u.id === targetUserId ? { ...u, ...updates, updatedAt: new Date().toISOString() } : u))
-    );
-    return { success: true, message: 'Profile updated' };
+    if (targetUserId !== currentUserId) return { success: false, message: 'You can only update your own profile here.' };
+    try {
+      const response = await fetch(apiUrl('/api/auth/profile'), {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          phone: updates?.phone,
+          officeLocation: updates?.officeLocation,
+          officeHours: updates?.officeHours,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) return { success: false, message: data.message || 'Profile could not be saved.' };
+      const profile = data.user?.profile || {};
+      setAllUsers(prev => prev.map(user => user.id === targetUserId ? {
+        ...user,
+        phone: profile.phone ?? user.phone,
+        officeLocation: profile.officeLocation ?? user.officeLocation,
+        officeHours: profile.officeHours ?? user.officeHours,
+        updatedAt: new Date().toISOString(),
+      } : user));
+      return { success: true, message: data.message || 'Profile saved.' };
+    } catch {
+      return { success: false, message: 'Could not reach the account service. Profile was not saved.' };
+    }
   };
 
   const addRoleAssignment = (email: string, roleId: string, notes?: string) => {

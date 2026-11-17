@@ -2345,25 +2345,30 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     periodId: string,
     reason: 'Research' | 'Lunch' | 'Personal' | 'Department' | 'Meeting'
   ): Promise<{ success: boolean }> => {
-    setFacultyMembers(prev =>
-      prev.map(f => {
+    const previous = facultyMembers.find((faculty) => faculty.id === facultyId);
+    if (!previous) return { success: false };
+    const exists = previous.preferences.protectedSlots.some(ps => ps.day === day && ps.periodId === periodId);
+    const nextProtectedSlots = exists
+      ? previous.preferences.protectedSlots.filter(ps => !(ps.day === day && ps.periodId === periodId))
+      : [...previous.preferences.protectedSlots, { day, periodId, reason }];
+    try {
+      const response = await fetch(apiUrl(`/api/academic/faculty/${encodeURIComponent(facultyId)}/availability`), {
+        method: 'POST', credentials: 'same-origin', headers: getAuthHeaders(),
+        body: JSON.stringify({ day, periodId, reason }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.success) throw new Error(result.message || 'Availability could not be saved.');
+      setFacultyMembers(prev => prev.map(f => {
         if (f.id !== facultyId) return f;
-        const exists = f.preferences.protectedSlots.some(
-          ps => ps.day === day && ps.periodId === periodId
-        );
-        const nextSlots = exists
-          ? f.preferences.protectedSlots.filter(ps => !(ps.day === day && ps.periodId === periodId))
-          : [...f.preferences.protectedSlots, { day, periodId, reason }];
         return {
           ...f,
-          preferences: {
-            ...f.preferences,
-            protectedSlots: nextSlots,
-          },
+          preferences: { ...f.preferences, protectedSlots: nextProtectedSlots },
         };
-      })
-    );
-    return { success: true };
+      }));
+      return { success: true };
+    } catch {
+      return { success: false };
+    }
   };
 
   const restoreVersion = async (versionNumber: number): Promise<{ success: boolean; message?: string }> => {
@@ -2374,8 +2379,12 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.success || !data.version?.sessions) return { success: false, message: data.message || 'This version could not be restored.' };
       setSessions(data.version.sessions);
-      setPublishStatus('Draft');
-      setVersions(previous => previous.map(version => version.versionNumber === versionNumber ? { ...version, isPublished: false, status: 'Draft' } : version));
+      setPublishStatus('Published');
+      setVersions(previous => previous.map(version => ({
+        ...version,
+        isPublished: version.versionNumber === versionNumber,
+        status: version.versionNumber === versionNumber ? 'Published' : (version.status === 'Published' ? 'Approved' : version.status),
+      })));
       return { success: true, message: data.message || `Restored ${data.version.versionLabel}.` };
     } catch {
       return { success: false, message: 'Could not reach the server. This version was not restored.' };

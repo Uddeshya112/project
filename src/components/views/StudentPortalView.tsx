@@ -1007,7 +1007,7 @@ export function StudentPortalView() {
             <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl divide-y divide-[#E5E2D9] dark:divide-zinc-800 text-xs">
               {sectionAnnouncements.length === 0 ? <p className="p-4 text-stone-500 dark:text-zinc-400">No section announcements.</p> : sectionAnnouncements.map(item => (
                 <div key={item.id} className="p-4 space-y-1">
-                  <div className="flex items-center justify-between"><span className="font-semibold text-stone-900 dark:text-zinc-100">{item.title}</span><time className="text-[10px] text-stone-400">{new Date(item.timestamp).toLocaleString()}</time></div>
+                  <div className="flex items-center justify-between"><span className="font-semibold text-stone-900 dark:text-zinc-100">{item.title}</span><time className="text-[10px] text-stone-400">{Number.isNaN(new Date(item.timestamp).getTime()) ? 'Recently' : new Date(item.timestamp).toLocaleString()}</time></div>
                   <p className="text-stone-600 dark:text-zinc-400 leading-relaxed">{item.message}</p>
                 </div>
               ))}
