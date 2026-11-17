@@ -36,6 +36,7 @@ import { supabaseStore } from './src/server/supabaseStore';
 import { timetableJobManager } from './src/server/jobManager';
 import { sendEmail, checkMailerConfiguration } from './src/server/mailer';
 import { connectDb, type Db } from './src/server/db';
+import type { DayOfWeek } from './src/types';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -548,7 +549,7 @@ const usersDatabase: Map<string, StoredUser> = new Map(
     'student.demo@demo.thapar.local',
     {
       id: 'usr-demo-student',
-      name: 'Rohan Sharma (Student)',
+      name: 'Rohan Sharma',
       email: 'student.demo@demo.thapar.local',
       passwordHash: hashPasswordBcryptSync(DEMO_ACCOUNT_PASSWORD),
       roleId: 'role-student',
@@ -1554,6 +1555,11 @@ app.post('/api/auth/demo-login', async (req: Request, res: Response) => {
     user.id = authUserId;
   }
 
+  if (user.roleCode === 'STUDENT') {
+    const seededStudent = supabaseStore.getBootstrapState().students?.find((student: any) => student.email?.toLowerCase() === user.email.toLowerCase());
+    if (seededStudent?.name) user.name = seededStudent.name;
+  }
+
   if (!(await createDurableSession(sessionToken, user))) {
     return res.status(503).json({ success: false, message: 'Could not save your login session. Please retry.' });
   }
@@ -1625,6 +1631,22 @@ app.post('/api/demo/reset', requireAuth, (req: AuthenticatedRequest, res: Respon
     message: 'Demo dataset and accounts safely restored to pristine initial state.',
     timestamp: new Date().toISOString(),
   });
+});
+
+app.post('/api/academic/faculty/:id/availability', requireAuth, requireRole(['FACULTY', 'HOD', 'COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
+  const { day, periodId, reason } = req.body || {};
+  const facultyId = String(req.params.id);
+  const allowedReasons = ['Research', 'Lunch', 'Personal', 'Department', 'Meeting'];
+  if (!day || typeof day !== 'string' || !periodId || typeof periodId !== 'string' || !allowedReasons.includes(reason)) {
+    return res.status(400).json({ success: false, message: 'A valid day, period, and availability reason are required.' });
+  }
+  const ownFacultyId = req.authenticatedUser?.profile?.facultyId;
+  if (req.authenticatedUser?.roleCode === 'FACULTY' && ownFacultyId !== facultyId) {
+    return res.status(403).json({ success: false, message: 'Faculty may only update their own availability.' });
+  }
+  const faculty = supabaseStore.toggleFacultyProtectedSlot(facultyId, day as DayOfWeek, periodId, reason);
+  if (!faculty) return res.status(404).json({ success: false, message: 'Faculty record not found.' });
+  return res.json({ success: true, faculty });
 });
 
 // -------------------------------------------------------------

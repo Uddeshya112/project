@@ -1253,6 +1253,18 @@ class SupabaseRelationalStore {
     this.seedInitialDatabase();
   }
 
+  public toggleFacultyProtectedSlot(facultyId: string, day: DayOfWeek, periodId: string, reason: Faculty['preferences']['protectedSlots'][number]['reason']) {
+    const faculty = this.facultyMembers.get(facultyId);
+    if (!faculty) return null;
+    const exists = faculty.preferences.protectedSlots.some((slot) => slot.day === day && slot.periodId === periodId);
+    const protectedSlots = exists
+      ? faculty.preferences.protectedSlots.filter((slot) => !(slot.day === day && slot.periodId === periodId))
+      : [...faculty.preferences.protectedSlots, { day, periodId, reason }];
+    const updated = { ...faculty, preferences: { ...faculty.preferences, protectedSlots } };
+    this.facultyMembers.set(facultyId, updated);
+    return updated;
+  }
+
   // Controlled Manual Session Move with Independent Validation
   public moveSessionWithValidation(
     sessionId: string,
@@ -1453,7 +1465,7 @@ class SupabaseRelationalStore {
       type: 'system_alert',
       title: 'Master Schedule Published',
       message: `Academic Schedule ${this.academicYear.yearLabel} has been officially published.`,
-      timestamp: 'Just now',
+      timestamp: new Date().toISOString(),
       read: false,
       category: 'Success',
     });
@@ -1467,14 +1479,15 @@ class SupabaseRelationalStore {
     if (!ver) return null;
 
     this.activeSessions = [...ver.sessions];
-    this.academicYear.publishStatus = 'Draft';
+    this.academicYear.publishStatus = 'Published';
+    this.academicYear.publishedAt = new Date().toISOString();
     this.versions = this.versions.map((version) => ({
       ...version,
-      isPublished: false,
-      status: version.versionNumber === versionNumber ? 'Draft' : (version.status === 'Published' ? 'Approved' : version.status),
+      isPublished: version.versionNumber === versionNumber,
+      status: version.versionNumber === versionNumber ? 'Published' : (version.status === 'Published' ? 'Approved' : version.status),
     }));
     this.logAudit(userId, 'VERSION_RESTORED', 'TimetableVersion', `v-${versionNumber}`, `Restored schedule matrix to ${ver.versionLabel}.`);
-    return ver;
+    return this.versions.find((version) => version.versionNumber === versionNumber) || ver;
   }
 
   public applyGeneratedCandidate(candidate: GeneratedCandidate, userId = 'coordinator'): TimetableVersion | null {

@@ -245,7 +245,7 @@
 - **REQUIRES HUMAN ACTION:** Configure `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and the matching redirect URI to expose Google sign-in. Do not consider OAuth verified until a live callback test succeeds.
 - **REQUIRES HUMAN ACTION:** Review these changes and deploy via the normal release process before replaying the report against production. No production state was changed here.
 
-## 11. Current Session — Persist Accounts and Profile Data (2026-11-17)
+## 11. Previous Session — Persist Accounts and Profile Data (2026-11-17)
 
 ### Root cause and changes
 
@@ -260,3 +260,19 @@
 - **VERIFIED:** `pnpm run lint` passed; `pnpm run build` passed with the existing large JavaScript chunk warning.
 - **UNVERIFIED:** No connection to the user's live Supabase database was available, so the live table contents and production login were not queried or tested. These changes require deployment to the Render API service and a configured `DATABASE_URL` before production behavior changes.
 - **NOT DEPLOYED OR PUSHED:** These fixes are local and uncommitted on `fix/full-e2e-sync`.
+
+## 12. Current Session — Final Five Polish Fixes (2026-11-17)
+
+### Implemented
+
+- Demo reset UI now uses a `finally` cleanup path and a success/error toast. The reset API's successful response is followed by an authoritative academic bootstrap refetch; cancelled sessions, edits, polls, notifications, and versions are replaced from the seeded server state.
+- Faculty roster now renders 20 rows per page, supports text search and department filtering, and shows the page count.
+- Student demo identity is normalized from the seeded student record; the existing Profile action opens the profile modal with student roll, program, semester, and section details. Disruption announcement creation uses an ISO timestamp, and display has a safe fallback for old invalid values.
+- Restore Version now marks the selected snapshot as the active published production version in the persisted store and client state; the badge follows its published flag.
+- Added a dedicated faculty availability weekly grid. Protected period toggles/release are persisted through the authenticated, role-checked academic API. Removed the stale Google sign-in wording from the login subtitle.
+
+### Verification and release status
+
+- **VERIFIED:** `npm run build` passed (existing Vite large-chunk warning remains); `npm run lint` passed after fixing a route parameter type. `git diff --check` passed before final small view changes and will be rerun before commit.
+- **UNVERIFIED:** No interactive browser acceptance run or live Render/Supabase/Vercel verification was performed. These updates change production app behavior only after deployment.
+- **PENDING:** User requested pushing these changes; commit/push to `fix/full-e2e-sync` after final diff and validation.

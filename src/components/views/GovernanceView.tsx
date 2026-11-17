@@ -52,9 +52,8 @@ export function GovernanceView() {
           </div>
 
           <div className="space-y-3">
-            {versions.map((ver, idx) => {
-              const isCurrent = idx === 0;
-
+            {versions.map((ver) => {
+              const isCurrent = ver.isPublished || ver.status === 'Published';
               return (
                 <div
                   key={ver.versionNumber}
@@ -68,12 +67,10 @@ export function GovernanceView() {
                     <div className="flex items-center gap-2">
                       <span className="font-bold text-stone-900 dark:text-zinc-100 text-xs">{ver.versionLabel}</span>
                       {ver.isPublished || ver.status === 'Published' ? (
-                        <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-300 dark:border-emerald-500/30">PUBLISHED</span>
-                      ) : isCurrent && (
                         <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-300 dark:border-emerald-500/30">
                           Active In Production
                         </span>
-                      )}
+                      ) : null}
                     </div>
                     <span className="text-xs font-mono text-emerald-700 dark:text-emerald-400 font-semibold">
                       Health {ver.healthScore}%
