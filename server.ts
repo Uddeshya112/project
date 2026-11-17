@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 39012)
-Total output lines: 3866
-
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -1696,7 +1693,955 @@ app.post('/api/auth/verify-email', async (req: Request, res: Response) => {
   const pending = pendingRegistrationsDatabase.get(record.email);
 
   if (pending) {
-  …9012 tokens truncated…ferences || {
+    user = {
+      id: 'usr_' + crypto.randomUUID(),
+      name: pending.name,
+      email: pending.email,
+      passwordHash: pending.passwordHash,
+      roleId: 'role-' + pending.roleCode.toLowerCase(),
+      roleCode: pending.roleCode as RoleCode,
+      roleName: pending.roleName,
+      institutionId: 'inst-thapar',
+      institutionName: 'Thapar Institute of Engineering and Technology',
+      department: pending.department,
+      status: 'ACTIVE',
+      createdAt: new Date().toISOString(),
+      emailVerified: true,
+    };
+    usersDatabase.set(pending.email, user);
+    pendingRegistrationsDatabase.delete(pending.email);
+  } else if (user) {
+    user.emailVerified = true;
+    usersDatabase.set(record.email, user);
+  }
+
+  if (user && supabaseAdmin) {
+    try {
+      await supabaseAdmin.from('profiles').update({ email_verified: true }).eq('email', record.email);
+    } catch {}
+  }
+
+  return res.json({
+    success: true,
+    message: 'Email verified successfully. You can now sign in.',
+  });
+});
+
+// POST /api/auth/resend-verification
+app.post('/api/auth/resend-verification', async (req: Request, res: Response) => {
+  const clientIp = req.ip || req.socket.remoteAddress || '127.0.0.1';
+  const { email } = req.body;
+
+  if (!email) {
+    return res.status(400).json({
+      success: false,
+      message: 'Institutional email is required.',
+    });
+  }
+
+  const normalizedEmail = String(email).trim().toLowerCase();
+  const ipRate = checkRateLimit(`resend_ip_${clientIp}`, 10, 60000);
+  const emailRate = checkRateLimit(`resend_email_${normalizedEmail}`, 3, 60000);
+
+  if (ipRate.limited || emailRate.limited) {
+    return res.status(429).json({
+      success: false,
+      message: 'Too many verification requests. Please try again later.',
+    });
+  }
+
+  const user = usersDatabase.get(normalizedEmail);
+  let rawToken: string | undefined = undefined;
+
+  const dummyToken = issueOneTimeToken(normalizedEmail, 'email_verification', 24 * 60 * 60 * 1000);
+
+  if (user && user.emailVerified === false) {
+    rawToken = dummyToken.rawToken;
+
+    const appUrl = process.env.APP_URL || 'http://localhost:3000';
+    setImmediate(() => {
+      sendEmail({
+        to: normalizedEmail,
+        subject: 'Verify your IntelliSchedule account',
+        text: `Please verify your email address by clicking: ${appUrl}/verify-email#token=${rawToken}`,
+        html: `<p>Please verify your email address by clicking <a href="${appUrl}/verify-email#token=${rawToken}">here</a>.</p>`,
+      }).catch(() => {});
+    });
+  } else {
+    oneTimeTokensDatabase.delete(dummyToken.record.tokenHash);
+  }
+
+  const responseData: Record<string, any> = {
+    success: true,
+    message: 'If an unverified account exists with this email, a verification link has been sent.',
+  };
+
+  if (isTestTokenAllowed(req) && rawToken) {
+    responseData.verificationToken = rawToken;
+  }
+
+  await new Promise(resolve => setTimeout(resolve, AUTH_TIMING_FLOOR_MS));
+  return res.json(responseData);
+});
+
+// -------------------------------------------------------------
+// Google OAuth 2.0 Backend Endpoints
+// -------------------------------------------------------------
+app.get('/api/auth/google/status', (_req: Request, res: Response) => {
+  const configured = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+  res.json({
+    configured,
+    provider: 'Google OAuth 2.0 (Identity Only: openid, email, profile)',
+    message: configured
+      ? 'Google OAuth 2.0 is active.'
+      : 'Google OAuth 2.0 is currently unconfigured (REQUIRES HUMAN ACTION: Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in environment variables). Institutional email and password authentication is active.',
+  });
+});
+
+function getGoogleRedirectUri(req?: Request): string {
+  if (process.env.GOOGLE_REDIRECT_URI) {
+    return process.env.GOOGLE_REDIRECT_URI.trim();
+  }
+  if (process.env.APP_URL) {
+    const base = process.env.APP_URL.trim().replace(/\/+$/, '');
+    return `${base}/api/auth/google/callback`;
+  }
+  if (req) {
+    const proto = (req.headers['x-forwarded-proto'] as string)?.split(',')[0].trim() || req.protocol || 'http';
+    const host = (req.headers['x-forwarded-host'] as string)?.split(',')[0].trim() || req.get('host') || 'localhost:3000';
+    return `${proto}://${host}/api/auth/google/callback`;
+  }
+  return 'http://localhost:3000/api/auth/google/callback';
+}
+
+function escapeHtml(str: string): string {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+// Initiation: GET /api/auth/google/authorize
+app.get('/api/auth/google/authorize', (req: Request, res: Response) => {
+  const clientIp = req.ip || req.socket.remoteAddress || '127.0.0.1';
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const redirectUri = getGoogleRedirectUri(req);
+
+  // If GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET are missing, return 503 "Google sign-in not configured"
+  if (!clientId || !clientSecret) {
+    if (req.headers.accept?.includes('application/json')) {
+      return res.status(503).json({ success: false, message: 'Google sign-in not configured' });
+    }
+    return res.status(503).send('Google sign-in not configured');
+  }
+
+  const rate = checkRateLimit(`oauth_ip_${clientIp}`, 10, 60000);
+  if (rate.limited) {
+    return res.status(429).json({
+      success: false,
+      message: `Too many authorization attempts. Please wait ${rate.retryAfterSec} seconds.`,
+    });
+  }
+
+  // Generate cryptographically secure random state (32 bytes = 256 bits)
+  const state = crypto.randomBytes(32).toString('hex');
+  googleOAuthStates.set(state, { createdAt: Date.now() });
+
+  // Clean expired states older than 10 mins
+  const tenMinutesAgo = Date.now() - 10 * 60 * 1000;
+  for (const [st, val] of googleOAuthStates.entries()) {
+    if (val.createdAt < tenMinutesAgo) {
+      googleOAuthStates.delete(st);
+    }
+  }
+
+  const googleAuthUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=openid%20email%20profile&state=${state}&prompt=select_account`;
+
+  if (req.headers.accept?.includes('application/json')) {
+    return res.json({ success: true, configured: true, redirectUrl: googleAuthUrl });
+  }
+
+  return res.redirect(googleAuthUrl);
+});
+
+// Callback: GET /api/auth/google/callback
+app.get('/api/auth/google/callback', async (req: Request, res: Response) => {
+  const isJson = req.headers.accept?.includes('application/json');
+  const { code, state, error } = req.query;
+  const appUrl = (process.env.APP_URL || 'http://localhost:3000').replace(/\/$/, '');
+
+  const returnError = (status: number, message: string, errorCode = 'OAUTH_ERROR') => {
+    if (isJson) {
+      return res.status(status).json({ success: false, error: errorCode, message });
+    }
+    return res.redirect(`/?auth_error=${encodeURIComponent(message)}`);
+  };
+
+  if (error) {
+    return returnError(400, 'Google sign-in was cancelled or rejected.', 'OAUTH_PROVIDER_ERROR');
+  }
+
+  if (!code || !state || typeof code !== 'string' || typeof state !== 'string') {
+    return returnError(400, 'Invalid or missing OAuth parameters.', 'INVALID_PARAMETERS');
+  }
+
+  // Validate state
+  const stateRecord = googleOAuthStates.get(state);
+  if (!stateRecord || Date.now() - stateRecord.createdAt > 10 * 60 * 1000) {
+    googleOAuthStates.delete(state);
+    return returnError(400, 'Expired or invalid OAuth session state. Please try again.', 'INVALID_STATE');
+  }
+  // Single-use token invalidation
+  googleOAuthStates.delete(state);
+
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const redirectUri = getGoogleRedirectUri(req);
+
+  if (!clientId || !clientSecret) {
+    return returnError(503, 'Google sign-in not configured', 'CONFIG_MISSING');
+  }
+
+  try {
+    // Exchange code for tokens with Google
+    const oauth2Client = new OAuth2Client(clientId, clientSecret, redirectUri);
+    const tokenResp = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uri: redirectUri,
+        grant_type: 'authorization_code',
+      }),
+    });
+
+    const tokenData = await tokenResp.json();
+    if (!tokenResp.ok || !tokenData.id_token) {
+      console.warn('[GOOGLE OAUTH] Token exchange failed with Google');
+      return returnError(400, 'Google sign-in could not be completed. Please try again.', 'TOKEN_EXCHANGE_FAILED');
+    }
+
+    // Verify ID Token signature using OAuth2Client.verifyIdToken
+    let payload: any = null;
+    try {
+      const ticket = await oauth2Client.verifyIdToken({
+        idToken: tokenData.id_token,
+        audience: clientId,
+      });
+      payload = ticket.getPayload();
+    } catch (verifyErr: any) {
+      console.warn('[GOOGLE OAUTH] ID token verification failed:', verifyErr?.message || verifyErr);
+      return returnError(400, 'Invalid Google ID token signature.', 'INVALID_ID_TOKEN');
+    }
+
+    if (!payload || !payload.email) {
+      return returnError(400, 'Unable to determine user identity from Google ID token.', 'IDENTITY_ERROR');
+    }
+
+    if (!payload.email_verified) {
+      return returnError(400, 'Google email address must be verified.', 'EMAIL_NOT_VERIFIED');
+    }
+
+    const normalizedEmail = String(payload.email).trim().toLowerCase();
+    const allowedDomains = (process.env.ALLOWED_EMAIL_DOMAINS || 'thapar.edu')
+      .split(',')
+      .map(d => d.trim().toLowerCase().replace(/^@/, ''));
+    const emailDomain = normalizedEmail.split('@')[1];
+
+    if (!emailDomain || !allowedDomains.includes(emailDomain)) {
+      return returnError(403, `Google accounts outside authorized institutional domains (${allowedDomains.join(', ')}) are not permitted.`, 'UNAUTHORIZED_DOMAIN');
+    }
+
+    const sub = payload.sub;
+    const name = payload.name;
+
+    // Check institutional identity
+    const identityKey = `google_${sub}`;
+    let identity = userIdentitiesDatabase.get(identityKey);
+    let user: StoredUser | undefined;
+
+    if (identity) {
+      for (const u of usersDatabase.values()) {
+        if (u.id === identity.userId) {
+          user = u;
+          break;
+        }
+      }
+    }
+
+    if (!user) {
+      user = usersDatabase.get(normalizedEmail);
+      if (user) {
+        userIdentitiesDatabase.set(identityKey, {
+          id: 'ident_' + crypto.randomUUID(),
+          userId: user.id,
+          provider: 'google',
+          providerSubject: sub,
+          createdAt: new Date().toISOString(),
+        });
+      } else {
+        const preAuth = PRE_AUTHORIZED_STAFF[normalizedEmail];
+        const roleCode = preAuth ? preAuth.roleCode : 'STUDENT';
+        const roleName = preAuth ? preAuth.roleName : 'Student';
+        const department = preAuth ? preAuth.department : 'Computer Science and Engineering (CSED)';
+
+        user = {
+          id: 'usr_g_' + crypto.randomUUID(),
+          name: name ? String(name).trim() : normalizedEmail.split('@')[0].toUpperCase(),
+          email: normalizedEmail,
+          passwordHash: hashPasswordBcryptSync('OAuth_Google_' + sub + '_' + normalizedEmail),
+          roleId: 'role-' + roleCode.toLowerCase(),
+          roleCode,
+          roleName,
+          institutionId: 'inst-thapar',
+          institutionName: 'Thapar Institute of Engineering and Technology',
+          department,
+          status: 'ACTIVE',
+          createdAt: new Date().toISOString(),
+        };
+        usersDatabase.set(normalizedEmail, user);
+
+        userIdentitiesDatabase.set(identityKey, {
+          id: 'ident_' + crypto.randomUUID(),
+          userId: user.id,
+          provider: 'google',
+          providerSubject: sub,
+          createdAt: new Date().toISOString(),
+        });
+      }
+    }
+
+    // Create session
+    const sessionToken = 'jwt_live_' + crypto.randomBytes(32).toString('hex');
+    persistentStore.createSession(sessionToken, user.id, user.roleCode);
+
+    // Set cookie with same options as other login routes: sameSite: 'lax', secure in production
+    res.cookie('intellischedule_session', sessionToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 24 * 60 * 60 * 1000,
+      path: '/',
+    });
+
+    const roleKeyMap: Record<RoleCode, string> = {
+      COORDINATOR: 'Coordinator',
+      FACULTY: 'Faculty',
+      HOD: 'HOD',
+      COLLEGE_ADMIN: 'Admin',
+      SUPER_ADMIN: 'Admin',
+      CLASS_REPRESENTATIVE: 'Student',
+      STUDENT: 'Student',
+    };
+    const roleKey = roleKeyMap[user.roleCode] || 'Student';
+    const authorizedWorkspaces = resolveWorkspacesForUser(user);
+
+    if (isJson) {
+      return res.json({
+        success: true,
+        user: { id: user.id, email: user.email, name: user.name, roleCode: user.roleCode },
+      });
+    }
+
+    const safeEmail = escapeHtml(user.email);
+    const safeRoleKey = escapeHtml(roleKey);
+
+    return res.send(`<!DOCTYPE html><html><head><title>Authentication Complete</title><style>body{font-family:system-ui,sans-serif;background-color:#09090b;color:#f4f4f5;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;}.card{text-align:center;background:#18181b;border:1px solid #27272a;padding:32px;border-radius:16px;}</style></head><body><div class="card"><h3 style="margin:0 0 8px 0;font-size:16px;">Signed in as ${safeEmail}</h3><p style="margin:0;font-size:13px;color:#a1a1aa;">Completing session setup and redirecting...</p></div><script>const authPayload={type:'GOOGLE_AUTH_SUCCESS',roleKey:${JSON.stringify(safeRoleKey)},authorizedWorkspaces:${JSON.stringify(authorizedWorkspaces)}};const targetOrigin=${JSON.stringify(appUrl)};if(window.opener){window.opener.postMessage(authPayload,targetOrigin);setTimeout(()=>{window.close();},400);}else{window.location.href='/';}</script></body></html>`);
+  } catch (err) {
+    console.error('[GOOGLE OAUTH] Exception in Google OAuth callback handler:', err);
+    return returnError(400, 'Google sign-in could not be completed. Please try again.', 'CALLBACK_EXCEPTION');
+  }
+});
+
+// -------------------------------------------------------------
+// -------------------------------------------------------------
+// POST /api/auth/forgot-password (Rate limited, anti-enumeration, secure token hash)
+// -------------------------------------------------------------
+async function sendResetEmail(email: string, token: string): Promise<void> {
+  if (process.env.SMTP_URL || process.env.MAILER_SERVICE) {
+    // Custom mailer hook behind environment variable
+    return;
+  }
+  const authClient = supabaseAnon || supabaseAdmin;
+  if (authClient) {
+    try {
+      await authClient.auth.resetPasswordForEmail(email, {
+        redirectTo: `${process.env.APP_URL || 'http://localhost:3000'}/reset-password?token=${token}`,
+      });
+    } catch (err: any) {
+      console.warn('[RESET EMAIL] Supabase resetPasswordForEmail notice:', err?.message || err);
+    }
+  }
+}
+
+const AUTH_TIMING_FLOOR_MS = 20;
+
+const handleForgotPassword = async (req: Request, res: Response) => {
+  const clientIp = req.ip || req.socket.remoteAddress || '127.0.0.1';
+  const { email } = req.body;
+
+  if (!email) {
+    return res.status(400).json({
+      success: false,
+      message: 'Institutional email is required.',
+    });
+  }
+
+  // Rate Limiting
+  const rate = checkRateLimit(`forgot_ip_${clientIp}`, 5, 60000);
+  if (rate.limited) {
+    return res.status(429).json({
+      success: false,
+      message: `Too many password reset requests. Please wait ${rate.retryAfterSec} seconds.`,
+    });
+  }
+
+  const normalizedEmail = String(email).trim().toLowerCase();
+  const user = usersDatabase.get(normalizedEmail);
+
+  let rawToken: string | undefined = undefined;
+  const dummyToken = issueOneTimeToken(normalizedEmail, 'password_reset', 15 * 60 * 1000); // 15 mins
+
+  if (user) {
+    rawToken = dummyToken.rawToken;
+    const tokenToSend = rawToken;
+
+    // Send token by email
+    setImmediate(() => {
+      sendResetEmail(normalizedEmail, tokenToSend).catch(() => {});
+    });
+  } else {
+    oneTimeTokensDatabase.delete(dummyToken.record.tokenHash);
+  }
+
+  // Security requirement: Always return generic response to avoid email enumeration.
+  // Never leak resetToken in production or by default.
+  const responseData: Record<string, any> = {
+    success: true,
+    message: 'If an account exists for this email, a password reset link has been sent.',
+  };
+
+  // Only for automated tests: return token if BOTH NODE_ENV === 'test' and ALLOW_TEST_RESET_TOKEN === 'true', NEVER in production
+  if (isTestTokenAllowed(req) && rawToken) {
+    responseData.resetToken = rawToken;
+  }
+
+  await new Promise(resolve => setTimeout(resolve, AUTH_TIMING_FLOOR_MS));
+  return res.json(responseData);
+};
+
+app.post('/api/auth/forgot-password', handleForgotPassword);
+app.post('/auth/forgot-password', handleForgotPassword);
+
+// -------------------------------------------------------------
+// GET /api/auth/validate-token
+// -------------------------------------------------------------
+app.get('/api/auth/validate-token', (req: Request, res: Response) => {
+  const token = req.query.token as string;
+
+  if (!token) {
+    return res.status(400).json({ valid: false, message: 'Reset token required.' });
+  }
+
+  const record = validateOneTimeToken(token, 'password_reset');
+  if (!record) {
+    return res.status(400).json({ valid: false, message: 'Invalid or expired password reset token.' });
+  }
+
+  return res.json({ valid: true, email: record.email });
+});
+
+// -------------------------------------------------------------
+// POST /api/auth/reset-password
+// -------------------------------------------------------------
+app.post('/api/auth/reset-password', async (req: Request, res: Response) => {
+  const { token, newPassword } = req.body;
+
+  if (!token || !newPassword) {
+    return res.status(400).json({
+      success: false,
+      message: 'Token and new password are required.',
+    });
+  }
+
+  const pwdCheck = evaluatePasswordPolicy(String(newPassword));
+  if (!pwdCheck.isValid) {
+    return res.status(400).json({
+      success: false,
+      message: `Password does not meet security requirements: ${pwdCheck.errors.join(', ')}.`,
+      errors: pwdCheck.errors,
+    });
+  }
+
+  const record = consumeOneTimeToken(token, 'password_reset');
+  if (!record) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid or expired password reset token. Please request a new one.',
+    });
+  }
+
+  const user = usersDatabase.get(record.email);
+  if (!user) {
+    return res.status(404).json({
+      success: false,
+      message: 'User account not found.',
+    });
+  }
+
+  // Update password in database with modern Bcrypt KDF
+  user.passwordHash = hashPasswordBcryptSync(String(newPassword));
+  usersDatabase.set(record.email, user);
+
+  // Sync password with Supabase Auth
+  if (supabaseAdmin) {
+    try {
+      await supabaseAdmin.auth.admin.updateUserById(user.id, {
+        password: String(newPassword),
+      });
+    } catch (err: any) {
+      console.warn('[SUPABASE AUTH] Password update notice:', err?.message || err);
+    }
+  }
+
+  // Invalidate all of the user's tokens
+  persistentStore.invalidateUserTokens(user.email);
+
+  // Revoke all of their sessions
+  persistentStore.revokeUserSessions(user.id);
+
+  if (supabaseAdmin) {
+    try {
+      await supabaseAdmin.auth.admin.signOut(user.id);
+    } catch {}
+  }
+
+  return res.json({
+    success: true,
+    message: 'Your password has been reset successfully. You can now sign in with your new password.',
+  });
+});
+
+// -------------------------------------------------------------
+// SERVER-SIDE RBAC MIDDLEWARE & AUTHORIZATION CONTROLS
+// -------------------------------------------------------------
+export interface AuthenticatedRequest extends Request {
+  authenticatedUser?: StoredUser;
+  authenticatedSession?: StoredSession;
+}
+
+export async function authenticateRequestAsync(req: Request): Promise<{ user: StoredUser; session?: StoredSession } | null> {
+  const authHeader = req.headers.authorization;
+  const token =
+    authHeader?.replace(/^Bearer\s+/i, '').trim() ||
+    (req.headers.cookie?.match(/intellischedule_session=([^;]+)/)?.[1]);
+
+  if (!token) return null;
+
+  // 1. Check persistent session store
+  const session = persistentStore.getSession(token);
+  if (session) {
+    for (const user of usersDatabase.values()) {
+      if (user.id === session.userId) {
+        return { user, session };
+      }
+    }
+  }
+
+  // 2. Authoritative Supabase Access Token Verification
+  const authClient = supabaseAdmin || supabaseAnon;
+  if (authClient) {
+    try {
+      const { data: authData, error: authError } = await authClient.auth.getUser(token);
+      if (!authError && authData?.user) {
+        const authUser = authData.user;
+        const normalizedEmail = (authUser.email || '').toLowerCase().trim();
+
+        // Retrieve profile from Supabase profiles table using auth.users.id
+        let profile: any = null;
+        if (supabaseAdmin) {
+          const { data: p } = await supabaseAdmin
+            .from('profiles')
+            .select('*')
+            .eq('id', authUser.id)
+            .maybeSingle();
+          profile = p;
+        }
+
+        // If not found by ID, attempt lookup by email and sync ID
+        if (!profile && supabaseAdmin && normalizedEmail) {
+          const { data: pByEmail } = await supabaseAdmin
+            .from('profiles')
+            .select('*')
+            .eq('email', normalizedEmail)
+            .maybeSingle();
+          if (pByEmail) {
+            profile = pByEmail;
+            await supabaseAdmin.from('profiles').update({ id: authUser.id }).eq('email', normalizedEmail);
+          }
+        }
+
+        const preAuth = PRE_AUTHORIZED_STAFF[normalizedEmail];
+        const roleCode: RoleCode =
+          (profile?.role_code as RoleCode) ||
+          (preAuth ? preAuth.roleCode : 'STUDENT');
+        const roleName =
+          profile?.role_name ||
+          (preAuth ? preAuth.roleName : (roleCode === 'COORDINATOR' ? 'Timetable Coordinator' : roleCode === 'FACULTY' ? 'Faculty Member' : roleCode === 'COLLEGE_ADMIN' ? 'College Admin / Dean' : roleCode === 'HOD' ? 'Head of Department' : 'Student'));
+        const department =
+          profile?.department ||
+          (preAuth ? preAuth.department : 'Computer Science and Engineering (CSED)');
+        const name =
+          profile?.name ||
+          normalizedEmail.split('@')[0].toUpperCase();
+
+        const user: StoredUser = {
+          id: authUser.id,
+          name,
+          email: normalizedEmail,
+          passwordHash: 'SUPABASE_AUTH_MANAGED',
+          roleId: 'role-' + roleCode.toLowerCase(),
+          roleCode,
+          roleName,
+          institutionId: profile?.institution_id || 'inst-thapar',
+          institutionName: 'Thapar Institute of Engineering and Technology',
+          department,
+          status: (profile?.status as any) || 'ACTIVE',
+          createdAt: authUser.created_at || new Date().toISOString(),
+          authorizedWorkspaces: profile?.authorized_workspaces || (roleCode === 'COORDINATOR' ? ['Coordinator', 'Faculty'] : [roleCode as any]),
+          isDemoUser: Boolean(profile?.is_demo_user),
+          profile: profile?.profile || authUser.user_metadata?.profile || {},
+        };
+
+        if (normalizedEmail) {
+          usersDatabase.set(normalizedEmail, user);
+        }
+
+        return { user };
+      }
+    } catch (err) {
+      console.warn('[SUPABASE TOKEN VERIFICATION ERROR]', err);
+    }
+  }
+
+  return null;
+}
+
+export function authenticateRequest(req: Request): { user: StoredUser; session: StoredSession } | null {
+  const token =
+    req.headers.authorization?.replace(/^Bearer\s+/i, '').trim() ||
+    (req.headers.cookie?.match(/intellischedule_session=([^;]+)/)?.[1]);
+
+  if (!token) return null;
+
+  const session = persistentStore.getSession(token);
+  if (!session) {
+    return null;
+  }
+
+  for (const user of usersDatabase.values()) {
+    if (user.id === session.userId) {
+      return { user, session };
+    }
+  }
+
+  return null;
+}
+
+export async function requireAuth(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  const auth = await authenticateRequestAsync(req);
+  if (!auth) {
+    return res.status(401).json({
+      success: false,
+      error: 'UNAUTHENTICATED',
+      message: 'Authentication token is missing, invalid, or expired.',
+    });
+  }
+  req.authenticatedUser = auth.user;
+  req.authenticatedSession = auth.session;
+  next();
+}
+
+export function requireRole(allowedRoles: RoleCode[]) {
+  return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    if (!req.authenticatedUser) {
+      return res.status(401).json({
+        success: false,
+        error: 'UNAUTHENTICATED',
+        message: 'Authentication required before permission verification.',
+      });
+    }
+
+    if (!allowedRoles.includes(req.authenticatedUser.roleCode)) {
+      return res.status(403).json({
+        success: false,
+        error: 'FORBIDDEN',
+        message: `Access denied. Role '${req.authenticatedUser.roleCode}' lacks permission for this operation. Required: [${allowedRoles.join(', ')}].`,
+      });
+    }
+
+    next();
+  };
+}
+
+// -------------------------------------------------------------
+// PROTECTED ACADEMIC & TIMETABLE APIS WITH SERVER-SIDE RBAC
+// -------------------------------------------------------------
+
+// -------------------------------------------------------------
+// SUPABASE-BACKED MASTER ACADEMIC & TIMETABLE API ENDPOINTS
+// -------------------------------------------------------------
+
+function sanitizeAcademicState(state: any, roleCode?: string) {
+  if (roleCode !== 'STUDENT' && roleCode !== 'CLASS_REPRESENTATIVE') return state;
+  return {
+    ...state,
+    facultyMembers: (state.facultyMembers || []).map((f: any) => ({
+      id: f.id,
+      name: f.name,
+      departmentId: f.departmentId,
+      designation: f.designation,
+      subjectsQualified: f.subjectsQualified,
+      status: f.status,
+    })),
+  };
+}
+
+// Master Bootstrap State (Database-backed read for complete academic workspace)
+app.get('/api/academic/bootstrap', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+  const state = supabaseStore.getBootstrapState(req.authenticatedUser?.id);
+  if (['STUDENT', 'CLASS_REPRESENTATIVE'].includes(req.authenticatedUser?.roleCode || '')) {
+    const student = (state.students || []).find((item: any) => item.email?.toLowerCase() === req.authenticatedUser?.email.toLowerCase());
+    const sectionId = req.authenticatedUser?.profile?.sectionId || student?.sectionId;
+    state.polls = state.polls.filter((poll: any) => poll.sectionId === sectionId);
+    state.notifications = state.notifications.filter((item: any) =>
+      !['cancellation', 'poll_created'].includes(item.type) || item.actionPayload?.sectionId === sectionId,
+    );
+  }
+  const sanitized = sanitizeAcademicState(state, req.authenticatedUser?.roleCode);
+  return res.json({
+    success: true,
+    ...sanitized,
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// Paginated Students Query Endpoint
+app.get('/api/students', requireAuth, requireRole(['SUPER_ADMIN', 'COLLEGE_ADMIN', 'COORDINATOR', 'HOD']), (req: Request, res: Response) => {
+  const page = parseInt(req.query.page as string) || 1;
+  const limit = Math.min(100, parseInt(req.query.limit as string) || 20);
+  const search = (req.query.search as string) || '';
+  const sectionId = (req.query.sectionId as string) || '';
+
+  const result = supabaseStore.queryStudents(page, limit, search, sectionId);
+  return res.json({
+    success: true,
+    ...result,
+  });
+});
+
+// 1. Departments CRUD
+app.get('/api/academic/departments', requireAuth, (_req: Request, res: Response) => {
+  const state = supabaseStore.getBootstrapState();
+  return res.json({ success: true, departments: state.departments });
+});
+
+app.post('/api/academic/departments', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
+  const { name, code, hodName, contactEmail, status } = req.body;
+  if (!name || !code) {
+    return res.status(400).json({ success: false, message: 'Department name and code are required.' });
+  }
+  try {
+    const dept = supabaseStore.createDepartment(
+      {
+        name: String(name).trim(),
+        code: String(code).trim().toUpperCase(),
+        hodName: hodName || 'Head of Department',
+        contactEmail: contactEmail || `hod.${String(code).toLowerCase()}@thapar.edu`,
+        status: status || 'Active',
+      },
+      req.authenticatedUser?.name
+    );
+    return res.status(201).json({ success: true, message: `Department '${dept.name}' created.`, department: dept });
+  } catch (err: any) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+app.put('/api/academic/departments/:id', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const deptId = req.params.id as string;
+    const dept = supabaseStore.updateDepartment(deptId, req.body, req.authenticatedUser?.name);
+    return res.json({ success: true, department: dept });
+  } catch (err: any) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+app.delete('/api/academic/departments/:id', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const deptId = req.params.id as string;
+    supabaseStore.deleteDepartment(deptId, req.authenticatedUser?.name);
+    return res.json({ success: true, message: 'Department deleted successfully.' });
+  } catch (err: any) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// 2. Programs CRUD
+app.get('/api/academic/programs', requireAuth, (_req: Request, res: Response) => {
+  const state = supabaseStore.getBootstrapState();
+  return res.json({ success: true, programs: state.programs });
+});
+
+app.post('/api/academic/programs', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
+  const { name, code, departmentId, durationYears, totalSemesters, status } = req.body;
+  if (!name || !code) {
+    return res.status(400).json({ success: false, message: 'Program name and code are required.' });
+  }
+  try {
+    const prog = supabaseStore.createProgram(
+      {
+        name: String(name).trim(),
+        code: String(code).trim().toUpperCase(),
+        departmentId: departmentId || 'dept-cse',
+        durationYears: Number(durationYears) || 4,
+        totalSemesters: Number(totalSemesters) || 8,
+        status: status || 'Active',
+      },
+      req.authenticatedUser?.name
+    );
+    return res.status(201).json({ success: true, message: `Program '${prog.name}' created.`, program: prog });
+  } catch (err: any) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+app.put('/api/academic/programs/:id', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const progId = req.params.id as string;
+    const prog = supabaseStore.updateProgram(progId, req.body, req.authenticatedUser?.name);
+    return res.json({ success: true, program: prog });
+  } catch (err: any) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+app.delete('/api/academic/programs/:id', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const progId = req.params.id as string;
+    supabaseStore.deleteProgram(progId, req.authenticatedUser?.name);
+    return res.json({ success: true, message: 'Program deleted successfully.' });
+  } catch (err: any) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// 3. Courses CRUD
+app.get('/api/academic/courses', requireAuth, (_req: Request, res: Response) => {
+  const state = supabaseStore.getBootstrapState();
+  return res.json({ success: true, courses: state.courses });
+});
+
+app.post('/api/academic/courses', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
+  const {
+    code,
+    name,
+    title,
+    credits,
+    departmentId,
+    requiredLecturesPerWeek,
+    requiredTutorialsPerWeek,
+    requiredLabsPerWeek,
+    requiresLab,
+    requiredEquipment,
+    primaryFacultyId,
+  } = req.body;
+  const courseCode = String(code || '').trim().toUpperCase();
+  const courseName = String(name || title || '').trim();
+
+  if (!courseCode || !courseName) {
+    return res.status(400).json({ success: false, message: 'Course code and course title are required.' });
+  }
+
+  try {
+    const course = supabaseStore.createCourse(
+      {
+        code: courseCode,
+        name: courseName,
+        departmentId: departmentId || 'dept-cse',
+        credits: Number(credits) || 4,
+        requiredLecturesPerWeek: Number(requiredLecturesPerWeek) || 3,
+        requiredTutorialsPerWeek: Number(requiredTutorialsPerWeek) || 0,
+        requiredLabsPerWeek: Number(requiredLabsPerWeek) || 0,
+        totalSemesterHours: 45,
+        completedHours: 0,
+        cancelledHours: 0,
+        requiresLab: Boolean(requiresLab || (Number(requiredLabsPerWeek) || 0) > 0),
+        requiredEquipment: Array.isArray(requiredEquipment) ? requiredEquipment : ['Projector'],
+        primaryFacultyId: primaryFacultyId || 'fac-sharma',
+        status: 'Active',
+      },
+      req.authenticatedUser?.name
+    );
+    return res.status(201).json({
+      success: true,
+      message: `Course '${course.code} - ${course.name}' added to curriculum catalog.`,
+      courseId: course.id,
+      course,
+    });
+  } catch (err: any) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+app.put('/api/academic/courses/:id', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const courseId = req.params.id as string;
+    const course = supabaseStore.updateCourse(courseId, req.body, req.authenticatedUser?.name);
+    return res.json({ success: true, course });
+  } catch (err: any) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+app.delete('/api/academic/courses/:id', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const courseId = req.params.id as string;
+    supabaseStore.deleteCourse(courseId, req.authenticatedUser?.name);
+    return res.json({ success: true, message: 'Course deleted successfully.' });
+  } catch (err: any) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// 4. Faculty CRUD
+app.get('/api/academic/faculty', requireAuth, (_req: Request, res: Response) => {
+  const state = supabaseStore.getBootstrapState();
+  return res.json({ success: true, facultyMembers: state.facultyMembers });
+});
+
+app.post('/api/academic/faculty', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
+  const { name, email, departmentId, designation, subjectsQualified, maxDirectTeachingHours, preferences } = req.body;
+  if (!name || !email) {
+    return res.status(400).json({ success: false, message: 'Faculty name and institutional email are required.' });
+  }
+  try {
+    const faculty = supabaseStore.createFaculty(
+      {
+        name: String(name).trim(),
+        email: String(email).trim().toLowerCase(),
+        departmentId: departmentId || 'dept-cse',
+        designation: designation || 'Assistant Professor',
+        subjectsQualified: Array.isArray(subjectsQualified) ? subjectsQualified : ['CS501'],
+        maxDirectTeachingHours: Number(maxDirectTeachingHours) || 14,
+        weeklyHoursLimit: 40,
+        preferences: preferences || {
           preferredDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
           preferredPeriods: [1, 2, 3, 4],
           protectedSlots: [],
