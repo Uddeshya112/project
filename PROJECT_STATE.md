@@ -212,3 +212,35 @@
 - **NOT DEPLOYED:** Changes are local and uncommitted on branch `fix/full-e2e-sync`; production state remains unchanged.
 - **REQUIRES HUMAN ACTION:** Review the diff, then commit/push/merge and deploy through the normal release process before testing production login, database persistence, role flows, or cross-portal notifications.
 - **RISK:** This app's compatibility store remains a JSON snapshot with a documented single-instance constraint; no schema migration or scale-out change was made.
+
+## 10. Current Session — Acceptance Audit and Scale Readiness (2026-11-17)
+
+### Scope
+
+- **REQUESTED SCOPE:** Address the attached button audit's core broken controls, data consistency problems, and UI rendering pressure. Preserve existing role checks and the single-process compatibility store.
+- **NOT CHANGED:** No production deployment, remote push, database migration, package/dependency update, or managed-service provisioning.
+
+### Implemented
+
+- **VERIFIED IN CODE:** Demo reset now reloads the server's persisted seeded state into the browser after the reset endpoint succeeds, instead of replacing it with potentially inconsistent client fixtures.
+- **VERIFIED IN CODE:** Restore Version now calls the authorized persistence endpoint, reports success/failure, makes the restored schedule a Draft, and records the restore in server audit history.
+- **VERIFIED IN CODE:** Draft generation submits a server job, polls status, and applies only a completed candidate after independent server validation. Solver execution runs in a Node worker thread, keeping the Express event loop responsive for this single instance.
+- **VERIFIED IN CODE:** Slot move, swap, deletion, and lock operations have server-backed, role-checked handlers; the UI waits for saved results. Assign and cancellation dialogs now stop click-through and show save errors.
+- **VERIFIED IN CODE:** Sign-out replaces nested workspace URLs with `/`; unconfigured Google OAuth is hidden based on `/api/auth/google/status`; notifications show confirmation or failure when marking read.
+- **VERIFIED IN CODE:** Faculty timetable route filters to the signed-in faculty record. Data Faculty/Courses and Syllabus course/faculty lists render at most 50 rows per page. What-If scenario changes clear stale completion feedback. Risk badges stay on one line.
+
+### Verification
+
+- **VERIFIED:** `pnpm run lint` passed after the final changes.
+- **VERIFIED:** `pnpm run build` passed. The existing Vite warning remains: the main JavaScript chunk is approximately 1.29 MB minified.
+- **VERIFIED:** Offline engine, password, and persistent-state tests passed 17/17.
+- **VERIFIED:** A local worker-thread smoke run reached `COMPLETED` and returned a solver result.
+- **VERIFIED:** `git diff --check` passed, and `vercel.json` parsed as valid JSON.
+- **UNVERIFIED:** No interactive browser replay of the 12-button report, live database reset/restore, auth configuration, full HTTP integration suite, or live production smoke test was performed in this session.
+
+### Scale limits and follow-up
+
+- **UNVERIFIED / NOT READY FOR 100,000 CONCURRENT USERS:** The list changes paginate rendered rows in the client but the current bootstrap still transfers most faculty/course data at once. This is not server-side cursor pagination.
+- **NOT IMPLEMENTED:** Redis/edge caching and publish/cancel invalidation, durable distributed job queue, PgBouncer configuration, and horizontal scaling. The current server keeps timetable state in one in-memory store backed by one JSONB snapshot and explicitly requires one app instance; an in-process worker does not remove that deployment constraint or provide job durability across restart/scale-out.
+- **REQUIRES HUMAN ACTION:** Configure `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and the matching redirect URI to expose Google sign-in. Do not consider OAuth verified until a live callback test succeeds.
+- **REQUIRES HUMAN ACTION:** Review these changes and deploy via the normal release process before replaying the report against production. No production state was changed here.

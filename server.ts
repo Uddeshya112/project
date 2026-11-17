@@ -2991,13 +2991,24 @@ app.post('/api/timetable/jobs', requireAuth, requireRole(['COORDINATOR', 'COLLEG
   });
 });
 
-app.get('/api/timetable/jobs/:id', requireAuth, (req: Request, res: Response) => {
+app.get('/api/timetable/jobs/:id', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: Request, res: Response) => {
   const jobId = req.params.id as string;
   const job = timetableJobManager.getJob(jobId);
   if (!job) {
     return res.status(404).json({ success: false, message: `Job ${jobId} not found.` });
   }
   return res.json(job);
+});
+
+app.post('/api/timetable/jobs/:id/apply', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
+  const job = timetableJobManager.getJob(req.params.id as string);
+  if (!job) return res.status(404).json({ success: false, message: 'Generation job was not found.' });
+  if (job.status !== 'COMPLETED' || !job.result?.bestCandidate) {
+    return res.status(409).json({ success: false, message: job.error || 'Generation has not produced an applicable result.' });
+  }
+  const version = supabaseStore.applyGeneratedCandidate(job.result.bestCandidate, req.authenticatedUser?.name);
+  if (!version) return res.status(422).json({ success: false, message: 'Generated result failed independent validation and was not applied.' });
+  return res.json({ success: true, version, message: `Generated ${version.versionLabel} and saved it as the working draft.` });
 });
 
 app.post('/api/timetable/jobs/:id/cancel', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: Request, res: Response) => {
@@ -3044,6 +3055,21 @@ app.post('/api/timetable/sessions', requireAuth, requireRole(['COORDINATOR', 'CO
   }, req.authenticatedUser?.name);
   if (!result.success) return res.status(422).json({ success: false, message: result.error });
   return res.status(201).json({ success: true, session: result.session });
+});
+
+app.delete('/api/timetable/sessions/:id', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
+  const deleted = supabaseStore.deleteClassSession(req.params.id as string, req.authenticatedUser?.name);
+  if (!deleted) return res.status(404).json({ success: false, message: 'Session not found.' });
+  return res.json({ success: true, message: 'Session removed from the working draft.' });
+});
+
+app.put('/api/timetable/sessions/:id/lock', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
+  const isLocked = req.body?.isLocked;
+  if (typeof isLocked !== 'boolean') return res.status(400).json({ success: false, message: 'isLocked must be a boolean.' });
+  const reason = String(req.body?.reason || 'Coordinator lock').slice(0, 240);
+  const session = supabaseStore.setSessionLock(req.params.id as string, isLocked, reason, req.authenticatedUser?.name);
+  if (!session) return res.status(404).json({ success: false, message: 'Session not found.' });
+  return res.json({ success: true, session });
 });
 
 // Controlled Manual Move with Independent Validation

@@ -170,7 +170,9 @@ export function AcademicSetupHubView() {
     else if (activeView === 'academic_setup') setActiveTabState('courses');
   }, [activeView]);
   const [courseSearch, setCourseSearch] = useState('');
+  const [coursePage, setCoursePage] = useState(0);
   const [facultySearch, setFacultySearch] = useState('');
+  const [facultyPage, setFacultyPage] = useState(0);
 
   // One in-flight request at a time: disables every mutating button while it runs.
   const [saving, setSaving] = useState(false);
@@ -216,6 +218,16 @@ export function AcademicSetupHubView() {
 
   const totalCoursesAllocated = new Set(allocations.map(a => a.courseId)).size;
   const activeFacultyCount = facultyMembers.filter(f => f.status !== 'Inactive').length;
+  const filteredCourses = courses.filter(c => c.code.toLowerCase().includes(courseSearch.toLowerCase()) || c.name.toLowerCase().includes(courseSearch.toLowerCase()));
+  const coursePageSize = 50;
+  const coursePageCount = Math.max(1, Math.ceil(filteredCourses.length / coursePageSize));
+  const visibleCourses = filteredCourses.slice(coursePage * coursePageSize, (coursePage + 1) * coursePageSize);
+  const filteredFaculty = facultyMembers.filter(f => f.name.toLowerCase().includes(facultySearch.toLowerCase()) || f.email.toLowerCase().includes(facultySearch.toLowerCase()));
+  const facultyPageSize = 50;
+  const facultyPageCount = Math.max(1, Math.ceil(filteredFaculty.length / facultyPageSize));
+  const visibleFaculty = filteredFaculty.slice(facultyPage * facultyPageSize, (facultyPage + 1) * facultyPageSize);
+  useEffect(() => setFacultyPage(0), [facultySearch]);
+  useEffect(() => setCoursePage(0), [courseSearch]);
   const activeCoursesCount = courses.filter(c => c.status !== 'Archived').length;
   const activeRoomsCount = rooms.filter(r => r.isAvailable).length;
   const activeSectionsCount = sections.filter(s => s.status !== 'Inactive').length;
@@ -343,7 +355,7 @@ export function AcademicSetupHubView() {
               onClick={() => setActiveTab(tab.id as SetupSubTab)}
               className={`flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
                 activeTab === tab.id
-                  ? 'bg-[#8C1B2E] text-white font-semibold shadow-xs'
+                  ? 'bg-[#8C1B2E] text-white dark:text-white font-semibold shadow-xs'
                   : 'bg-[#FAF9F5] dark:bg-zinc-900 hover:bg-stone-100 dark:hover:bg-zinc-800 text-stone-700 dark:text-zinc-300 border border-[#E5E2D9] dark:border-zinc-800'
               }`}
             >
@@ -768,12 +780,7 @@ export function AcademicSetupHubView() {
 
           <div className="border border-[#E5E2D9] dark:border-zinc-800 rounded-xl overflow-hidden divide-y divide-[#E5E2D9] dark:divide-zinc-800 shadow-2xs">
             {courses.length === 0 && <div className="p-6 text-center text-xs text-stone-400 italic">No courses yet.</div>}
-            {courses
-              .filter(c =>
-                c.code.toLowerCase().includes(courseSearch.toLowerCase()) ||
-                c.name.toLowerCase().includes(courseSearch.toLowerCase())
-              )
-              .map(course => {
+            {visibleCourses.map(course => {
                 const isAllocated = allocations.some(a => a.courseId === course.id);
                 return (
                   <div key={course.id} className="p-3.5 bg-white dark:bg-zinc-950/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
@@ -807,6 +814,11 @@ export function AcademicSetupHubView() {
                 );
               })}
           </div>
+
+          {filteredCourses.length > coursePageSize && <div className="flex items-center justify-between text-xs text-stone-500 dark:text-zinc-400">
+            <span>{coursePage * coursePageSize + 1}–{Math.min((coursePage + 1) * coursePageSize, filteredCourses.length)} of {filteredCourses.length} courses</span>
+            <div className="flex gap-2"><button type="button" disabled={coursePage === 0} onClick={() => setCoursePage(page => Math.max(0, page - 1))} className="rounded border border-[#E5E2D9] px-2 py-1 disabled:opacity-40 dark:border-zinc-700">Previous</button><button type="button" disabled={coursePage + 1 >= coursePageCount} onClick={() => setCoursePage(page => Math.min(coursePageCount - 1, page + 1))} className="rounded border border-[#E5E2D9] px-2 py-1 disabled:opacity-40 dark:border-zinc-700">Next</button></div>
+          </div>}
 
           {showAddCourse && canEdit && (
             <form
@@ -869,9 +881,7 @@ export function AcademicSetupHubView() {
 
           <div className="border border-[#E5E2D9] dark:border-zinc-800 rounded-xl overflow-hidden divide-y divide-[#E5E2D9] dark:divide-zinc-800 shadow-2xs">
             {facultyMembers.length === 0 && <div className="p-6 text-center text-xs text-stone-400 italic">No faculty yet.</div>}
-            {facultyMembers
-              .filter(f => f.name.toLowerCase().includes(facultySearch.toLowerCase()) || f.email.toLowerCase().includes(facultySearch.toLowerCase()))
-              .map(fac => {
+            {visibleFaculty.map(fac => {
                 const assignedHours = allocations
                   .filter(a => a.facultyId === fac.id)
                   .reduce((acc, a) => acc + a.hoursPerWeek, 0);
@@ -916,6 +926,11 @@ export function AcademicSetupHubView() {
                 );
               })}
           </div>
+
+          {filteredFaculty.length > facultyPageSize && <div className="flex items-center justify-between text-xs text-stone-500 dark:text-zinc-400">
+            <span>{facultyPage * facultyPageSize + 1}–{Math.min((facultyPage + 1) * facultyPageSize, filteredFaculty.length)} of {filteredFaculty.length} faculty</span>
+            <div className="flex gap-2"><button type="button" disabled={facultyPage === 0} onClick={() => setFacultyPage(page => Math.max(0, page - 1))} className="rounded border border-[#E5E2D9] px-2 py-1 disabled:opacity-40 dark:border-zinc-700">Previous</button><button type="button" disabled={facultyPage + 1 >= facultyPageCount} onClick={() => setFacultyPage(page => Math.min(facultyPageCount - 1, page + 1))} className="rounded border border-[#E5E2D9] px-2 py-1 disabled:opacity-40 dark:border-zinc-700">Next</button></div>
+          </div>}
 
           {showAddFaculty && canEdit && (
             <form

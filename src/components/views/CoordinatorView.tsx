@@ -458,6 +458,7 @@ export function CoordinatorView() {
                   <button
                     onClick={() => {
                       logout();
+                      window.history.replaceState(null, '', '/');
                       window.location.reload();
                     }}
                     className="w-full sm:w-auto px-5 py-3 bg-[#8C1B2E] hover:bg-[#721525] text-white font-bold text-xs rounded-lg transition-all flex items-center justify-center gap-2 cursor-pointer shadow-xs"

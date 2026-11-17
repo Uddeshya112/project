@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useTimetable } from '../../context/TimetableContext';
 import { useAuth } from '../../context/AuthContext';
 import {
@@ -39,6 +39,7 @@ interface AcademicInboxModalProps {
 export function AcademicInboxModal({ isOpen, onClose, onActionClick }: AcademicInboxModalProps) {
   const { notifications, markNotificationRead, setActiveView } = useTimetable();
   const { currentWorkspace } = useAuth();
+  const [feedback, setFeedback] = useState('');
 
   // Escape key handler
   useEffect(() => {
@@ -59,10 +60,17 @@ export function AcademicInboxModal({ isOpen, onClose, onActionClick }: AcademicI
   const todayNotifs = notifications.filter(n => isToday(n.timestamp));
   const earlierNotifs = notifications.filter(n => !isToday(n.timestamp));
   const markRead = (id: string) => {
-    if (notifications.find(n => n.id === id && !n.read)) markNotificationRead(id);
+    if (notifications.find(n => n.id === id && !n.read)) {
+      void markNotificationRead(id).then(() => setFeedback('Notification marked as read.')).catch((error) => setFeedback(error instanceof Error ? error.message : 'Could not update notification.'));
+    }
   };
   const markAllRead = async () => {
-    for (const n of notifications.filter(x => !x.read)) await markNotificationRead(n.id);
+    const unread = notifications.filter(x => !x.read);
+    if (!unread.length) return;
+    setFeedback('');
+    const results = await Promise.allSettled(unread.map((item) => markNotificationRead(item.id)));
+    const failed = results.filter((result) => result.status === 'rejected').length;
+    setFeedback(failed ? `Marked ${unread.length - failed} of ${unread.length} notifications as read. Please retry the rest.` : 'All notifications marked as read.');
   };
 
   const handleNotificationAction = (notifId: string, actionType?: string) => {
@@ -125,6 +133,7 @@ export function AcademicInboxModal({ isOpen, onClose, onActionClick }: AcademicI
 
           {/* Body Content */}
           <div className="flex-1 overflow-y-auto p-4 space-y-5">
+            {feedback && <p role="status" className="rounded-md border border-[#E5E2D9] bg-white p-2.5 text-xs text-stone-600 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300">{feedback}</p>}
             {/* TODAY SECTION */}
             {todayNotifs.length > 0 && (
               <div className="space-y-2.5">

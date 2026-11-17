@@ -98,15 +98,7 @@ export function StudentPortalView() {
     return 'Good evening';
   };
 
-  const emptyMessage = isLoading
-    ? 'Loading your timetable…'
-    : !currentSection
-    ? "Your account isn't linked to a section yet — ask the coordinator."
-    : (publishedSessions?.length ?? 0) === 0
-    ? 'No timetable published yet. It will appear here once the coordinator publishes it.'
-    : null;
-
-  if (emptyMessage || !currentSection) {
+  if (!currentSection) {
     return (
       <div className="space-y-6 max-w-6xl mx-auto font-sans">
         <div className="border-b border-[#E5E2D9] dark:border-zinc-800 pb-4">
@@ -115,7 +107,9 @@ export function StudentPortalView() {
           </h1>
         </div>
         <div className="p-6 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl text-sm text-stone-600 dark:text-zinc-400">
-          {emptyMessage}
+          {isLoading
+            ? 'Loading your timetable…'
+            : "Your account isn't linked to a section yet — ask the coordinator."}
         </div>
       </div>
     );
@@ -251,6 +245,12 @@ export function StudentPortalView() {
           </button>
         </div>
       </div>
+
+      {(publishedSessions?.length ?? 0) === 0 && (
+        <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+          No timetable has been published yet. Your Courses and Section pages are still available; the schedule will appear after publication.
+        </div>
+      )}
 
       {/* ============================================================ */}
       {/* 2. TAB 1: DASHBOARD */}
