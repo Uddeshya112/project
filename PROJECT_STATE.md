@@ -311,3 +311,28 @@
 - **VERIFIED:** `npm run build` passed; the existing Vite large-chunk warning remains (main JavaScript bundle approximately 1.30 MB minified).
 - **VERIFIED:** `git -c core.whitespace=cr-at-eol diff --check` passed. The repository's Windows working tree uses CRLF line endings.
 - **UNVERIFIED:** GitHub Actions was not rerun yet; no production login attempt or hosted service change was performed.
+
+## 15. Current Session — Production Registration Delivery and Public Roles (2026-11-17)
+
+### Verified diagnosis
+
+- **VERIFIED in Render logs:** Production has no configured email provider (`SMTP_URL`, `RESEND_API_KEY`, or `MAILER_SERVICE_URL`). Signup persisted a pending registration, but the verification email send failed. A subsequent login failed against Supabase Auth because the unverified custom app account is not an `auth.users` account. The login will not work until a verification link is delivered and consumed.
+- **VERIFIED in Supabase:** The project is `ACTIVE_HEALTHY`; there is one pending registration created at approximately 16:00 UTC, zero `intellischedule.users`, and 263 `auth.users`. The count alone does not establish which person owns the pending record.
+- **VERIFIED in Render configuration:** The API service deploys from `main`. Commit `4d81e270336e135bfbe2e95258e940e22cdc0384` is on `fix/full-e2e-sync`, so that later generic 401 behavior is not in the production branch. The email-provider blocker is independent of this status response.
+- **VERIFIED in Supabase security advisors:** `public.roles` has RLS disabled and direct grants to `anon` and `authenticated`. The application only needs server-side service-role access to this legacy table.
+
+### Changes prepared
+
+- Added an idempotent migration to enable RLS on `public.roles` and revoke browser-role table grants when the legacy table exists. It is safe on installations where that table is absent.
+- Removed the raw email address and provider error details from failed Supabase login logs.
+- Kept the resend-verification action available for the older production API's explicit “waiting for email verification” response as well as the newer generic invalid-credentials response.
+- Documented Render's required mail-provider setup and the pending-account recovery flow in `docs/runbooks/deploy.md`.
+
+### Verification and release status
+
+- **VERIFIED:** `npm run lint` passed; `npm run build` passed with the existing approximately 1.30 MB main-bundle warning; `git -c core.whitespace=cr-at-eol diff --check` passed.
+- **NOT RUN:** Automated tests were not run.
+- **NOT DEPLOYED:** No production database schema, Render environment variable, Supabase data, or deployment was changed.
+- **REQUIRES HUMAN ACTION:** Configure `RESEND_API_KEY` and a verified `RESEND_FROM` (or SMTP equivalents) on Render, then redeploy. Afterward use **Resend verification email** for the pending signup, verify from the email link, and sign in.
+- **REQUIRES HUMAN REVIEW/DEPLOY APPROVAL:** The new RLS migration is production-impacting and should be reviewed and applied through the normal deployment process; no direct production SQL was run.
+
