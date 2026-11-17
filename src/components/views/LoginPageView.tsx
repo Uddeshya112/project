@@ -567,9 +567,9 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
   };
 
   return (
-    <div className="min-h-screen w-full bg-[#F7F6F2] dark:bg-[#0c0c0e] text-stone-900 dark:text-zinc-100 flex flex-col justify-center items-center p-4 sm:p-6 lg:p-8 font-sans relative overflow-x-hidden selection:bg-[#8C1B2E]/20 selection:text-[#8C1B2E]">
+    <div className="min-h-screen w-full bg-[#F7F6F2] dark:bg-[#0c0c0e] text-stone-900 dark:text-zinc-100 flex flex-col justify-center items-center p-3 sm:p-4 font-sans relative overflow-x-hidden selection:bg-[#8C1B2E]/20 selection:text-[#8C1B2E]">
       {/* Main Centered Minimal Card */}
-      <div className="w-full max-w-[430px] bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-2xl p-6 sm:p-8 shadow-xs relative z-10 transition-all">
+      <div className="w-full max-w-[430px] max-h-[calc(100vh-1.5rem)] overflow-y-auto bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-2xl p-5 sm:p-6 shadow-xs relative z-10 transition-all">
         {/* Thapar Brand Header - Primary visual identity */}
         <div className="mb-6 text-center">
           <ThaparLogo size="md" variant="full" />

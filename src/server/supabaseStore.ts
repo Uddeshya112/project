@@ -142,6 +142,32 @@ class SupabaseRelationalStore {
     this.recoveryOpportunities = Array.isArray(snapshot.recoveryOpportunities) ? snapshot.recoveryOpportunities : [];
     this.replacementPolls = Array.isArray(snapshot.replacementPolls) ? snapshot.replacementPolls : [];
     this.replacementVotes = new Map(Array.isArray(snapshot.replacementVotes) ? snapshot.replacementVotes : []);
+
+    // Older persisted snapshots predate dedicated faculty demo records. Repair those
+    // links on read so deployments do not require a destructive demo reset.
+    const ensureDemoFaculty = (id: string, email: string, name: string, sourceId: string) => {
+      const existing = [...this.facultyMembers.values()].find((faculty) => faculty.email?.toLowerCase() === email);
+      const template = existing || this.facultyMembers.get(sourceId) || FACULTY_MEMBERS[0];
+      const linked = { ...template, id, email, name, departmentId: 'dept-cse' };
+      this.facultyMembers.set(id, linked);
+    };
+    ensureDemoFaculty('fac-demo-neha', 'faculty.demo@demo.thapar.local', 'Dr. Neha Agarwal', 'fac-0005');
+    ensureDemoFaculty('fac-demo-hod', 'hod.demo@demo.thapar.local', 'Dr. Sunita Rao', 'fac-0003');
+    const repairDemoFacultyId = (facultyId: string) => facultyId === 'fac-0005' ? 'fac-demo-neha' : facultyId === 'fac-0003' ? 'fac-demo-hod' : facultyId;
+    this.activeSessions = this.activeSessions.map((session) => ({ ...session, facultyId: repairDemoFacultyId(session.facultyId) }));
+    const publishedIndex = this.versions.findIndex((version) => version.isPublished || version.status === 'Published');
+    const activePublishedIndex = this.academicYear.publishStatus === 'Published'
+      ? (publishedIndex >= 0 ? publishedIndex : this.versions.length - 1)
+      : -1;
+    this.versions = this.versions.map((version, index) => ({
+      ...version,
+      isPublished: this.academicYear.publishStatus === 'Published' ? index === activePublishedIndex : version.isPublished,
+      status: this.academicYear.publishStatus === 'Published'
+        ? (index === activePublishedIndex ? 'Published' : (version.status === 'Published' ? 'Approved' : version.status))
+        : version.status,
+      sessions: (version.sessions || []).map((session) => ({ ...session, facultyId: repairDemoFacultyId(session.facultyId) })),
+    }));
+    this.allocations = new Map([...this.allocations.values()].map((allocation) => [allocation.id, { ...allocation, facultyId: repairDemoFacultyId(allocation.facultyId) }]));
   }
 
   /**
@@ -1394,9 +1420,12 @@ class SupabaseRelationalStore {
     this.academicYear.publishedAt = new Date().toISOString();
 
     // Mark version as published
-    this.versions = this.versions.map(v => ({
+    const publishedIndex = this.versions.findIndex((version) => version.versionLabel.includes(versionId) || String(version.versionNumber) === versionId);
+    const activeIndex = publishedIndex >= 0 ? publishedIndex : this.versions.length - 1;
+    this.versions = this.versions.map((v, index) => ({
       ...v,
-      isPublished: v.versionLabel.includes(versionId) || String(v.versionNumber) === versionId,
+      isPublished: index === activeIndex,
+      status: index === activeIndex ? 'Published' : (v.status === 'Published' ? 'Approved' : v.status),
     }));
 
     this.logAudit(publisherName, 'TIMETABLE_PUBLISHED', 'TimetableVersion', versionId, `Timetable version ${versionId} published institution-wide.`);
@@ -1476,15 +1505,32 @@ class SupabaseRelationalStore {
       id: `notif-${Date.now()}`,
       type: 'cancellation',
       title: `Class Disrupted: ${target.courseId}`,
-      message: `${target.day} session was cancelled. Reason: ${reason}. Self-healing engine generated replacement proposals.`,
+      recipientRole: 'Student',
+      message: `${this.groups.get(target.sectionId)?.name || target.sectionId}: ${target.day} session was cancelled. Reason: ${reason}. Self-healing engine generated replacement proposals.`,
       timestamp: 'Just now',
       read: false,
       category: 'Critical',
       actionable: true,
+      actionPayload: { sessionId, sectionId: target.sectionId },
     });
 
     this.logAudit(userId, 'CLASS_CANCELLED', 'ClassSession', sessionId, `Cancelled ${target.courseId} (${target.day} ${target.timeSlotId}). Reason: ${reason}.`);
     return { success: true, task: newTask };
+  }
+
+  public requestScheduleChange(sessionId: string, details: string, userName = 'Faculty') {
+    const target = this.activeSessions.find((session) => session.id === sessionId);
+    if (!target) return false;
+    this.notifications.unshift({
+      id: `notif-${crypto.randomUUID()}`,
+      type: 'approval_needed',
+      title: `Schedule change requested: ${target.courseId}`,
+      message: `${userName} requested a reschedule or faculty swap for ${target.day} ${target.timeSlotId} (${target.sectionId}). ${details}`,
+      timestamp: new Date().toISOString(), read: false, category: 'Warning', actionable: true,
+      actionPayload: { sessionId, sectionId: target.sectionId },
+    });
+    this.logAudit(userName, 'SCHEDULE_CHANGE_REQUESTED', 'ClassSession', sessionId, details);
+    return true;
   }
 
   public scheduleMakeupSession(opportunityId: string, userId = 'coordinator'): { success: boolean; session?: ClassSession } {
@@ -1604,6 +1650,7 @@ class SupabaseRelationalStore {
       type: 'poll_created',
       title: 'New class time poll',
       message: `${input.question} (${this.groups.get(input.sectionId)?.name || input.sectionId})`,
+      actionPayload: { sectionId: input.sectionId },
       timestamp: new Date().toISOString(),
       read: false,
       category: 'Info',

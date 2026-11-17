@@ -50,6 +50,14 @@
   }
 }
 
+@media print {
+  @page { size: landscape; margin: 12mm; }
+  body * { visibility: hidden !important; }
+  .timetable-print-view, .timetable-print-view * { visibility: visible !important; }
+  .timetable-print-view { position: absolute; inset: 0 auto auto 0; width: 100%; max-width: none !important; padding: 0 !important; background: white !important; color: black !important; }
+  .timetable-print-view button, .timetable-print-view select { display: none !important; }
+}
+
 /* Refined custom scrollbars */
 ::-webkit-scrollbar {
   width: 5px;

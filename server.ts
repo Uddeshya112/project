@@ -2415,6 +2415,14 @@ function sanitizeAcademicState(state: any, roleCode?: string) {
 // Master Bootstrap State (Database-backed read for complete academic workspace)
 app.get('/api/academic/bootstrap', requireAuth, (req: AuthenticatedRequest, res: Response) => {
   const state = supabaseStore.getBootstrapState(req.authenticatedUser?.id);
+  if (['STUDENT', 'CLASS_REPRESENTATIVE'].includes(req.authenticatedUser?.roleCode || '')) {
+    const student = (state.students || []).find((item: any) => item.email?.toLowerCase() === req.authenticatedUser?.email.toLowerCase());
+    const sectionId = req.authenticatedUser?.profile?.sectionId || student?.sectionId;
+    state.polls = state.polls.filter((poll: any) => poll.sectionId === sectionId);
+    state.notifications = state.notifications.filter((item: any) =>
+      !['cancellation', 'poll_created'].includes(item.type) || item.actionPayload?.sectionId === sectionId,
+    );
+  }
   const sanitized = sanitizeAcademicState(state, req.authenticatedUser?.roleCode);
   return res.json({
     success: true,
@@ -3238,6 +3246,30 @@ app.post('/api/recovery/cancel-class', requireAuth, requireRole(['FACULTY', 'COO
     task: result.task,
     cancelledBy: req.authenticatedUser?.name,
   });
+});
+
+app.post('/api/recovery/request-change', requireAuth, requireRole(['FACULTY', 'HOD']), (req: AuthenticatedRequest, res: Response) => {
+  const sessionId = String(req.body?.sessionId || '');
+  const details = String(req.body?.details || '').trim();
+  if (!sessionId || details.length < 5 || details.length > 500) {
+    return res.status(400).json({ success: false, message: 'Choose a class and provide a request of 5–500 characters.' });
+  }
+  const state = supabaseStore.getBootstrapState();
+  const session = state.sessions.find((item: any) => item.id === sessionId);
+  if (!session) return res.status(404).json({ success: false, message: 'Class session not found.' });
+  const user = req.authenticatedUser;
+  const linkedFaculty = state.facultyMembers.find((faculty: any) => faculty.email.toLowerCase() === user?.email.toLowerCase() || faculty.id === user?.profile?.facultyId);
+  if (user?.roleCode === 'FACULTY' && (!linkedFaculty || session.facultyId !== linkedFaculty.id)) {
+    return res.status(403).json({ success: false, message: 'Faculty may only request changes for classes they teach.' });
+  }
+  if (user?.roleCode === 'HOD') {
+    const sessionFaculty = state.facultyMembers.find((faculty: any) => faculty.id === session.facultyId);
+    if (!linkedFaculty || !sessionFaculty || linkedFaculty.departmentId !== sessionFaculty.departmentId) {
+      return res.status(403).json({ success: false, message: 'HODs may only request changes within their department.' });
+    }
+  }
+  if (!supabaseStore.requestScheduleChange(sessionId, details, user?.name)) return res.status(404).json({ success: false, message: 'Class session not found.' });
+  return res.json({ success: true });
 });
 
 // Schedule Makeup Session (Validates target entities, pending state, and hard conflict freedom)

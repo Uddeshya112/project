@@ -69,8 +69,8 @@ export function AcademicInboxModal({ isOpen, onClose, onActionClick }: AcademicI
     markRead(notifId);
     onClose();
     if (isStudent) {
-      // In student view, go to dashboard or replacement time voting
-      setActiveView('overview');
+      const notification = notifications.find((item) => item.id === notifId);
+      setActiveView(notification?.type === 'cancellation' ? 'grid' : 'overview');
       if (onActionClick) onActionClick(actionType || 'replacement_vote');
     } else {
       setActiveView('recovery');

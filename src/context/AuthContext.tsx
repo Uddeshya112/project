@@ -126,6 +126,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [currentWorkspace, setCurrentWorkspace] = useState<WorkspaceType>('Student');
   const [authorizedWorkspaces, setAuthorizedWorkspaces] = useState<WorkspaceType[]>(['Student']);
+  const logoutRequestRef = useRef<Promise<void> | null>(null);
 
   const switchWorkspace = (ws: WorkspaceType) => {
     if (authorizedWorkspaces.includes(ws)) {
@@ -294,6 +295,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     authorizedWorkspaces?: WorkspaceType[];
     user?: AuthUser;
   }> => {
+    if (logoutRequestRef.current) await logoutRequestRef.current;
     try {
       const normalizedEmail = email.trim().toLowerCase();
 
@@ -409,6 +411,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     authorizedWorkspaces?: WorkspaceType[];
     user?: AuthUser;
   }> => {
+    if (logoutRequestRef.current) await logoutRequestRef.current;
     try {
       const resp = await fetch(apiUrl('/api/auth/demo-login'), {
         method: 'POST',
@@ -542,24 +545,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const logout = async () => {
-    if (supabaseClient) {
-      try {
-        await supabaseClient.auth.signOut();
-      } catch (err) {
-        console.warn('[AUTH TRACE] Supabase signOut notice:', err);
-      }
-    }
-    try {
-      await fetch(apiUrl('/api/auth/logout'), { method: 'POST' });
-    } catch {
-      // Ignore network errors on logout
-    }
+  const logout = () => {
+    // Clear app identity synchronously so a quick-access login cannot inherit stale UI state.
     setIsAuthenticated(false);
     setAuthStatus('UNAUTHENTICATED');
     setCurrentUserId(null);
     setAuthorizedWorkspaces(['Student']);
     setCurrentWorkspace('Student');
+    const request = (async () => {
+      if (supabaseClient) {
+        try { await supabaseClient.auth.signOut(); }
+        catch (err) { console.warn('[AUTH TRACE] Supabase signOut notice:', err); }
+      }
+      try {
+        await fetch(apiUrl('/api/auth/logout'), { method: 'POST', credentials: 'same-origin' });
+      } catch { /* the server cookie expires on the next request if offline */ }
+    })().finally(() => {
+      if (logoutRequestRef.current === request) logoutRequestRef.current = null;
+    });
+    logoutRequestRef.current = request;
+    return request;
   };
 
   const switchUser = (userId: string) => {
@@ -650,12 +655,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         passwordResetTokens,
         roster: currentUser ? {
           rollNumber: currentUser.rollNumber ?? '102303999',
-          sectionId: currentUser.sectionId ?? 'sec-csea',
-          subSectionId: currentUser.subSectionId ?? 'sub-sec-csea-1'
+          sectionId: currentUser.sectionId ?? 'sec-cse-a',
+          subSectionId: currentUser.subSectionId ?? 'sub-sec-cse-a-1',
+          facultyId: currentUser.facultyId,
         } : {
           rollNumber: '102303999',
-          sectionId: 'sec-csea',
-          subSectionId: 'sub-sec-csea-1'
+          sectionId: 'sec-cse-a',
+          subSectionId: 'sub-sec-cse-a-1'
         },
       }}
     >

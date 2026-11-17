@@ -63,14 +63,18 @@ export function AuthGovernanceView() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [u, s] = await Promise.all([
+      const [usersResult, sessionsResult] = await Promise.allSettled([
         api<{ users: AdminUser[]; total: number }>(`/api/admin/users?search=${encodeURIComponent(search)}&page=${page}&limit=${limit}`),
         api<{ sessions: SessionSummary[] }>('/api/admin/sessions'),
       ]);
-      setUsers(u.users);
-      setTotal(u.total);
-      setSessions(s.sessions);
-      setError(null);
+      const failures: string[] = [];
+      if (usersResult.status === 'fulfilled') {
+        setUsers(Array.isArray(usersResult.value.users) ? usersResult.value.users : []);
+        setTotal(Number.isFinite(usersResult.value.total) ? usersResult.value.total : usersResult.value.users?.length || 0);
+      } else failures.push(usersResult.reason instanceof Error ? usersResult.reason.message : 'Accounts could not be loaded.');
+      if (sessionsResult.status === 'fulfilled') setSessions(Array.isArray(sessionsResult.value.sessions) ? sessionsResult.value.sessions : []);
+      else failures.push(sessionsResult.reason instanceof Error ? sessionsResult.reason.message : 'Active sessions could not be loaded.');
+      setError(failures.length ? failures.join(' ') : null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load users.');
     } finally {

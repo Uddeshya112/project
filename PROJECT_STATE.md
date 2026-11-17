@@ -178,3 +178,37 @@
 - **UNVERIFIED:** No live browser-to-API-to-Supabase flow was completed; Vercel team access and direct Supabase inspection are still pending.
 - **NOT IMPLEMENTED IN THIS SESSION:** Route-based URLs/deep-link Back/Forward navigation, PDF/CSV/ICS timetable exports, applying a winning poll to the timetable, dynamic What-If solver output, coordinator/faculty poll creation UI, and persisted approve/reject request decisions still need work.
 - **REQUIRES REVIEW:** The compatibility persistence layer stores all legacy academic data in one JSON document and requires a single active app instance. The modular normalized store remains unwired; revisit this design before scaling.
+
+## 9. Current Session — Cross-Portal Acceptance Fixes (2026-11-17)
+
+### Scope
+
+- **REQUESTED SCOPE:** Fix the remaining blockers in the attached timetable acceptance prompt while preserving existing HOD, scheduling, allocation, and publishing flows.
+- **NOT CHANGED:** No production deploy, remote Git push, database migration, dependency upgrade, or cloud environment setting. `vercel.json` now includes an SPA fallback rewrite so direct nested routes can load the app.
+
+### Changes in this session
+
+- **VERIFIED IN CODE:** Restored demo faculty identity links for `faculty.demo@demo.thapar.local` and `hod.demo@demo.thapar.local` when old persisted snapshots load; repaired affected sessions, versions, and allocations in the in-memory store.
+- **VERIFIED IN CODE:** Logout clears client identity immediately and new login waits for the in-flight logout request; faculty identity is included in the client roster. Student fallback section IDs now match seeded records.
+- **VERIFIED IN CODE:** Class cancellation waits for the API result before updating the UI; server persists the cancellation and adds a section-targeted Student notification. Faculty can submit an authorized reschedule/swap request.
+- **VERIFIED IN CODE:** Added role-aware poll creation, student voting, and live poll result counts; student bootstrap only returns polls and cancellation/poll-created notifications for the linked section.
+- **VERIFIED IN CODE:** Coordinator Recent Requests derives from live cancellation/approval/makeup notifications; Admin user and active-session loading handles either request failing independently.
+- **VERIFIED IN CODE:** Added browser route paths and history handling, including route restoration for Student/Faculty dashboard URLs; the Student Dashboard sidebar now highlights after a refresh.
+- **VERIFIED IN CODE:** Added a Vercel fallback rewrite for client-side routes while preserving the existing `/api/*` Render proxy.
+- **VERIFIED IN CODE:** Published timetable version state is reflected in approvals; What-If metrics derive from the current simulation diff and show re-run feedback; timetable supports print-to-PDF, CSV, and recurring ICS export.
+- **VERIFIED IN CODE:** Adjusted data tab overflow, account name width, and login-card viewport spacing.
+
+### Verification evidence
+
+- **VERIFIED:** `pnpm run lint` passed after these changes.
+- **VERIFIED:** `pnpm run build` passed; Vite emitted the existing large JavaScript chunk warning.
+- **VERIFIED:** Offline unit tests passed 17/17 for engine, password, and persistent-state suites.
+- **VERIFIED:** `git diff --check` passed (Git reported only the existing LF-to-CRLF working-copy warning for `HodPortalView.tsx`).
+- **BLOCKED BY SANDBOX:** Full `pnpm test` could not reach its own local HTTP server at `127.0.0.1:3100` and timed out. This environment restriction prevents claims about end-to-end HTTP acceptance flows.
+- **UNVERIFIED:** No interactive browser acceptance run, production Render/Vercel/Supabase verification, accessibility audit, performance measurement, or deployment smoke test was completed.
+
+### Deployment and remaining action
+
+- **NOT DEPLOYED:** Changes are local and uncommitted on branch `fix/full-e2e-sync`; production state remains unchanged.
+- **REQUIRES HUMAN ACTION:** Review the diff, then commit/push/merge and deploy through the normal release process before testing production login, database persistence, role flows, or cross-portal notifications.
+- **RISK:** This app's compatibility store remains a JSON snapshot with a documented single-instance constraint; no schema migration or scale-out change was made.

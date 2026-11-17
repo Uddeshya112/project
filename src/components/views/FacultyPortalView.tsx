@@ -2,6 +2,8 @@ import React, { useMemo, useState } from 'react';
 import { useTimetable } from '../../context/TimetableContext';
 import { useAuth } from '../../context/AuthContext';
 import type { DayOfWeek, TimeSlot } from '../../types';
+import { api } from '../../lib/api';
+import { PollComposer } from './PollComposer';
 import {
   Calendar,
   Clock,
@@ -66,6 +68,7 @@ export function FacultyPortalView() {
   const [sessionToCancel, setSessionToCancel] = useState<string | null>(null);
   const [cancellationReason, setCancellationReason] = useState<string>('');
   const [oppToDecline, setOppToDecline] = useState<string | null>(null);
+  const [scheduleChangeFeedback, setScheduleChangeFeedback] = useState('');
 
   // Free periods where this teacher, one of their groups and a suitable room are all free.
   const takeOverOptions = useMemo(() => {
@@ -187,6 +190,22 @@ export function FacultyPortalView() {
     if (await runBusy('cancel', () => cancelSession(sessionToCancel, cancellationReason.trim()))) {
       setSessionToCancel(null);
       setCancellationReason('');
+    } else {
+      setScheduleChangeFeedback('Cancellation was not saved. Check your connection and try again.');
+    }
+  };
+
+  const handleRequestChange = async (sessionId: string) => {
+    const details = window.prompt('Why do you need this class rescheduled or swapped?');
+    if (!details?.trim()) return;
+    setBusy(`change:${sessionId}`);
+    try {
+      await api('/api/recovery/request-change', { body: { sessionId, details: details.trim() } });
+      setScheduleChangeFeedback('Request saved. The coordinator can review it in Requests & disruptions.');
+    } catch (error) {
+      setScheduleChangeFeedback(error instanceof Error ? error.message : 'Could not save your schedule change request.');
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -216,6 +235,9 @@ export function FacultyPortalView() {
           </div>
         </div>
       </div>
+
+      {scheduleChangeFeedback && <p role="status" className="rounded-lg border border-[#E5E2D9] bg-white p-3 text-xs text-stone-700 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">{scheduleChangeFeedback}</p>}
+      <PollComposer sectionIds={[...new Set(mySessions.map((session) => session.sectionId))]} />
 
       {/* Workload Summary Card */}
       <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl p-5 space-y-3.5 shadow-xs">
@@ -351,13 +373,10 @@ export function FacultyPortalView() {
                           </div>
 
                           {session.status !== 'Cancelled' && (
-                            <button
-                              onClick={() => setSessionToCancel(session.id)}
-                              disabled={busy !== null}
-                              className="px-3 py-1.5 bg-white dark:bg-zinc-800 hover:bg-rose-50 hover:text-rose-800 dark:hover:bg-rose-950/60 dark:hover:text-rose-300 text-stone-700 dark:text-zinc-300 border border-[#E5E2D9] dark:border-zinc-700 rounded-lg text-xs font-semibold transition-colors shrink-0 shadow-2xs disabled:opacity-50"
-                            >
-                              Cancel this class
-                            </button>
+                            <div className="flex flex-wrap gap-2">
+                              <button type="button" onClick={() => void handleRequestChange(session.id)} disabled={busy !== null} className="px-2.5 py-1.5 bg-white dark:bg-zinc-800 hover:bg-amber-50 dark:hover:bg-amber-950/40 text-stone-700 dark:text-zinc-300 border border-[#E5E2D9] dark:border-zinc-700 rounded-lg text-[11px] font-semibold disabled:opacity-50">Request reschedule / swap</button>
+                              <button type="button" onClick={() => setSessionToCancel(session.id)} disabled={busy !== null} className="px-2.5 py-1.5 bg-white dark:bg-zinc-800 hover:bg-rose-50 hover:text-rose-800 dark:hover:bg-rose-950/60 dark:hover:text-rose-300 text-stone-700 dark:text-zinc-300 border border-[#E5E2D9] dark:border-zinc-700 rounded-lg text-[11px] font-semibold disabled:opacity-50">Cancel class</button>
+                            </div>
                           )}
                         </div>
                       ) : protectedBlock ? (
