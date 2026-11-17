@@ -34,7 +34,7 @@ import {
 } from './src/lib/initialData';
 import { supabaseStore } from './src/server/supabaseStore';
 import { timetableJobManager } from './src/server/jobManager';
-import { sendEmail, checkMailerConfiguration } from './src/server/mailer';
+import { sendEmail, checkMailerConfiguration, hasMailerConfiguration } from './src/server/mailer';
 import { connectDb, type Db } from './src/server/db';
 import type { DayOfWeek } from './src/types';
 
@@ -910,6 +910,14 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
 
   let user = usersDatabase.get(normalizedEmail);
 
+  if (!user && pendingRegistrationsDatabase.has(normalizedEmail)) {
+    return res.status(403).json({
+      success: false,
+      error: 'EMAIL_NOT_VERIFIED',
+      message: 'This account is waiting for email verification. Use the verification link we sent, or resend it from the registration screen.',
+    });
+  }
+
   if (user && user.passwordHash !== 'SUPABASE_AUTH_MANAGED') {
     if (user.isDemoUser && process.env.NODE_ENV === 'production' && process.env.ALLOW_DEMO_IN_PRODUCTION !== 'true' && (user.roleCode === 'COLLEGE_ADMIN' || user.roleCode === 'COORDINATOR')) {
       return res.status(403).json({
@@ -1692,6 +1700,14 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
     });
   }
 
+  if (process.env.NODE_ENV === 'production' && !hasMailerConfiguration()) {
+    return res.status(503).json({
+      success: false,
+      error: 'EMAIL_DELIVERY_NOT_CONFIGURED',
+      message: 'Registration is temporarily unavailable because the email service is not configured. Please contact the app administrator.',
+    });
+  }
+
   // Require allowed email domain
   const allowedDomains = (process.env.ALLOWED_EMAIL_DOMAINS || 'thapar.edu')
     .split(',')
@@ -1803,15 +1819,20 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
     return res.status(503).json({ success: false, message: 'Registration could not be saved. Please try again.' });
   }
 
-  const appUrl = process.env.APP_URL || 'http://localhost:3000';
-  setImmediate(() => {
-    sendEmail({
-      to: normalizedEmail,
-      subject: 'Verify your IntelliSchedule account',
-      text: `Please verify your email address by clicking: ${appUrl}/verify-email#token=${rawToken}`,
-      html: `<p>Please verify your email address by clicking <a href="${appUrl}/verify-email#token=${rawToken}">here</a>.</p>`,
-    }).catch(() => {});
+  const appUrl = (process.env.APP_URL || (process.env.NODE_ENV === 'production' ? 'https://tiet-timetable-six.vercel.app' : 'http://localhost:3000')).replace(/\/+$/, '');
+  const emailSent = await sendEmail({
+    to: normalizedEmail,
+    subject: 'Verify your IntelliSchedule account',
+    text: `Please verify your email address by clicking: ${appUrl}/verify-email#token=${rawToken}`,
+    html: `<p>Please verify your email address by clicking <a href="${appUrl}/verify-email#token=${rawToken}">here</a>.</p>`,
   });
+  if (!emailSent) {
+    return res.status(503).json({
+      success: false,
+      error: 'VERIFICATION_EMAIL_FAILED',
+      message: 'Your account is saved as pending, but the verification email could not be sent. Configure the email service, then request a new verification link.',
+    });
+  }
 
   const responseData: Record<string, any> = {
     success: true,
@@ -1929,11 +1950,12 @@ app.post('/api/auth/resend-verification', async (req: Request, res: Response) =>
   }
 
   const user = usersDatabase.get(normalizedEmail);
+  const pending = pendingRegistrationsDatabase.get(normalizedEmail);
   let rawToken: string | undefined = undefined;
 
   const dummyToken = issueOneTimeToken(normalizedEmail, 'email_verification', 24 * 60 * 60 * 1000);
 
-  if (user && user.emailVerified === false) {
+  if ((user && user.emailVerified === false) || pending) {
     rawToken = dummyToken.rawToken;
     try {
       await persistentStore.persistOneTimeToken(rawToken);
@@ -1942,15 +1964,16 @@ app.post('/api/auth/resend-verification', async (req: Request, res: Response) =>
       return res.status(503).json({ success: false, message: 'Verification email could not be prepared. Please retry.' });
     }
 
-    const appUrl = process.env.APP_URL || 'http://localhost:3000';
-    setImmediate(() => {
-      sendEmail({
-        to: normalizedEmail,
-        subject: 'Verify your IntelliSchedule account',
-        text: `Please verify your email address by clicking: ${appUrl}/verify-email#token=${rawToken}`,
-        html: `<p>Please verify your email address by clicking <a href="${appUrl}/verify-email#token=${rawToken}">here</a>.</p>`,
-      }).catch(() => {});
+    const appUrl = (process.env.APP_URL || (process.env.NODE_ENV === 'production' ? 'https://tiet-timetable-six.vercel.app' : 'http://localhost:3000')).replace(/\/+$/, '');
+    const emailSent = await sendEmail({
+      to: normalizedEmail,
+      subject: 'Verify your IntelliSchedule account',
+      text: `Please verify your email address by clicking: ${appUrl}/verify-email#token=${rawToken}`,
+      html: `<p>Please verify your email address by clicking <a href="${appUrl}/verify-email#token=${rawToken}">here</a>.</p>`,
     });
+    if (!emailSent) {
+      return res.status(503).json({ success: false, error: 'VERIFICATION_EMAIL_FAILED', message: 'The verification email could not be sent. Please try again later or contact the app administrator.' });
+    }
   } else {
     oneTimeTokensDatabase.delete(dummyToken.record.tokenHash);
   }
