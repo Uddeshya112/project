@@ -510,7 +510,7 @@ const usersDatabase: Map<string, StoredUser> = new Map(
     'coordinator.demo@demo.thapar.local',
     {
       id: 'usr-demo-coordinator',
-      name: 'Prof. Rajesh K. Demo (Coordinator)',
+      name: 'Prof. Rajesh Khanna (Coordinator)',
       email: 'coordinator.demo@demo.thapar.local',
       passwordHash: hashPasswordBcryptSync(DEMO_ACCOUNT_PASSWORD),
       roleId: 'role-coordinator',
@@ -1435,7 +1435,7 @@ app.get('/api/demo/status', (_req: Request, res: Response) => {
       roleKey: 'Coordinator',
       label: 'Coordinator',
       email: 'coordinator.demo@demo.thapar.local',
-      name: 'Prof. Rajesh K. Demo',
+      name: 'Prof. Rajesh Khanna',
       department: 'Computer Science & Engineering',
       description: 'Master academic scheduling, solver orchestration, conflict review & publishing',
     },
@@ -3506,7 +3506,7 @@ app.post('/api/recovery/cancel-class', requireAuth, requireRole(['FACULTY', 'COO
   }
   return res.json({
     success: true,
-    message: `Class session ${sessionId} cancelled and queued for autonomous self-healing recovery.`,
+    message: `Class session ${sessionId} was cancelled and makeup options are being prepared.`,
     task: result.task,
     cancelledBy: req.authenticatedUser?.name,
   });
@@ -3649,6 +3649,9 @@ app.post('/api/voting/polls', requireAuth, requireRole(['CLASS_REPRESENTATIVE', 
   }
   if (courseId && !state.courses.some((course: any) => course.id === courseId)) {
     return res.status(400).json({ success: false, message: 'The selected course was not found.' });
+  }
+  if (courseId && !state.allocations.some((allocation: any) => allocation.sectionId === sectionId && allocation.courseId === courseId)) {
+    return res.status(400).json({ success: false, message: 'The selected course is not assigned to this section.' });
   }
   if (typeof question !== 'string' || question.trim().length < 5 || question.trim().length > 240) {
     return res.status(400).json({ success: false, message: 'Question must be between 5 and 240 characters.' });

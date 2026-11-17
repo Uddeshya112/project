@@ -64,7 +64,8 @@ export function buildDemoDataset() {
     const lName = prng.choice(lastNames);
     const dept = prng.choice(DEPARTMENTS);
     const facId = `fac-${String(i).padStart(4, '0')}`;
-    const email = i === 1 ? 'a.sharma@thapar.edu' : `faculty.${facId}@thapar.edu`;
+    const emailName = `${fName}.${lName}`.toLowerCase().replace(/[^a-z.]/g, '');
+    const email = i === 1 ? 'a.sharma@thapar.edu' : `${emailName}.${2000 + i}@thapar.edu`;
 
     FACULTY_MEMBERS.push({
       id: facId,
@@ -157,6 +158,7 @@ export function buildDemoDataset() {
       program: progCode,
       batchYear: 2024,
       semester: (idx % 8) + 1,
+      homeRoomId: `room-cr-${idx + 1}`,
       studentCount: 40,
       targetSize: 40,
       subSections: [sub1, sub2],
@@ -185,6 +187,11 @@ export function buildDemoDataset() {
         studentCounter++;
       }
     });
+    const representative = STUDENTS.find((student) => student.sectionId === secId);
+    if (representative) {
+      const section = SECTIONS[SECTIONS.length - 1];
+      section.classRepresentative = { name: representative.name, email: representative.email, studentId: representative.studentId };
+    }
   });
 
   // ---------------------------------------------------------------------------
@@ -202,10 +209,14 @@ export function buildDemoDataset() {
     const topic = courseTopics[(c - 1) % courseTopics.length];
     const dept = DEPARTMENTS[(c - 1) % DEPARTMENTS.length];
     const isLabRequired = c % 2 === 0;
+    const topicPrefix: Record<string, string> = {
+      'Database Management': 'CS', 'Operating Systems': 'CS', 'Computer Networks': 'CS',
+      'Signals & Systems': 'EC', Thermodynamics: 'ME',
+    };
 
     COURSES.push({
       id: `CS${300 + c}`,
-      code: `CS${300 + c}`,
+      code: `${topicPrefix[topic] || 'CS'}${300 + c}`,
       name: `${topic} ${c > 16 ? `Advanced II` : 'I'}`,
       departmentId: dept.id,
       credits: 4,
@@ -290,7 +301,7 @@ export const DEMO_NOTIFICATIONS: NotificationItem[] = [
     title: 'Master Academic Dataset Persisted',
     message: 'Dataset TIET-STRESS-1000-500-V1 (1,280 students, 500 faculty, 288 allocations) initialized successfully.',
     type: 'system_alert',
-    timestamp: 'Just now',
+    timestamp: new Date().toISOString(),
     read: false,
     category: 'Info'
   }

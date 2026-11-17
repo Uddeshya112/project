@@ -280,7 +280,7 @@ export const USERS: AuthUser[] = [
   {
     id: 'usr-demo-coordinator',
     email: 'coordinator.demo@demo.thapar.local',
-    name: 'Prof. Rajesh K. Demo (Coordinator)',
+      name: 'Prof. Rajesh Khanna (Coordinator)',
     status: 'ACTIVE',
     emailVerified: true,
     createdAt: '2026-08-01T09:00:00Z',

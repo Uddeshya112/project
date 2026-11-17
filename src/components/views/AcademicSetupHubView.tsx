@@ -352,12 +352,12 @@ export function AcademicSetupHubView() {
 
       {/* 2. Sub-navigation: Horizontal Pill Bar + Mobile Dropdown */}
       <div className="space-y-2">
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 w-full min-w-0 no-scrollbar">
+        <div className="flex flex-wrap items-center gap-1.5 pb-1 w-full min-w-0">
           {navTabs.map(tab => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id as SetupSubTab)}
-              className={`flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
+              className={`flex shrink-0 items-center gap-1.5 px-2 py-1.5 rounded-lg text-[11px] font-medium whitespace-nowrap transition-all ${
                 activeTab === tab.id
                   ? 'bg-[#8C1B2E] text-white dark:text-white font-semibold shadow-xs'
                   : 'bg-[#FAF9F5] dark:bg-zinc-900 hover:bg-stone-100 dark:hover:bg-zinc-800 text-stone-700 dark:text-zinc-300 border border-[#E5E2D9] dark:border-zinc-800'
@@ -1002,11 +1002,11 @@ export function AcademicSetupHubView() {
                 <div className="flex items-start justify-between">
                   <div>
                     <div className="font-bold text-stone-900 dark:text-zinc-100 text-xs sm:text-sm">{room.name}</div>
-                    <div className="text-[11px] text-stone-500 dark:text-zinc-400">{room.building}</div>
+                    <div className="break-words text-[11px] text-stone-500 dark:text-zinc-400" title={room.building}>{room.building}</div>
                   </div>
                   <div className="flex items-center gap-1">
                     <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[#FAF9F5] dark:bg-zinc-900 text-[#8C1B2E] dark:text-red-400 border border-[#E5E2D9] dark:border-zinc-800 font-semibold">
-                      {room.type}
+                      {room.type.replace(/([a-z])([A-Z])/g, '$1 $2')}
                     </span>
                     {canEdit && (
                       <button onClick={() => submit(() => deleteRoom(room.id))} disabled={saving} className={DELETE_BTN} aria-label={`Delete room ${room.name}`} title="Delete">

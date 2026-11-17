@@ -45,7 +45,7 @@ export function WorkloadSyllabusView() {
       <div className="border-b border-[#E5E2D9] dark:border-zinc-800 pb-4">
         <div className="flex items-center gap-2 text-[#8C1B2E] dark:text-red-400 text-xs font-semibold uppercase tracking-wider mb-1">
           <BarChart3 className="h-4 w-4" />
-          <span>Academic Intelligence & Statutory Compliance</span>
+          <span>Academic Operations</span>
         </div>
         <h1 className="text-2xl sm:text-3xl font-serif font-bold text-stone-900 dark:text-zinc-100 tracking-tight">
           Syllabus Progress & Faculty UGC Workload
@@ -60,7 +60,7 @@ export function WorkloadSyllabusView() {
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-serif font-bold text-stone-900 dark:text-zinc-100 flex items-center gap-2">
             <BookOpen className="h-4 w-4 text-[#8C1B2E] dark:text-red-400" />
-            <span>Syllabus Completion & Exam Readiness Radar</span>
+            <span>Syllabus Completion & Course Progress</span>
           </h2>
           <span className="text-xs text-stone-500 dark:text-zinc-400 font-mono flex items-center gap-1.5">
             Progress uses timetable sessions marked Completed or Cancelled.
@@ -85,8 +85,8 @@ export function WorkloadSyllabusView() {
               : 0;
 
             // Risk from cancelled (not yet recovered) hours
-            let risk: 'GREEN' | 'YELLOW' | 'RED' = 'GREEN';
-            let riskNote = 'No cancelled hours';
+            let risk: 'GREEN' | 'YELLOW' | 'RED' | 'NOT_STARTED' = completionPercent === 0 ? 'NOT_STARTED' : 'GREEN';
+            let riskNote = completionPercent === 0 ? 'No completed sessions recorded' : 'No cancelled hours';
 
             if (cancelledHours >= 2) {
               risk = 'RED';
@@ -118,10 +118,12 @@ export function WorkloadSyllabusView() {
                         ? 'bg-rose-50 text-rose-800 border-rose-200 dark:bg-rose-500/10 dark:text-rose-300 dark:border-rose-500/30'
                         : risk === 'YELLOW'
                         ? 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-500/10 dark:text-amber-300 dark:border-amber-500/30'
+                        : risk === 'NOT_STARTED'
+                        ? 'bg-stone-100 text-stone-700 border-stone-200 dark:bg-zinc-800 dark:text-zinc-300 dark:border-zinc-700'
                         : 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-300 dark:border-emerald-500/30'
                     }`}
                   >
-                    Risk: {risk}
+                    {risk === 'NOT_STARTED' ? 'Not Started' : `Risk: ${risk}`}
                   </span>
                 </div>
 
@@ -134,7 +136,7 @@ export function WorkloadSyllabusView() {
                   <div className="h-2 w-full bg-stone-200 dark:bg-zinc-950 rounded-full overflow-hidden border border-[#E5E2D9] dark:border-zinc-800">
                     <div
                       className={`h-full transition-all duration-500 ${
-                        risk === 'RED' ? 'bg-[#8C1B2E]' : risk === 'YELLOW' ? 'bg-amber-600' : 'bg-emerald-600'
+                        risk === 'RED' ? 'bg-[#8C1B2E]' : risk === 'YELLOW' ? 'bg-amber-600' : risk === 'NOT_STARTED' ? 'bg-stone-300 dark:bg-zinc-700' : 'bg-emerald-600'
                       }`}
                       style={{ width: `${completionPercent}%` }}
                     />

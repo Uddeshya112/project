@@ -45,7 +45,7 @@ import {
   validateProposedSessionSwap,
 } from '../lib/independentValidator';
 import { executeOptimizationEngine, type GeneratedCandidate } from '../lib/optimizationEngine';
-import { checkHardConstraints, findSelfHealingRecoverySlots } from '../lib/recoveryEngine';
+import { calculateHealthScore, checkHardConstraints, findSelfHealingRecoverySlots } from '../lib/recoveryEngine';
 import { ExcelImportPreview } from '../lib/excelMasterService';
 
 // Initialize Supabase Client if environment variables are provided
@@ -132,6 +132,12 @@ class SupabaseRelationalStore {
     this.rooms = asMap<Room>(snapshot.rooms);
     this.groups = asMap<StudentSection>(snapshot.groups);
     this.students = asMap<StudentRecord>(snapshot.students);
+    for (const section of this.groups.values()) {
+      const representative = [...this.students.values()].find((student) => student.sectionId === section.id);
+      if (representative && (!section.classRepresentative?.name || /^CR\s/i.test(section.classRepresentative.name))) {
+        section.classRepresentative = { name: representative.name, email: representative.email, studentId: representative.studentId };
+      }
+    }
     this.allocations = asMap<CourseAllocation>(snapshot.allocations);
     this.constraints = asMap<AcademicConstraint>(snapshot.constraints);
     this.versions = Array.isArray(snapshot.versions) ? snapshot.versions : [];
@@ -167,6 +173,19 @@ class SupabaseRelationalStore {
         : version.status,
       sessions: (version.sessions || []).map((session) => ({ ...session, facultyId: repairDemoFacultyId(session.facultyId) })),
     }));
+    if (this.academicYear.publishStatus === 'Published' && this.activeSessions.length === 0) {
+      const publishedVersion = this.versions.find((version) => version.isPublished || version.status === 'Published');
+      if (publishedVersion?.sessions?.length) this.activeSessions = [...publishedVersion.sessions];
+    }
+    const seenNotificationKeys = new Set<string>();
+    this.notifications = this.notifications.filter((item) => {
+      const key = item.title === 'Master Schedule Published'
+        ? item.title
+        : `${item.title}|${item.actionPayload?.sessionId || item.actionPayload?.sectionId || item.id}`;
+      if (seenNotificationKeys.has(key)) return false;
+      seenNotificationKeys.add(key);
+      return true;
+    });
     this.allocations = new Map([...this.allocations.values()].map((allocation) => [allocation.id, { ...allocation, facultyId: repairDemoFacultyId(allocation.facultyId) }]));
   }
 
@@ -289,6 +308,11 @@ class SupabaseRelationalStore {
   // --------------------------------------------------------------------------
 
   public getBootstrapState(userId?: string) {
+    const publishedVersion = this.versions.find((version) => version.isPublished || version.status === 'Published');
+    const versions = this.versions.map((version) => {
+      const score = calculateHealthScore(version.sessions || [], [...this.rooms.values()], [...this.facultyMembers.values()], [...this.groups.values()], [...this.courses.values()], this.academicYear);
+      return { ...version, sessionsCount: version.sessions?.length ?? 0, healthScore: score.overallScore, hardViolationsCount: score.hardConstraintViolations };
+    });
     return {
       academicYear: this.academicYear,
       departments: Array.from(this.departments.values()),
@@ -302,7 +326,10 @@ class SupabaseRelationalStore {
       allocations: Array.from(this.allocations.values()),
       constraints: Array.from(this.constraints.values()),
       sessions: this.activeSessions,
-      versions: this.versions,
+      publishedSessions: publishedVersion
+        ? (this.academicYear.publishStatus === 'Published' && this.activeSessions.length ? this.activeSessions : publishedVersion.sessions || [])
+        : [],
+      versions,
       notifications: this.notifications,
       makeupTasks: this.makeupTasks,
       recoveryOpportunities: this.recoveryOpportunities,
@@ -1460,6 +1487,7 @@ class SupabaseRelationalStore {
 
     this.logAudit(publisherName, 'TIMETABLE_PUBLISHED', 'TimetableVersion', versionId, `Timetable version ${versionId} published institution-wide.`);
 
+    this.notifications = this.notifications.filter((notification) => notification.title !== 'Master Schedule Published');
     this.notifications.unshift({
       id: `notif-${Date.now()}`,
       type: 'system_alert',
@@ -1573,13 +1601,14 @@ class SupabaseRelationalStore {
       this.recoveryOpportunities = [...opps, ...this.recoveryOpportunities];
     }
 
+    this.notifications = this.notifications.filter((notification) => !(notification.title === `Class Disrupted: ${target.courseId}` && notification.actionPayload?.sessionId === sessionId));
     this.notifications.unshift({
       id: `notif-${Date.now()}`,
       type: 'cancellation',
       title: `Class Disrupted: ${target.courseId}`,
       recipientRole: 'Student',
-      message: `${this.groups.get(target.sectionId)?.name || target.sectionId}: ${target.day} session was cancelled. Reason: ${reason}. Self-healing engine generated replacement proposals.`,
-      timestamp: 'Just now',
+      message: `${this.groups.get(target.sectionId)?.name || target.sectionId}: ${target.day} session was cancelled. Reason: ${reason}. Suggested makeup slots are available for review.`,
+      timestamp: new Date().toISOString(),
       read: false,
       category: 'Critical',
       actionable: true,
@@ -1643,7 +1672,7 @@ class SupabaseRelationalStore {
       type: 'makeup_request',
       title: `Makeup Scheduled: ${makeupTask.courseId}`,
       message: `Recovery class locked for ${opp.targetDay} in ${roomObj?.name || opp.roomId}. Students and Faculty notified.`,
-      timestamp: 'Just now',
+      timestamp: new Date().toISOString(),
       read: false,
       category: 'Success',
     });

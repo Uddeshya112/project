@@ -3,7 +3,7 @@ import { useTimetable } from '../../context/TimetableContext';
 import type { DayOfWeek } from '../../types';
 
 export function PollComposer({ sectionIds }: { sectionIds?: string[] }) {
-  const { sections, courses, academicYear, createPoll, polls, sessions } = useTimetable();
+  const { sections, courses, allocations, academicYear, createPoll, polls, sessions } = useTimetable();
   const availableSections = useMemo(() => sections.filter((section) => !sectionIds || sectionIds.includes(section.id)), [sections, sectionIds]);
   const [sectionId, setSectionId] = useState('');
   const [courseId, setCourseId] = useState('');
@@ -16,10 +16,10 @@ export function PollComposer({ sectionIds }: { sectionIds?: string[] }) {
   const [saving, setSaving] = useState(false);
   const selectedSectionId = availableSections.some((item) => item.id === sectionId) ? sectionId : availableSections[0]?.id || '';
   const availableCourses = useMemo(() => {
-    if (!sectionIds) return courses;
-    const taughtCourseIds = new Set(sessions.filter((session) => session.sectionId === selectedSectionId).map((session) => session.courseId));
-    return courses.filter((course) => taughtCourseIds.has(course.id));
-  }, [courses, sectionIds, selectedSectionId, sessions]);
+    const enrolledCourseIds = new Set(allocations.filter((allocation) => allocation.sectionId === selectedSectionId).map((allocation) => allocation.courseId));
+    for (const session of sessions) if (session.sectionId === selectedSectionId) enrolledCourseIds.add(session.courseId);
+    return courses.filter((course) => enrolledCourseIds.has(course.id));
+  }, [allocations, courses, selectedSectionId, sessions]);
   const selectedCourseId = availableCourses.some((item) => item.id === courseId) ? courseId : availableCourses[0]?.id || '';
 
   const submit = async (event: React.FormEvent) => {

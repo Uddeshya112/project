@@ -9,7 +9,7 @@ import { AuthGovernanceView } from './AuthGovernanceView';
 export function AdminPortalView() {
   const {
     health,
-    sessions,
+    publishedSessions,
     versions,
     activeVersionNumber,
     rooms,
@@ -30,12 +30,6 @@ export function AdminPortalView() {
   const draftConflicts =
     versions.find(v => v.versionNumber === activeVersionNumber)?.hardViolationsCount ?? health.hardConstraintViolations;
 
-  const tabs = [
-    { view: 'overview', label: 'Overview', target: 'overview' },
-    { view: 'audit', label: 'Approvals', target: 'governance' },
-    { view: 'users', label: 'Users', target: 'auth_gov' },
-  ] as const;
-
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
       {/* Header */}
@@ -53,22 +47,6 @@ export function AdminPortalView() {
           </p>
         </div>
 
-        {/* Workflow Switcher Tabs */}
-        <div className="flex bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 p-1 rounded-xl text-xs font-medium">
-          {tabs.map(tab => (
-            <button
-              key={tab.view}
-              onClick={() => setActiveView(tab.target)}
-              className={`px-3 py-1.5 rounded-lg transition-colors ${
-                subView === tab.view
-                  ? 'bg-[#8C1B2E] text-white font-semibold shadow-xs'
-                  : 'text-stone-700 dark:text-zinc-400 hover:text-stone-900 dark:hover:text-zinc-200'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
       </div>
 
       {/* Main Content Area */}
@@ -91,7 +69,7 @@ export function AdminPortalView() {
             <div className="p-4 bg-[#FAF9F5] dark:bg-zinc-900/50 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl space-y-1 shadow-xs">
               <span className="text-xs text-stone-500 dark:text-zinc-400 font-medium">Classrooms & Labs</span>
               <div className="text-2xl font-bold font-serif text-stone-900 dark:text-zinc-100">{rooms.length}</div>
-              <span className="text-[11px] text-stone-500 dark:text-zinc-400 line-clamp-1" title={buildings.join(', ')}>
+              <span className="break-words text-[11px] text-stone-500 dark:text-zinc-400" title={buildings.join(', ')}>
                 {buildings.length ? buildings.join(', ') : 'No rooms yet'}
               </span>
             </div>
@@ -99,9 +77,9 @@ export function AdminPortalView() {
             <div className="p-4 bg-[#FAF9F5] dark:bg-zinc-900/50 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl space-y-1 shadow-xs">
               <span className="text-xs text-stone-500 dark:text-zinc-400 font-medium">Timetable Health</span>
               <div className="text-2xl font-bold font-serif text-stone-900 dark:text-zinc-100">
-                {sessions.length ? `${health.overallScore}%` : '—'}
+                {publishedSessions?.length ? `${versions.find(version => version.versionNumber === activeVersionNumber)?.healthScore ?? health.overallScore}%` : '—'}
               </div>
-              {sessions.length === 0 ? (
+              {!publishedSessions?.length ? (
                 <span className="text-[11px] text-stone-500 dark:text-zinc-400">No timetable yet</span>
               ) : draftConflicts === 0 ? (
                 <span className="text-[11px] text-emerald-700 dark:text-emerald-400 font-medium">No clashes</span>

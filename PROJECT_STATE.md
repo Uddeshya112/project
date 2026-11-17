@@ -276,3 +276,23 @@
 - **VERIFIED:** `npm run build` passed (existing Vite large-chunk warning remains); `npm run lint` passed after fixing a route parameter type. `git diff --check` passed before final small view changes and will be rerun before commit.
 - **UNVERIFIED:** No interactive browser acceptance run or live Render/Supabase/Vercel verification was performed. These updates change production app behavior only after deployment.
 - **PENDING:** User requested pushing these changes; commit/push to `fix/full-e2e-sync` after final diff and validation.
+
+## 13. Current Session — Cross-Portal UI and State Cleanup (2026-11-17)
+
+### Implemented
+
+- **VERIFIED IN CODE:** Removed duplicate portal header branding, redundant Admin/Student tab bars, and the sidebar profile/sign-out card; normalized portal titles and active navigation styling. Reset Demo is under Presentation controls and refreshes academic state after a successful reset.
+- **VERIFIED IN CODE:** Cleaned up landing and portal copy, removed sparkles from draft generation, normalized room labels and seeded faculty email addresses, repaired course department prefixes and seeded class representative identities, and scoped poll courses to enrolled section courses.
+- **VERIFIED IN CODE:** Student, Faculty, CR, HOD, and Admin schedule views now read the published schedule where appropriate. Seeded timetable state is explicitly published, seed sections have a home classroom, health metrics are recalculated from schedule sessions, and duplicate published/disruption/replacement notices are filtered.
+- **VERIFIED IN CODE:** Notifications mark-read actions persist through the API; reset and timestamp displays use valid ISO timestamps or a safe fallback; zero-progress syllabus items display Not Started; Admin accounts and sessions are loaded through the existing API and accounts use 20-row pagination.
+- **NECESSARY SUPPORTING SCOPE:** Fixed two TypeScript errors found during lint: weekday selection in Faculty Portal and the cancellation status literal type.
+
+### Verification and release status
+
+- **VERIFIED:** `npm run lint` passed.
+- **VERIFIED:** `npm run build` passed. Vite reports the existing large JavaScript chunk warning (approximately 1.30 MB minified).
+- **VERIFIED:** `git diff --check` passed.
+- **NOT RUN:** Automated tests were not run.
+- **UNVERIFIED:** No interactive browser acceptance run, production Render/Supabase/Vercel inspection, live database reset, or end-to-end account/session check was performed. Seed-state and view behavior are code-reviewed only; no external production data was changed.
+- **UNVERIFIED:** No performance measurement or security scan was performed.
+- **NOT PUSHED:** These cleanup changes are uncommitted on `fix/full-e2e-sync`; the branch is one commit ahead of `origin/fix/full-e2e-sync`. No deployment was performed.

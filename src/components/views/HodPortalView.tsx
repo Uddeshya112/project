@@ -8,7 +8,7 @@ const card = 'rounded-xl border border-[#E5E2D9] dark:border-zinc-800 bg-[#FAF9F
 
 export function HodPortalView() {
   const { currentUser } = useAuth();
-  const { academicYear, auditLogs, courses, facultyMembers, publishStatus, sections, sessions, versions } = useTimetable();
+  const { academicYear, auditLogs, courses, facultyMembers, publishStatus, sections, publishedSessions, versions } = useTimetable();
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const facultyId = currentUser?.facultyId;
@@ -18,7 +18,7 @@ export function HodPortalView() {
     [departmentId, facultyMembers],
   );
   const facultyIds = useMemo(() => new Set(departmentFaculty.map((f) => f.id)), [departmentFaculty]);
-  const departmentSessions = sessions.filter((s) => facultyIds.has(s.facultyId));
+  const departmentSessions = (publishedSessions || []).filter((s) => facultyIds.has(s.facultyId));
   const alreadySignedOff = auditLogs.some((event) => event.action === 'HOD_DEPARTMENT_SIGNED_OFF' && event.entityId.startsWith(`${departmentId}:`));
   const cancelled = departmentSessions.filter((s) => s.status === 'Cancelled');
   const hoursByFaculty = useMemo(() => {
@@ -59,7 +59,7 @@ export function HodPortalView() {
         <div className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-[#8C1B2E] dark:text-red-400">
           <Users className="h-4 w-4" aria-hidden="true" /> Department workspace
         </div>
-        <h1 className="text-2xl font-serif font-bold text-stone-900 dark:text-zinc-100 sm:text-3xl">Head of Department</h1>
+        <h1 className="text-2xl font-serif font-bold text-stone-900 dark:text-zinc-100 sm:text-3xl">HOD Portal</h1>
         <p className="mt-1 text-sm text-stone-600 dark:text-zinc-400">Workload balance, schedule disruptions, and timetable sign-off for your department.</p>
       </header>
 

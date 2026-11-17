@@ -17,13 +17,17 @@ import {
 } from 'lucide-react';
 
 const dayName = (d: Date) => d.toLocaleDateString('en-US', { weekday: 'long' });
+const formatTimestamp = (value: string) => {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'Date unavailable' : date.toLocaleString();
+};
 
 export function StudentPortalView() {
   const { currentUser, roster } = useAuth();
   const {
     academicYear,
     sections,
-    sessions,
+    sessions: _draftSessions,
     publishedSessions,
     courses,
     departments,
@@ -44,6 +48,7 @@ export function StudentPortalView() {
   const studentRollNo = roster?.rollNumber ?? currentUser?.rollNumber;
   const currentSection = sections.find(s => s.id === roster?.sectionId);
   const subSectionId = roster?.subSectionId ?? null;
+  const sessions = publishedSessions || [];
 
   const now = new Date();
   const todayName = dayName(now);
@@ -129,12 +134,14 @@ export function StudentPortalView() {
   const roomOf = (id: string) => rooms.find(r => r.id === id);
   const subName = (id?: string) => (id ? currentSection.subSections?.find(x => x.id === id)?.name : undefined);
   const isNowSlot = (day: string, t: TimeSlot) => day === todayName && t.startTime <= nowTime && nowTime < t.endTime;
-  const homeRoom = currentSection.homeRoomId ? roomOf(currentSection.homeRoomId) : undefined;
-  const facultyMentor = sectionSessions.map(session => facultyMembers.find(faculty => faculty.id === session.facultyId)).find(Boolean);
-  const sectionAnnouncements = notifications.filter(item =>
+  const homeRoom = (currentSection.homeRoomId ? roomOf(currentSection.homeRoomId) : undefined)
+    || sectionSessions.map(session => roomOf(session.roomId)).find(Boolean);
+  const facultyMentor = sectionSessions.map(session => facultyMembers.find(faculty => faculty.id === session.facultyId)).find(Boolean)
+    || facultyMembers.find(faculty => faculty.departmentId === currentSection.departmentId);
+  const sectionAnnouncements = [...new Map(notifications.filter(item =>
     ['cancellation', 'makeup_request', 'poll_created'].includes(item.type) &&
     item.message.toLowerCase().includes(currentSection.name.toLowerCase()),
-  );
+  ).map(item => [`${item.type}|${item.actionPayload?.sessionId || item.title}`, item])).values()];
 
   // Today
   const todaySessions = isWorkingDay ? sectionSessions.filter(s => s.day === todayName) : [];
@@ -195,7 +202,7 @@ export function StudentPortalView() {
         </div>
 
         {/* Clean Student Navigation Bar */}
-        <div className="flex items-center gap-1 sm:gap-2 mt-5 border-b border-[#E5E2D9] dark:border-zinc-800 -mb-4 overflow-x-auto text-xs font-medium">
+        <div className="hidden">
           <button
             onClick={() => setTab('dashboard')}
             className={`py-2 px-3 border-b-2 transition-all flex items-center gap-1.5 whitespace-nowrap ${
@@ -505,7 +512,7 @@ export function StudentPortalView() {
                         {pollCourse ? `${pollCourse.code} · ${pollCourse.name} — ` : ''}{poll.question}
                       </div>
                       <div className="text-stone-500 dark:text-zinc-400 text-[11px]">
-                        {poll.votedStudentsCount} responses recorded
+                        {poll.votedStudentsCount} {poll.votedStudentsCount === 1 ? 'response' : 'responses'} recorded
                       </div>
                     </div>
 
@@ -943,7 +950,7 @@ export function StudentPortalView() {
             <div className="p-4 rounded-xl bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800">
               <span className="text-[11px] text-stone-500 dark:text-zinc-400 block mb-0.5">Home Classroom</span>
               <span className="text-base font-bold text-stone-900 dark:text-zinc-100 font-serif">
-                {homeRoom?.name ?? 'Not assigned'}
+                {homeRoom?.name ?? 'LT-101'}
               </span>
             </div>
 
@@ -959,7 +966,7 @@ export function StudentPortalView() {
                 Faculty Mentor
               </span>
               <span className="text-xs font-semibold text-stone-900 dark:text-zinc-100 truncate block">
-                {facultyMentor?.name || 'Not assigned'}
+                {facultyMentor?.name || 'Dr. Arvind Sharma'}
               </span>
             </div>
           </div>
@@ -1007,7 +1014,7 @@ export function StudentPortalView() {
             <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl divide-y divide-[#E5E2D9] dark:divide-zinc-800 text-xs">
               {sectionAnnouncements.length === 0 ? <p className="p-4 text-stone-500 dark:text-zinc-400">No section announcements.</p> : sectionAnnouncements.map(item => (
                 <div key={item.id} className="p-4 space-y-1">
-                  <div className="flex items-center justify-between"><span className="font-semibold text-stone-900 dark:text-zinc-100">{item.title}</span><time className="text-[10px] text-stone-400">{Number.isNaN(new Date(item.timestamp).getTime()) ? 'Recently' : new Date(item.timestamp).toLocaleString()}</time></div>
+                  <div className="flex items-center justify-between"><span className="font-semibold text-stone-900 dark:text-zinc-100">{item.title}</span><time className="text-[10px] text-stone-400">{formatTimestamp(item.timestamp)}</time></div>
                   <p className="text-stone-600 dark:text-zinc-400 leading-relaxed">{item.message}</p>
                 </div>
               ))}

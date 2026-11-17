@@ -398,7 +398,6 @@ export function GenerateTimetablePage() {
               </>
             ) : (
               <>
-                <Sparkles className="h-4 w-4 text-amber-300" />
                 <span>Generate Draft Timetable</span>
               </>
             )}

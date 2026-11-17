@@ -32,7 +32,8 @@ export function FacultyPortalView() {
     academicYear,
     departments,
     facultyMembers,
-    sessions,
+    sessions: _draftSessions,
+    publishedSessions,
     courses,
     sections,
     rooms,
@@ -49,6 +50,7 @@ export function FacultyPortalView() {
   } = useTimetable();
 
   const roleCode = currentUser?.roleCode ?? '';
+  const sessions = publishedSessions || [];
   // Teachers always see their own record; coordinators/admins pick a faculty member.
   const isTeacher = roleCode === 'FACULTY' || roleCode === 'HOD';
   // The server assigns an extra class to the signed-in teacher, so only FACULTY accounts can claim one.
@@ -57,12 +59,15 @@ export function FacultyPortalView() {
   const currentFaculty = facultyMembers.find(f => f.id === facultyId);
 
   const { workingDays, timeSlots, lunchPeriodId } = academicYear;
+  const todayName: DayOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][new Date().getDay()] as DayOfWeek;
   const slotById = useMemo(() => new Map(timeSlots.map(t => [t.id, t])), [timeSlots]);
   const slotLabel = (id: string) => slotById.get(id)?.label ?? id;
   const isBreakSlot = (t: TimeSlot) => Boolean(t.isBreak || t.isLunch || t.id === lunchPeriodId);
 
   const [pickedDay, setSelectedDay] = useState<DayOfWeek | ''>('');
-  const selectedDay: DayOfWeek | undefined = pickedDay && workingDays.includes(pickedDay) ? pickedDay : workingDays[0];
+  const selectedDay: DayOfWeek | undefined = pickedDay && workingDays.includes(pickedDay)
+    ? pickedDay
+    : workingDays.includes(todayName as DayOfWeek) ? todayName as DayOfWeek : workingDays[0];
 
   const [busy, setBusy] = useState<string | null>(null);
   const [sessionToCancel, setSessionToCancel] = useState<string | null>(null);
@@ -176,8 +181,9 @@ export function FacultyPortalView() {
   const cancelledCount = mySessions.filter(s => s.status === 'Cancelled').length;
   const departmentName = departments.find(d => d.id === currentFaculty.departmentId)?.name;
 
-  const pendingMakeups = makeupTasks
+  const pendingMakeups = [...new Map(makeupTasks
     .filter(t => t.facultyId === currentFaculty.id && t.status !== 'Scheduled' && t.status !== 'Dismissed')
+    .map(task => [task.cancelledSessionId, task])).values()]
     .map(task => ({
       task,
       option: recoveryOpportunities
@@ -201,7 +207,7 @@ export function FacultyPortalView() {
     setBusy(`change:${sessionId}`);
     try {
       await api('/api/recovery/request-change', { body: { sessionId, details: details.trim() } });
-      setScheduleChangeFeedback('Request saved. The coordinator can review it in Requests & disruptions.');
+      setScheduleChangeFeedback('Request saved. The coordinator can review it in Requests & Disruptions.');
     } catch (error) {
       setScheduleChangeFeedback(error instanceof Error ? error.message : 'Could not save your schedule change request.');
     } finally {

@@ -55,7 +55,7 @@ export function WorkspaceSelectionView({
       case 'Coordinator':
         return {
           title: 'Coordinator Portal',
-          subtitle: 'Academic Operations & Self-Healing',
+          subtitle: 'Academic Operations',
           description: 'Coordinate department timetables, resolve schedule disruptions, process makeup opportunities, and approve freeze-window changes.',
           icon: LayoutDashboard,
           badge: 'Operations',
