@@ -614,7 +614,6 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
             <AlertCircle className="h-4 w-4 shrink-0 text-[#8C1B2E] dark:text-red-400 mt-0.5" />
             <div className="leading-relaxed font-medium">
               <span>{errorMessage}</span>
-              {errorMessage.includes('waiting for email verification') && <button type="button" onClick={() => void handleResendVerification()} disabled={isResendingVerification} className="ml-1 underline disabled:opacity-50">{isResendingVerification ? 'Sending…' : 'Resend verification email'}</button>}
             </div>
           </div>
         )}
@@ -1580,3 +1579,4 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
     </div>
   );
 }
+

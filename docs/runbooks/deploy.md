@@ -83,3 +83,23 @@ docker run -p 8080:8080 --env-file .env.production intellischedule
 ```
 
 Run one container, terminate HTTPS in front of it, and set `TRUST_PROXY` to the number of proxies in between (1 for a single reverse proxy). Without it, rate limiting sees the proxy's IP and session cookies are not marked Secure.
+
+## Render registration email
+
+The production API runs on Render. New password registrations are first saved in
+`intellischedule.pending_registrations`; they become login-capable app users only
+after email verification. Configure an email provider on the **Render API web
+service** before accepting registrations:
+
+1. In Render, open the `Tiet-timetable` web service and select **Environment**.
+2. Add `RESEND_API_KEY` as a secret and `RESEND_FROM` as the sender address
+   verified with Resend. Alternatively configure `SMTP_URL` and `SMTP_FROM`.
+3. Set `APP_URL` to `https://tiet-timetable-six.vercel.app` so verification links
+   return to the production frontend.
+4. Save and redeploy the Render service. On the login page, choose **Resend
+   verification email** for a pending account, open the new link, and then sign in.
+
+Do not put email-provider secrets in Vercel or the repository: `/api/*` is routed
+to Render. If the provider is not configured, signup is stored as pending but
+no email is delivered, so password login cannot succeed yet.
+

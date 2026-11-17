@@ -296,3 +296,43 @@
 - **UNVERIFIED:** No interactive browser acceptance run, production Render/Supabase/Vercel inspection, live database reset, or end-to-end account/session check was performed. Seed-state and view behavior are code-reviewed only; no external production data was changed.
 - **UNVERIFIED:** No performance measurement or security scan was performed.
 - **NOT PUSHED:** These cleanup changes are uncommitted on `fix/full-e2e-sync`; the branch is one commit ahead of `origin/fix/full-e2e-sync`. No deployment was performed.
+
+## 14. Current Session — Generic Pending-Account Login Failure (2026-11-17)
+
+### Implemented
+
+- **VERIFIED IN CODE:** Login attempts for pending registrations now return the same generic HTTP 401 response as other invalid credentials, instead of 403 with an account-specific verification message. This closes the observed mismatch and avoids disclosing pending-registration status from the login response.
+- **VERIFIED IN CODE:** The login screen retains a resend-verification action alongside the generic credential failure, using the existing enumeration-safe resend endpoint.
+
+### Verification and release status
+
+- **VERIFIED:** `npm test` passed, 56/56 assertions (24 unit/API tests and the repository's E2E/API audit suite).
+- **VERIFIED:** `npm run lint` passed.
+- **VERIFIED:** `npm run build` passed; the existing Vite large-chunk warning remains (main JavaScript bundle approximately 1.30 MB minified).
+- **VERIFIED:** `git -c core.whitespace=cr-at-eol diff --check` passed. The repository's Windows working tree uses CRLF line endings.
+- **UNVERIFIED:** GitHub Actions was not rerun yet; no production login attempt or hosted service change was performed.
+
+## 15. Current Session — Production Registration Delivery and Public Roles (2026-11-17)
+
+### Verified diagnosis
+
+- **VERIFIED in Render logs:** Production has no configured email provider (`SMTP_URL`, `RESEND_API_KEY`, or `MAILER_SERVICE_URL`). Signup persisted a pending registration, but the verification email send failed. A subsequent login failed against Supabase Auth because the unverified custom app account is not an `auth.users` account. The login will not work until a verification link is delivered and consumed.
+- **VERIFIED in Supabase:** The project is `ACTIVE_HEALTHY`; there is one pending registration created at approximately 16:00 UTC, zero `intellischedule.users`, and 263 `auth.users`. The count alone does not establish which person owns the pending record.
+- **VERIFIED in Render configuration:** The API service deploys from `main`. Commit `4d81e270336e135bfbe2e95258e940e22cdc0384` is on `fix/full-e2e-sync`, so that later generic 401 behavior is not in the production branch. The email-provider blocker is independent of this status response.
+- **VERIFIED in Supabase security advisors:** `public.roles` has RLS disabled and direct grants to `anon` and `authenticated`. The application only needs server-side service-role access to this legacy table.
+
+### Changes prepared
+
+- Added an idempotent migration to enable RLS on `public.roles` and revoke browser-role table grants when the legacy table exists. It is safe on installations where that table is absent.
+- Removed the raw email address and provider error details from failed Supabase login logs.
+- **CURRENT USER CHANGE:** Removed the resend-verification button from the login error alert. The separate registration-success recovery action remains available.
+- Documented Render's required mail-provider setup and the pending-account recovery flow in `docs/runbooks/deploy.md`.
+
+### Verification and release status
+
+- **VERIFIED:** `npm run lint` passed; `npm run build` passed with the existing approximately 1.30 MB main-bundle warning; `git -c core.whitespace=cr-at-eol diff --check` passed.
+- **NOT RUN:** Automated tests were not run.
+- **NOT DEPLOYED:** No production database schema, Render environment variable, Supabase data, or deployment was changed.
+- **REQUIRES HUMAN ACTION:** Configure `RESEND_API_KEY` and a verified `RESEND_FROM` (or SMTP equivalents) on Render, then redeploy. Afterward use **Resend verification email** for the pending signup, verify from the email link, and sign in.
+- **REQUIRES HUMAN REVIEW/DEPLOY APPROVAL:** The new RLS migration is production-impacting and should be reviewed and applied through the normal deployment process; no direct production SQL was run.
+
