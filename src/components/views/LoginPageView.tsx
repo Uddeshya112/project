@@ -82,6 +82,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
 
   // Status & Loading States
   const [isLoading, setIsLoading] = useState(false);
+  const [isResendingVerification, setIsResendingVerification] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [googleConfigured, setGoogleConfigured] = useState(false);
   const [demoRoleLoading, setDemoRoleLoading] = useState<string | null>(null);
@@ -398,6 +399,25 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
     }
   };
 
+  const handleResendVerification = async () => {
+    const verificationEmail = registeredEmail || loginEmail.trim();
+    if (!verificationEmail || isResendingVerification) return;
+    setIsResendingVerification(true);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    try {
+      const result = await apiFetch<{ success: boolean; message?: string }>('/api/auth/resend-verification', {
+        method: 'POST',
+        body: JSON.stringify({ email: verificationEmail }),
+      });
+      setSuccessMessage(result.message || 'If your account is still pending, a new verification link has been sent.');
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Could not resend the verification email.');
+    } finally {
+      setIsResendingVerification(false);
+    }
+  };
+
   /**
    * Handle Forgot Password Submit (Step 1: Request OTP)
    */
@@ -592,7 +612,10 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
             className="mb-4 p-3 bg-rose-50/80 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900/60 rounded-xl text-rose-800 dark:text-rose-300 text-xs flex items-start gap-2.5 shadow-2xs"
           >
             <AlertCircle className="h-4 w-4 shrink-0 text-[#8C1B2E] dark:text-red-400 mt-0.5" />
-            <span className="leading-relaxed font-medium block">{errorMessage}</span>
+            <div className="leading-relaxed font-medium">
+              <span>{errorMessage}</span>
+              {errorMessage.includes('waiting for email verification') && <button type="button" onClick={() => void handleResendVerification()} disabled={isResendingVerification} className="ml-1 underline disabled:opacity-50">{isResendingVerification ? 'Sending…' : 'Resend verification email'}</button>}
+            </div>
           </div>
         )}
 
@@ -1123,7 +1146,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
                 Your account has been created successfully.
               </p>
               <p className="text-xs text-stone-500 dark:text-zinc-400 leading-relaxed max-w-sm mx-auto pt-1">
-                Please verify your email address (if confirmation is required), then sign in using your email and password.
+                Open the verification link sent to your email, then sign in using the same email and password.
               </p>
             </div>
 
@@ -1132,6 +1155,13 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
                 {registeredEmail}
               </div>
             )}
+
+            {errorMessage && <p role="alert" className="text-xs text-rose-700 dark:text-rose-300">{errorMessage}</p>}
+            {successMessage && <p role="status" className="text-xs text-emerald-700 dark:text-emerald-300">{successMessage}</p>}
+
+            <button type="button" onClick={() => void handleResendVerification()} disabled={isResendingVerification || !registeredEmail} className="w-full rounded-lg border border-[#E5E2D9] px-3 py-2 text-xs font-semibold text-stone-700 hover:border-[#8C1B2E] disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300">
+              {isResendingVerification ? 'Sending…' : 'Resend verification email'}
+            </button>
 
             <button
               type="button"
