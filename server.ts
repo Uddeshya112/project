@@ -695,6 +695,31 @@ async function persistUserRecord(user: StoredUser) {
   );
 }
 
+async function persistNewUserRecord(user: StoredUser) {
+  if (!academicDb) {
+    if (process.env.NODE_ENV === 'production') throw new Error('Database is not initialized; account changes cannot be saved.');
+    return;
+  }
+  await academicDb.query(
+    `insert into intellischedule.users
+       (id, email, name, role_code, department, password_hash, status, is_demo, profile, created_at, last_login_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11)`,
+    [
+      user.id,
+      user.email.trim().toLowerCase(),
+      user.name,
+      user.roleCode,
+      user.department,
+      user.passwordHash === 'SUPABASE_AUTH_MANAGED' ? null : user.passwordHash,
+      user.status,
+      Boolean(user.isDemoUser),
+      JSON.stringify(user.profile || {}),
+      user.createdAt,
+      user.lastLoginAt || null,
+    ],
+  );
+}
+
 function issueOneTimeToken(
   email: string,
   purpose: OneTimeTokenPurpose,
@@ -1700,14 +1725,6 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
     });
   }
 
-  if (process.env.NODE_ENV === 'production' && !hasMailerConfiguration()) {
-    return res.status(503).json({
-      success: false,
-      error: 'EMAIL_DELIVERY_NOT_CONFIGURED',
-      message: 'Registration is temporarily unavailable because the email service is not configured. Please contact the app administrator.',
-    });
-  }
-
   // Require allowed email domain
   const allowedDomains = (process.env.ALLOWED_EMAIL_DOMAINS || 'thapar.edu')
     .split(',')
@@ -1766,94 +1783,126 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
     }
   }
 
-  let authUserId = 'usr_' + crypto.randomUUID();
-
-  // 1. Authoritative Registration in Supabase Auth
-  // -------------------------------------------------------------
-  // Verification and Pending Registration Checks
-  // -------------------------------------------------------------
   if (usersDatabase.has(normalizedEmail)) {
-    const existingUser = usersDatabase.get(normalizedEmail);
-    if (existingUser?.emailVerified) {
-      // Existing verified account: send notice email, return indistinguishable response
-      setImmediate(() => {
-        sendEmail({
-          to: normalizedEmail,
-          subject: 'Registration Attempt on IntelliSchedule',
-          text: `Someone attempted to register a new account using your email address (${normalizedEmail}). If this was you, please log in or request a password reset.`,
-          html: `<p>Someone attempted to register a new account using your email address (<strong>${normalizedEmail}</strong>). If this was you, please log in or request a password reset.</p>`,
-        }).catch(() => {});
-      });
-
-      const responseData: Record<string, any> = {
-        success: true,
-        message: 'Account created successfully. Please check your email to verify your account.',
-        email: normalizedEmail,
-        requiresLogin: true,
-      };
-      return res.status(201).json(responseData);
-    }
-  }
-
-  // Create or replace pending registration
-  const pending: PendingRegistration = {
-    id: 'preg_' + crypto.randomUUID(),
-    email: normalizedEmail,
-    name: String(name).trim(),
-    passwordHash: hashPasswordBcryptSync(String(password)),
-    roleCode,
-    roleName,
-    department,
-    createdAt: new Date().toISOString(),
-  };
-  pendingRegistrationsDatabase.set(normalizedEmail, pending);
-
-  const { rawToken } = issueOneTimeToken(normalizedEmail, 'email_verification', 24 * 60 * 60 * 1000);
-  try {
-    await Promise.all([
-      persistentStore.persistPendingRegistration(normalizedEmail),
-      persistentStore.persistOneTimeToken(rawToken),
-    ]);
-  } catch (err) {
-    console.error('[REGISTRATION] Could not persist pending signup:', err instanceof Error ? err.message : 'unknown error');
-    return res.status(503).json({ success: false, message: 'Registration could not be saved. Please try again.' });
-  }
-
-  const appUrl = (process.env.APP_URL || (process.env.NODE_ENV === 'production' ? 'https://tiet-timetable-six.vercel.app' : 'http://localhost:3000')).replace(/\/+$/, '');
-  const emailSent = await sendEmail({
-    to: normalizedEmail,
-    subject: 'Verify your IntelliSchedule account',
-    text: `Please verify your email address by clicking: ${appUrl}/verify-email#token=${rawToken}`,
-    html: `<p>Please verify your email address by clicking <a href="${appUrl}/verify-email#token=${rawToken}">here</a>.</p>`,
-  });
-  if (!emailSent) {
-    return res.status(503).json({
-      success: false,
-      error: 'VERIFICATION_EMAIL_FAILED',
-      message: 'Your account is saved as pending, but the verification email could not be sent. Configure the email service, then request a new verification link.',
+    // Keep duplicate-signup responses generic while never allowing a second
+    // registration attempt to replace an existing account's password.
+    return res.status(201).json({
+      success: true,
+      message: 'If this email already has an account, sign in with the existing password or use Forgot Password.',
+      email: normalizedEmail,
+      requiresLogin: true,
     });
   }
 
-  const responseData: Record<string, any> = {
-    success: true,
-    message: 'Account created successfully. Please check your email to verify your account.',
+  const trimmedName = String(name).trim();
+  const user: StoredUser = {
+    id: 'usr_' + crypto.randomUUID(),
+    name: trimmedName,
     email: normalizedEmail,
-    user: {
-      email: normalizedEmail,
-      name: pending.name,
-      roleCode,
-      roleName,
-      department,
-      emailVerified: false,
-    },
-    requiresLogin: true,
+    passwordHash: supabaseAdmin ? 'SUPABASE_AUTH_MANAGED' : hashPasswordBcryptSync(String(password)),
+    roleId: `role-${roleCode.toLowerCase()}`,
+    roleCode,
+    roleName,
+    institutionId: 'inst-thapar',
+    institutionName: 'Thapar Institute of Engineering and Technology',
+    department,
+    status: 'ACTIVE',
+    createdAt: new Date().toISOString(),
+    emailVerified: true,
   };
 
-  if (isTestTokenAllowed(req)) {
-    responseData.verificationToken = rawToken;
-  }
+  let createdAuthUserId: string | null = null;
+  let persistedUserRecord = false;
+  try {
+    if (supabaseAdmin) {
+      // Server-only Admin API creation bypasses the confirmation email. The
+      // public client and service key never leave this server process.
+      const { data, error } = await supabaseAdmin.auth.admin.createUser({
+        email: normalizedEmail,
+        password: String(password),
+        email_confirm: true,
+        user_metadata: { name: trimmedName },
+      });
+      if (error || !data.user) {
+        const duplicate = error?.code === 'email_exists' || error?.code === 'user_already_exists';
+        if (!duplicate) console.error('[REGISTRATION] Supabase account creation failed:', error?.code || 'unknown error');
+        return res.status(duplicate ? 201 : 503).json({
+          success: duplicate,
+          message: duplicate
+            ? 'If this email already has an account, sign in with the existing password or use Forgot Password.'
+            : 'Account creation is temporarily unavailable. Please try again shortly.',
+          email: normalizedEmail,
+          requiresLogin: duplicate,
+        });
+      }
+      user.id = data.user.id;
+      createdAuthUserId = data.user.id;
+    }
 
-  return res.status(201).json(responseData);
+    const authorizedWorkspaces = resolveWorkspacesForUser(user);
+    user.authorizedWorkspaces = authorizedWorkspaces;
+
+    // Insert (never upsert) so concurrent duplicate registrations cannot
+    // overwrite the first account's credentials.
+    await persistNewUserRecord(user);
+    persistedUserRecord = Boolean(academicDb);
+
+    if (supabaseAdmin) {
+      const { error } = await supabaseAdmin.from('profiles').upsert({
+        id: user.id,
+        email: normalizedEmail,
+        name: trimmedName,
+        institution_id: 'inst-thapar',
+        department,
+        role_code: roleCode,
+        role_name: roleName,
+        authorized_workspaces: authorizedWorkspaces,
+        is_demo_user: false,
+        status: 'ACTIVE',
+      });
+      if (error) throw new Error('Profile persistence failed.');
+    }
+
+    usersDatabase.set(normalizedEmail, user);
+    pendingRegistrationsDatabase.delete(normalizedEmail);
+    persistentStore.deletePendingRegistration(normalizedEmail);
+    persistentStore.invalidateUserTokens(normalizedEmail);
+
+    return res.status(201).json({
+      success: true,
+      message: 'Account created. You can now sign in with your email and password.',
+      email: normalizedEmail,
+      user: {
+        id: user.id,
+        email: normalizedEmail,
+        name: trimmedName,
+        roleCode,
+        roleName,
+        department,
+        emailVerified: true,
+        authorizedWorkspaces,
+      },
+      requiresLogin: true,
+    });
+  } catch (err) {
+    if (persistedUserRecord && academicDb) {
+      await academicDb.query('delete from intellischedule.users where email = $1', [normalizedEmail]).catch(() => []);
+    }
+    if (createdAuthUserId && supabaseAdmin) {
+      await supabaseAdmin.auth.admin.deleteUser(createdAuthUserId).catch(() => ({ error: null }));
+    }
+    const dbError = err as { code?: string };
+    if (dbError?.code === '23505') {
+      return res.status(201).json({
+        success: true,
+        message: 'If this email already has an account, sign in with the existing password or use Forgot Password.',
+        email: normalizedEmail,
+        requiresLogin: true,
+      });
+    }
+    console.error('[REGISTRATION] Could not persist account:', err instanceof Error ? err.message : 'unknown error');
+    return res.status(503).json({ success: false, message: 'Account could not be saved. Please try again.' });
+  }
 });
 
 // POST /api/auth/verify-email
@@ -4105,4 +4154,3 @@ if (!process.env.VERCEL && isDirectEntrypoint) {
 }
 
 export default app;
-

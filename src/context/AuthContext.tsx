@@ -344,10 +344,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   /**
-   * REST Backend Register (POST /api/auth/register) - Strictly Authoritative
-   * Registration policy: Registration creates the user account in Supabase Auth,
-   * but does NOT automatically authenticate or issue an application session.
-   * The user must explicitly sign in on the login screen.
+   * REST backend creates an active account (and a confirmed Supabase Auth user
+   * when the server Admin client is configured). The caller signs in immediately
+   * after registration through the normal application login endpoint.
    */
   const register = async (
     name: string,
