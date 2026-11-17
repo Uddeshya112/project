@@ -1005,7 +1005,8 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
     });
 
     if (authError || !authData?.user || !authData?.session) {
-      console.info(`[SUPABASE AUTH] Login failed for ${normalizedEmail}: ${authError?.message || 'Invalid credentials'}`);
+      // Do not put account identifiers or provider error details in production logs.
+      console.info('[SUPABASE AUTH] Password login failed.');
       return res.status(401).json({
         success: false,
         message: 'Invalid institutional credentials. Please check your email and password.',
@@ -4104,3 +4105,4 @@ if (!process.env.VERCEL && isDirectEntrypoint) {
 }
 
 export default app;
+
