@@ -83,6 +83,19 @@ export function DashboardLayout({
 
   // Auto-sync activeView when currentWorkspace changes
   useEffect(() => {
+    const pathWorkspace = window.location.pathname.split('/').filter(Boolean)[0]?.toLowerCase();
+    const workspacePath = currentWorkspace === 'CR' ? 'cr' : currentWorkspace.toLowerCase();
+    const pathMatchesWorkspace = pathWorkspace === workspacePath;
+    if (pathMatchesWorkspace) {
+      switch (currentWorkspace) {
+        case 'Student': case 'CR': setCurrentRole('Student'); break;
+        case 'Faculty': setCurrentRole('Faculty'); break;
+        case 'HOD': setCurrentRole('HOD'); break;
+        case 'Coordinator': setCurrentRole('Coordinator'); break;
+        case 'Admin': setCurrentRole('Admin'); break;
+      }
+      return;
+    }
     switch (currentWorkspace) {
       case 'Student':
         setActiveView('student_portal');
@@ -271,7 +284,7 @@ export function DashboardLayout({
               <div className="w-5 h-5 rounded-full bg-[#8C1B2E]/10 text-[#8C1B2E] border border-[#8C1B2E]/30 flex items-center justify-center font-bold text-[10px] shrink-0">
                 {getUserInitials(currentUser?.name)}
               </div>
-              <span className="hidden sm:inline text-xs font-semibold text-stone-700 dark:text-zinc-300 max-w-[120px] truncate">
+              <span className="hidden sm:inline text-xs font-semibold text-stone-700 dark:text-zinc-300 max-w-[200px] lg:max-w-[260px] truncate">
                 {currentUser?.name || 'User'}
               </span>
             </button>
@@ -331,14 +344,19 @@ export function DashboardLayout({
               {activeView === 'overview' && <CoordinatorView />}
               {activeView === 'grid' && <TimetableGridView />}
               {activeView === 'academic_setup' && <AcademicSetupHubView />}
+              {activeView === 'master_excel' && <AcademicSetupHubView />}
               {activeView === 'academic_year' && <AcademicSetupHubView />}
               {activeView === 'departments' && <AcademicSetupHubView />}
+              {activeView === 'programs' && <AcademicSetupHubView />}
               {activeView === 'courses_mgmt' && <AcademicSetupHubView />}
               {activeView === 'faculty_mgmt' && <AcademicSetupHubView />}
               {activeView === 'rooms_mgmt' && <AcademicSetupHubView />}
               {activeView === 'sections_mgmt' && <AcademicSetupHubView />}
+              {activeView === 'students' && <AcademicSetupHubView />}
               {activeView === 'allocations' && <AcademicSetupHubView />}
               {activeView === 'availability' && <AcademicSetupHubView />}
+              {activeView === 'constraints' && <AcademicSetupHubView />}
+              {activeView === 'timetable_review' && <AcademicSetupHubView />}
               {activeView === 'generation_validator' && <GenerateTimetablePage />}
               {activeView === 'recovery' && <RequestsView />}
               {activeView === 'whatif' && <WhatIfSimulatorView />}

@@ -124,7 +124,7 @@ export function Sidebar({
             <button
               onClick={() => handleSelect('overview')}
               className={`w-full text-left px-3 py-2 rounded-lg transition-all font-medium flex items-center gap-2 ${
-                activeView === 'overview'
+                activeView === 'overview' || activeView === 'student_portal'
                   ? 'bg-[#8C1B2E] text-white font-semibold shadow-xs'
                   : 'hover:bg-stone-100 dark:hover:bg-zinc-800 text-stone-800 dark:text-zinc-200'
               }`}

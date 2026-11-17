@@ -99,6 +99,7 @@ type YearDraft = Pick<AcademicYearConfig, 'yearLabel' | 'semesterType' | 'semest
 export function AcademicSetupHubView() {
   const {
     activeView,
+    setActiveView,
     academicYear,
     updateAcademicYear,
     departments,
@@ -141,18 +142,32 @@ export function AcademicSetupHubView() {
   const canEdit = isAdmin || currentUser?.roleCode === 'COORDINATOR';
   const publishStatus = academicYear.publishStatus;
 
-  const [activeTab, setActiveTab] = useState<SetupSubTab>('courses');
+  const [activeTab, setActiveTabState] = useState<SetupSubTab>('courses');
+  const setActiveTab = (tab: SetupSubTab) => {
+    setActiveTabState(tab);
+    const viewForTab: Partial<Record<SetupSubTab, typeof activeView>> = {
+      master_excel: 'master_excel', academic_year: 'academic_year', departments: 'departments', programs: 'programs',
+      courses: 'courses_mgmt', faculty: 'faculty_mgmt', rooms: 'rooms_mgmt', sections: 'sections_mgmt',
+      students: 'students', allocations: 'allocations', constraints: 'constraints', generator: 'generation_validator', review: 'timetable_review',
+    };
+    setActiveView(viewForTab[tab] || 'academic_setup');
+  };
 
   useEffect(() => {
-    if (activeView === 'academic_year') setActiveTab('academic_year');
-    else if (activeView === 'departments') setActiveTab('departments');
-    else if (activeView === 'courses_mgmt') setActiveTab('courses');
-    else if (activeView === 'faculty_mgmt') setActiveTab('faculty');
-    else if (activeView === 'rooms_mgmt') setActiveTab('rooms');
-    else if (activeView === 'sections_mgmt') setActiveTab('sections');
-    else if (activeView === 'allocations') setActiveTab('allocations');
-    else if (activeView === 'availability') setActiveTab('constraints');
-    else if (activeView === 'academic_setup') setActiveTab('courses');
+    if (activeView === 'master_excel') setActiveTabState('master_excel');
+    else if (activeView === 'academic_year') setActiveTabState('academic_year');
+    else if (activeView === 'departments') setActiveTabState('departments');
+    else if (activeView === 'programs') setActiveTabState('programs');
+    else if (activeView === 'courses_mgmt') setActiveTabState('courses');
+    else if (activeView === 'faculty_mgmt') setActiveTabState('faculty');
+    else if (activeView === 'rooms_mgmt') setActiveTabState('rooms');
+    else if (activeView === 'sections_mgmt') setActiveTabState('sections');
+    else if (activeView === 'students') setActiveTabState('students');
+    else if (activeView === 'allocations') setActiveTabState('allocations');
+    else if (activeView === 'availability' || activeView === 'constraints') setActiveTabState('constraints');
+    else if (activeView === 'generation_validator') setActiveTabState('generator');
+    else if (activeView === 'timetable_review') setActiveTabState('review');
+    else if (activeView === 'academic_setup') setActiveTabState('courses');
   }, [activeView]);
   const [courseSearch, setCourseSearch] = useState('');
   const [facultySearch, setFacultySearch] = useState('');
@@ -321,12 +336,12 @@ export function AcademicSetupHubView() {
 
       {/* 2. Sub-navigation: Horizontal Pill Bar + Mobile Dropdown */}
       <div className="space-y-2">
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 max-w-full no-scrollbar">
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 w-full min-w-0 no-scrollbar">
           {navTabs.map(tab => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id as SetupSubTab)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
+              className={`flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
                 activeTab === tab.id
                   ? 'bg-[#8C1B2E] text-white font-semibold shadow-xs'
                   : 'bg-[#FAF9F5] dark:bg-zinc-900 hover:bg-stone-100 dark:hover:bg-zinc-800 text-stone-700 dark:text-zinc-300 border border-[#E5E2D9] dark:border-zinc-800'

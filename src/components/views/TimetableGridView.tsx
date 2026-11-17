@@ -2,6 +2,17 @@ import React, { useEffect, useState } from 'react';
 import { useTimetable } from '../../context/TimetableContext';
 import { TIME_SLOTS } from '../../lib/initialData';
 import { DayOfWeek, ClassSession } from '../../types';
+
+const downloadFile = (filename: string, mimeType: string, content: string) => {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+const csvCell = (value: string) => `"${value.replace(/"/g, '""')}"`;
 import {
   Lock,
   Unlock,
@@ -36,6 +47,7 @@ export function TimetableGridView() {
     publishMasterTimetable,
     validationReport,
     setActiveView,
+    academicYear,
   } = useTimetable();
 
   const [filterMode, setFilterMode] = useState<'section' | 'faculty' | 'room'>('section');
@@ -80,6 +92,40 @@ export function TimetableGridView() {
     }
   };
 
+  const exportCsv = () => {
+    const rows = filteredSessions.map((session) => [
+      session.day, academicYear.timeSlots.find((slot) => slot.id === session.timeSlotId)?.label || session.timeSlotId,
+      courses.find((course) => course.id === session.courseId)?.code || session.courseId,
+      courses.find((course) => course.id === session.courseId)?.name || '',
+      sections.find((section) => section.id === session.sectionId)?.name || session.sectionId,
+      facultyMembers.find((faculty) => faculty.id === session.facultyId)?.name || session.facultyId,
+      rooms.find((room) => room.id === session.roomId)?.name || session.roomId, session.status,
+    ]);
+    downloadFile('timetable.csv', 'text/csv;charset=utf-8', [['Day', 'Time', 'Course Code', 'Course', 'Section', 'Faculty', 'Room', 'Status'], ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n'));
+  };
+
+  const exportIcs = () => {
+    const weekdays: Record<string, number> = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 };
+    const icsDateTime = (day: DayOfWeek, time: string) => {
+      const [hour = '00', minute = '00'] = time.split(':');
+      const date = new Date();
+      const delta = (weekdays[day] - date.getDay() + 7) % 7 || 7;
+      date.setDate(date.getDate() + delta);
+      return `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}T${hour}${minute}00`;
+    };
+    const escapeIcs = (value: string) => value.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/,/g, '\\,').replace(/;/g, '\\;');
+    const events = filteredSessions.filter((session) => session.status !== 'Cancelled').map((session) => {
+      const slot = academicYear.timeSlots.find((item) => item.id === session.timeSlotId);
+      const course = courses.find((item) => item.id === session.courseId);
+      const title = course ? `${course.code} ${course.name}` : session.courseId;
+      const room = rooms.find((item) => item.id === session.roomId)?.name || session.roomId;
+      const start = slot ? icsDateTime(session.day, slot.startTime) : icsDateTime(session.day, '09:00');
+      const end = slot ? icsDateTime(session.day, slot.endTime) : icsDateTime(session.day, '10:00');
+      return `BEGIN:VEVENT\r\nUID:${session.id}@tiet-timetable\r\nDTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')}\r\nDTSTART:${start}\r\nDTEND:${end}\r\nRRULE:FREQ=WEEKLY;COUNT=16\r\nSUMMARY:${escapeIcs(title)}\r\nLOCATION:${escapeIcs(room)}\r\nEND:VEVENT`;
+    });
+    downloadFile('timetable.ics', 'text/calendar;charset=utf-8', `BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//TIET//Timetable//EN\r\n${events.join('\r\n')}\r\nEND:VCALENDAR`);
+  };
+
   // Filter sessions based on active mode
   const filteredSessions = sessions.filter(s => {
     if (filterMode === 'section') return s.sectionId === selectedSectionId;
@@ -104,7 +150,7 @@ export function TimetableGridView() {
   };
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto font-sans text-stone-900 dark:text-zinc-100">
+    <div className="timetable-print-view space-y-6 max-w-7xl mx-auto font-sans text-stone-900 dark:text-zinc-100">
       {/* Header and Controls */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#E5E2D9] dark:border-zinc-800 pb-4">
         <div>
@@ -219,7 +265,7 @@ export function TimetableGridView() {
             </button>
 
             {showMoreMenu && (
-              <div className="absolute right-0 mt-1 w-48 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg shadow-lg p-1 z-40 space-y-0.5 text-xs">
+              <div className="absolute right-0 mt-1 w-52 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg shadow-lg p-1 z-40 space-y-0.5 text-xs">
                 <button
                   onClick={() => {
                     setActiveView('whatif');
@@ -238,6 +284,10 @@ export function TimetableGridView() {
                 >
                   Syllabus Progress
                 </button>
+                <div className="my-1 border-t border-[#E5E2D9] dark:border-zinc-800" />
+                <button onClick={() => { window.print(); setShowMoreMenu(false); }} className="w-full text-left px-3 py-2 rounded-md hover:bg-stone-100 dark:hover:bg-zinc-800 font-medium">Export PDF (print)</button>
+                <button onClick={() => { exportCsv(); setShowMoreMenu(false); }} className="w-full text-left px-3 py-2 rounded-md hover:bg-stone-100 dark:hover:bg-zinc-800 font-medium">Export CSV</button>
+                <button onClick={() => { exportIcs(); setShowMoreMenu(false); }} className="w-full text-left px-3 py-2 rounded-md hover:bg-stone-100 dark:hover:bg-zinc-800 font-medium">Export .ics</button>
               </div>
             )}
           </div>

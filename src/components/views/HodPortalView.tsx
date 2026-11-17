@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { AlertTriangle, BarChart3, CheckCircle2, ClipboardCheck, Users } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useTimetable } from '../../context/TimetableContext';
+import { PollComposer } from './PollComposer';
 
 const card = 'rounded-xl border border-[#E5E2D9] dark:border-zinc-800 bg-[#FAF9F5] dark:bg-zinc-900';
 
@@ -63,6 +64,7 @@ export function HodPortalView() {
       </header>
 
       {notice && <div role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300">{notice}</div>}
+      <PollComposer sectionIds={[...new Set(departmentSessions.map((session) => session.sectionId))]} />
 
       <section className="grid gap-3 sm:grid-cols-3" aria-label="Department summary">
         <Metric icon={<Users className="h-4 w-4" />} label="Faculty" value={departmentFaculty.length} />

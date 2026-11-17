@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, useMemo, useEffect } from 'react';
+import React, { createContext, useContext, useState, useMemo, useEffect, useCallback } from 'react';
+import { useAuth } from './AuthContext';
 import {
   ClassSession,
   Room,
@@ -24,7 +25,8 @@ import {
   TimeSlot,
   WhatIfSimulation,
   GenerationResponse,
-  GenerationRoutine
+  GenerationRoutine,
+  WorkspaceType
 } from '../types';
 import {
   validateTimetableIndependently,
@@ -70,9 +72,11 @@ export type UserRole = 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin';
 export type ViewTab =
   | 'overview'
   | 'academic_setup'
+  | 'master_excel'
   | 'academic_year'
   | 'departments'
   | 'programs'
+  | 'students'
   | 'courses_mgmt'
   | 'faculty_mgmt'
   | 'rooms_mgmt'
@@ -95,6 +99,33 @@ export type ViewTab =
   | 'auth_gov'
   | 'settings'
   | 'profile';
+
+const routeSlugByView: Partial<Record<ViewTab, string>> = {
+  overview: 'dashboard', academic_setup: 'data', master_excel: 'data/master', academic_year: 'data/year', departments: 'data/departments',
+  programs: 'data/programs', students: 'data/students', courses_mgmt: 'data/courses', faculty_mgmt: 'data/faculty', rooms_mgmt: 'data/rooms',
+  sections_mgmt: 'data/sections', allocations: 'allocations', availability: 'availability', constraints: 'constraints',
+  generation_validator: 'generation', timetable_review: 'review', grid: 'timetable', recovery: 'requests', whatif: 'what-if',
+  solvers: 'solvers', syllabus: 'syllabus', faculty_portal: 'dashboard', student_portal: 'dashboard',
+  student_courses: 'courses', student_section: 'section', governance: 'approvals', auth_gov: 'users', settings: 'settings', profile: 'profile',
+};
+const workspaceFromPath = (path: string): WorkspaceType | null => {
+  const key = path.split('/').filter(Boolean)[0];
+  return ({ student: 'Student', cr: 'CR', faculty: 'Faculty', coordinator: 'Coordinator', hod: 'HOD', admin: 'Admin' } as Record<string, WorkspaceType>)[key] ?? null;
+};
+const viewFromPath = (path: string): ViewTab | null => {
+  const parts = path.split('/').filter(Boolean);
+  const workspace = workspaceFromPath(path);
+  if (parts[1] === 'dashboard') {
+    if (workspace === 'Student' || workspace === 'CR') return 'student_portal';
+    if (workspace === 'Faculty') return 'faculty_portal';
+    return 'overview';
+  }
+  const [, ...rest] = parts;
+  const slug = rest.join('/') || 'dashboard';
+  const found = (Object.entries(routeSlugByView) as [ViewTab, string][]).find(([, value]) => value === slug);
+  return found?.[0] ?? null;
+};
+const routeFor = (workspace: WorkspaceType, view: ViewTab) => `/${workspace.toLowerCase()}/${routeSlugByView[view] || 'dashboard'}`;
 
 interface TimetableContextType {
   // Master data
@@ -224,6 +255,7 @@ interface TimetableContextType {
   cancelSession: (sessionId: string, reason: string) => Promise<{ success: boolean }>;
   scheduleMakeup: (opportunityId: string) => Promise<{ success: boolean }>;
   votePoll: (pollId: string, optionId: string) => Promise<{ success: boolean }>;
+  createPoll: (input: { sectionId: string; courseId: string; question: string; options: Array<{ day: DayOfWeek; timeSlotLabel: string }> }) => Promise<{ success: boolean; message?: string }>;
   toggleSessionLock: (sessionId: string, reason?: string) => void;
   setFacultyProtectedSlot: (facultyId: string, day: DayOfWeek, periodId: string, reason: 'Research' | 'Lunch' | 'Personal' | 'Department' | 'Meeting') => Promise<{ success: boolean }>;
   restoreVersion: (versionNumber: number) => void;
@@ -277,6 +309,7 @@ interface TimetableContextType {
 const TimetableContext = createContext<TimetableContextType | null>(null);
 
 export function TimetableProvider({ children }: { children: React.ReactNode }) {
+  const { currentWorkspace, switchWorkspace, authorizedWorkspaces, authStatus } = useAuth();
   // Master academic state
   const [academicYear, setAcademicYear] = useState<AcademicYearConfig>(INITIAL_ACADEMIC_YEAR);
   const [departments, setDepartments] = useState<Department[]>(DEPARTMENTS);
@@ -332,7 +365,39 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
   ]);
 
   const [currentRole, setCurrentRole] = useState<UserRole>('Coordinator');
-  const [activeView, setActiveView] = useState<ViewTab>('overview');
+  const [activeView, setActiveViewState] = useState<ViewTab>(() => typeof window === 'undefined' ? 'overview' : viewFromPath(window.location.pathname) || 'overview');
+  const setActiveView = useCallback((view: ViewTab) => {
+    setActiveViewState(view);
+    if (typeof window !== 'undefined') {
+      const path = routeFor(currentWorkspace, view);
+      if (window.location.pathname !== path) window.history.pushState({ view, workspace: currentWorkspace }, '', path);
+    }
+  }, [currentWorkspace]);
+
+  useEffect(() => {
+    const syncRoute = () => {
+      if (authStatus !== 'AUTHENTICATED') return;
+      const routeWorkspace = workspaceFromPath(window.location.pathname);
+      const routeView = viewFromPath(window.location.pathname);
+      if (routeWorkspace && authorizedWorkspaces.includes(routeWorkspace) && routeWorkspace !== currentWorkspace) switchWorkspace(routeWorkspace);
+      if (routeView) setActiveViewState(routeView);
+    };
+    window.addEventListener('popstate', syncRoute);
+    return () => window.removeEventListener('popstate', syncRoute);
+  }, [authStatus, authorizedWorkspaces, currentWorkspace, switchWorkspace]);
+
+  useEffect(() => {
+    if (authStatus !== 'AUTHENTICATED') return;
+    const routeWorkspace = workspaceFromPath(window.location.pathname);
+    const routeView = viewFromPath(window.location.pathname);
+    if (routeWorkspace === currentWorkspace && routeView && activeView !== routeView) setActiveViewState(routeView);
+    else if (!routeWorkspace || routeWorkspace !== currentWorkspace) {
+      const landing: ViewTab = currentWorkspace === 'Student' || currentWorkspace === 'CR' ? 'student_portal' : currentWorkspace === 'Faculty' ? 'faculty_portal' : 'overview';
+      setActiveViewState(landing);
+      const path = routeFor(currentWorkspace, landing);
+      if (window.location.pathname !== path) window.history.replaceState({ view: landing, workspace: currentWorkspace }, '', path);
+    }
+  }, [authStatus, currentWorkspace]);
   const [selectedFacultyId, setSelectedFacultyId] = useState<string>('fac-0001');
   const [selectedSectionId, setSelectedSectionId] = useState<string>('sec-cse-a');
   const [selectedRoomId, setSelectedRoomId] = useState<string>('room-cr-1');
@@ -2074,6 +2139,18 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
   const cancelSession = async (sessionId: string, reason: string): Promise<{ success: boolean }> => {
     const targetSession = sessions.find(s => s.id === sessionId);
     if (!targetSession) return { success: false };
+    const cancellationReason = reason.trim() || 'Unforeseen conflict';
+
+    try {
+      const response = await fetch(apiUrl('/api/recovery/cancel-class'), {
+        method: 'POST', credentials: 'same-origin', headers: getAuthHeaders(),
+        body: JSON.stringify({ sessionId, reason: cancellationReason }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) return { success: false };
+    } catch {
+      return { success: false };
+    }
 
     setSessions(prev =>
       prev.map(s =>
@@ -2081,7 +2158,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
           ? {
               ...s,
               status: 'Cancelled',
-              cancellationReason: reason,
+              cancellationReason,
               cancellationTimestamp: new Date().toISOString(),
             }
           : s
@@ -2122,11 +2199,12 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         id: `notif-${Date.now()}`,
         type: 'cancellation',
         title: `Class Disruption: ${targetSession.courseId}`,
-        message: `${targetSession.day} session was cancelled. Reason: ${reason}. Self-healing engine generated replacement slot proposals.`,
+        message: `${targetSession.day} session was cancelled. Reason: ${cancellationReason}. Self-healing engine generated replacement slot proposals.`,
         timestamp: 'Just now',
         read: false,
         category: 'Critical',
         actionable: true,
+        actionPayload: { sessionId, sectionId: targetSession.sectionId },
       },
       ...prev,
     ]);
@@ -2140,16 +2218,10 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         action: 'CLASS_CANCELLED',
         entityType: 'ClassSession',
         entityId: sessionId,
-        details: `Cancelled ${targetSession.courseId} (${targetSession.day} ${targetSession.timeSlotId}). Reason: ${reason}.`,
+        details: `Cancelled ${targetSession.courseId} (${targetSession.day} ${targetSession.timeSlotId}). Reason: ${cancellationReason}.`,
       },
       ...prev,
     ]);
-
-    fetch('/api/recovery/cancel-class', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify({ sessionId, reason }),
-    }).catch(err => console.warn('[SUPABASE_API] Cancel session persistence notice:', err));
 
     return { success: true };
   };
@@ -2236,6 +2308,20 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       return { success: true };
     } catch {
       return { success: false };
+    }
+  };
+
+  const createPoll: TimetableContextType['createPoll'] = async (input) => {
+    try {
+      const response = await fetch(apiUrl('/api/voting/polls'), {
+        method: 'POST', credentials: 'same-origin', headers: getAuthHeaders(), body: JSON.stringify(input),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success || !data.poll) return { success: false, message: data.message || 'Could not create poll.' };
+      setPolls((previous) => [data.poll, ...previous.filter((poll) => poll.id !== data.poll.id)]);
+      return { success: true, message: 'Poll created. Students in the selected section can now vote.' };
+    } catch {
+      return { success: false, message: 'Could not reach the poll service.' };
     }
   };
 
@@ -2530,6 +2616,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         cancelSession,
         scheduleMakeup,
         votePoll,
+        createPoll,
         toggleSessionLock,
         setFacultyProtectedSlot,
         restoreVersion,
@@ -2554,7 +2641,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         unpublishMasterTimetable,
         compareTimetableVersions,
         activeVersionNumber: 1,
-        publishedSessions: publishStatus === 'Published' ? sessions.filter(s => s.status !== 'Cancelled') : [],
+        publishedSessions: publishStatus === 'Published' ? sessions : [],
         refresh: async () => {},
         isLoading: false,
         loadError: null,

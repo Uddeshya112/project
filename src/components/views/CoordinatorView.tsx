@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useTimetable } from '../../context/TimetableContext';
 import { useAuth } from '../../context/AuthContext';
+import { PollComposer } from './PollComposer';
 import { supabaseClient, getSupabaseAccessToken } from '../../lib/supabaseClient';
 import { getResolvedApiBaseUrl, apiUrl } from '../../lib/apiConfig';
 import {
@@ -23,6 +24,7 @@ export function CoordinatorView() {
     rooms,
     sections,
     sessions,
+    notifications,
     allocations,
     publishStatus,
     validationReport,
@@ -199,12 +201,17 @@ export function CoordinatorView() {
     }
   };
 
-  // Recent Requests (3 items max)
-  const recentRequests = [
-    { id: 'req-1', type: 'Cancellation', section: 'CSE-A', requestedBy: 'Dr. Arvind Sharma', status: 'Pending', time: 'Today, 07:30 AM' },
-    { id: 'req-2', type: 'Faculty Swap', section: 'CSE-B', requestedBy: 'Dr. Arvind Sharma', status: 'Pending', time: 'Today, 08:15 AM' },
-    { id: 'req-3', type: 'Makeup Class', section: 'CSE-A', requestedBy: 'Prof. Rajesh Kumar', status: 'Approved', time: 'Yesterday, 04:20 PM' },
-  ].slice(0, 3);
+  const recentRequests = notifications
+    .filter((item) => ['cancellation', 'approval_needed', 'makeup_request'].includes(item.type))
+    .slice(0, 3)
+    .map((item) => ({
+      id: item.id,
+      type: item.title,
+      section: sections.find((section) => section.id === item.actionPayload?.sectionId)?.name || 'Academic timetable',
+      requestedBy: item.message,
+      status: item.read ? 'Seen' : 'New',
+      time: item.timestamp,
+    }));
 
   // Workflow Stage Calculation
   let currentStage: 'DATA' | 'GENERATE' | 'REVIEW' | 'PUBLISH' = 'DATA';
@@ -545,6 +552,7 @@ export function CoordinatorView() {
       </div>
 
       {/* 5. Recent Requests (3 items max) */}
+      <PollComposer />
       <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-4 space-y-2.5 shadow-2xs">
         <div className="flex items-center justify-between border-b border-[#E5E2D9] dark:border-zinc-800 pb-2">
           <span className="font-serif font-bold text-xs text-stone-900 dark:text-zinc-100 uppercase tracking-wider">
@@ -559,6 +567,7 @@ export function CoordinatorView() {
         </div>
 
         <div className="divide-y divide-[#E5E2D9] dark:divide-zinc-800 text-xs">
+          {recentRequests.length === 0 && <div className="py-3 text-stone-500">No recent requests or disruptions.</div>}
           {recentRequests.map(req => (
             <div key={req.id} className="py-2 first:pt-0 flex items-center justify-between gap-3">
               <div>
