@@ -63,7 +63,7 @@ import {
   findSelfHealingRecoverySlots,
   checkHardConstraints
 } from '../lib/recoveryEngine';
-import { validateAcademicSetup, generateTimetableFromConfiguration } from '../lib/timetableGenerator';
+import { validateAcademicSetup } from '../lib/timetableGenerator';
 import { ExcelImportPreview } from '../lib/excelMasterService';
 import { supabaseClient, getSupabaseAccessToken } from '../lib/supabaseClient';
 import { apiUrl } from '../lib/apiConfig';
@@ -227,13 +227,7 @@ interface TimetableContextType {
   // Validation & Generation Engine
   runValidation: () => ValidationReport;
   resetDemoAcademicData: () => Promise<{ success: boolean; message?: string }>;
-  generateDraftTimetable: () => {
-    isSuccess: boolean;
-    sessionsGenerated: number;
-    conflicts: string[];
-    scheduledHours: number;
-    totalHours: number;
-  };
+  generateDraftTimetable: () => Promise<{ isSuccess: boolean; sessionsGenerated: number; conflicts: string[]; scheduledHours: number; totalHours: number }>;
   updatePublishStatus: (status: TimetablePublishStatus, reviewerName?: string) => Promise<{ success: boolean }>;
   bulkImportData: (type: 'faculty' | 'courses' | 'rooms' | 'sections' | 'allocations', records: any[]) => { successCount: number; errors: string[] };
   commitMasterImport: (
@@ -256,9 +250,9 @@ interface TimetableContextType {
   scheduleMakeup: (opportunityId: string) => Promise<{ success: boolean }>;
   votePoll: (pollId: string, optionId: string) => Promise<{ success: boolean }>;
   createPoll: (input: { sectionId: string; courseId: string; question: string; options: Array<{ day: DayOfWeek; timeSlotLabel: string }> }) => Promise<{ success: boolean; message?: string }>;
-  toggleSessionLock: (sessionId: string, reason?: string) => void;
+  toggleSessionLock: (sessionId: string, reason?: string) => Promise<{ success: boolean; message?: string }>;
   setFacultyProtectedSlot: (facultyId: string, day: DayOfWeek, periodId: string, reason: 'Research' | 'Lunch' | 'Personal' | 'Department' | 'Meeting') => Promise<{ success: boolean }>;
-  restoreVersion: (versionNumber: number) => void;
+  restoreVersion: (versionNumber: number) => Promise<{ success: boolean; message?: string }>;
   applySimulation: () => void;
   markNotificationRead: (id: string) => Promise<void>;
   triggerAutoMatchAll: () => void;
@@ -267,6 +261,7 @@ interface TimetableContextType {
   claimMarketplaceSlot: (courseId: string, sectionId: string, day: DayOfWeek, timeSlotId: string, roomId: string, type: string) => Promise<{ success: boolean }>;
   requestSubstituteCover: (substituteFacultyId: string, courseId: string, sectionId: string, day: DayOfWeek, timeSlotId: string) => Promise<{ success: boolean }>;
   addSession: (sessionData: Omit<ClassSession, 'id' | 'version'>) => Promise<{ isSuccess: boolean; error?: string }>;
+  deleteSession: (sessionId: string) => Promise<{ success: boolean; message?: string }>;
 
   // Independent Validation & Controlled Machine Editing
   runIndependentValidation: (targetSessions?: ClassSession[]) => IndependentValidationReport;
@@ -276,12 +271,12 @@ interface TimetableContextType {
     targetTimeSlotId: string,
     targetRoomId: string,
     reason?: string
-  ) => { success: boolean; error?: string };
+  ) => Promise<{ success: boolean; error?: string }>;
   swapSessionsWithValidation: (
     sessionAId: string,
     sessionBId: string,
     reason?: string
-  ) => { success: boolean; error?: string };
+  ) => Promise<{ success: boolean; error?: string }>;
   generateMultiCandidateTimetables: (options?: EngineOptions) => {
     isSuccess: boolean;
     candidates: GeneratedCandidate[];
@@ -874,7 +869,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
   };
 
   // Timetable Generator Pipeline
-  const generateDraftTimetable = () => {
+  const generateDraftTimetable = async () => {
     const report = runValidation();
     if (!report.isReadyForGeneration) {
       return {
@@ -886,57 +881,47 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       };
     }
 
-    const result = generateTimetableFromConfiguration(
-      academicYear,
-      allocations,
-      facultyMembers,
-      rooms,
-      sections,
-      courses,
-      constraints
-    );
+    try {
+      const startResponse = await fetch(apiUrl('/api/timetable/jobs'), {
+        method: 'POST', credentials: 'same-origin', headers: getAuthHeaders(),
+        body: JSON.stringify({ budgetMode: 'BALANCED', timeBudgetMs: 800, optimizationProfile: 'BALANCED' }),
+      });
+      const started = await startResponse.json().catch(() => ({}));
+      if (!startResponse.ok || !started.jobId) throw new Error(started.message || 'Could not start timetable generation.');
 
-    if (result.sessions.length > 0) {
-      setSessions(result.sessions);
+      const deadline = Date.now() + 120_000;
+      let job: any;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => window.setTimeout(resolve, 700));
+        const statusResponse = await fetch(apiUrl(`/api/timetable/jobs/${encodeURIComponent(started.jobId)}`), { credentials: 'same-origin' });
+        job = await statusResponse.json().catch(() => ({}));
+        if (!statusResponse.ok) throw new Error(job.message || 'Could not read generation progress.');
+        if (job.status === 'COMPLETED' || job.status === 'FAILED' || job.status === 'CANCELLED') break;
+      }
+      if (!job || !['COMPLETED', 'FAILED', 'CANCELLED'].includes(job.status)) {
+        void fetch(apiUrl(`/api/timetable/jobs/${encodeURIComponent(started.jobId)}/cancel`), { method: 'POST', credentials: 'same-origin', headers: getAuthHeaders(), body: '{}' });
+        throw new Error('Generation took longer than two minutes and was cancelled. Try FAST mode or reduce the schedule size.');
+      }
+      const candidate = job.result?.bestCandidate;
+      if (job.status !== 'COMPLETED' || !candidate?.sessions?.length) throw new Error(job.error || job.result?.statusMessage || 'The solver could not produce a valid timetable.');
+      const applyResponse = await fetch(apiUrl(`/api/timetable/jobs/${encodeURIComponent(started.jobId)}/apply`), {
+        method: 'POST', credentials: 'same-origin', headers: getAuthHeaders(), body: '{}',
+      });
+      const applied = await applyResponse.json().catch(() => ({}));
+      if (!applyResponse.ok || !applied.success) throw new Error(applied.message || 'Generated schedule could not be saved.');
+
+      setSessions(candidate.sessions);
       setPublishStatus('Draft');
-
-      const newVersionNumber = versions.length + 1;
-      const newVersion: TimetableVersion = {
-        versionNumber: newVersionNumber,
-        versionLabel: `Draft V${newVersionNumber}.0`,
-        createdAt: new Date().toISOString(),
-        createdBy: 'Dr. K. N. Murthy (Coordinator)',
-        changeSummary: `Generated timetable from ${allocations.length} academic allocations across ${sections.length} sections.`,
-        reason: 'Automated Schedule Generation Run',
-        isPublished: false,
-        healthScore: 98,
-        sessions: result.sessions,
-      };
-
-      setVersions(prev => [newVersion, ...prev]);
-
-      setAuditLogs(prev => [
-        {
-          id: `log-${Date.now()}`,
-          timestamp: new Date().toLocaleString(),
-          userId: 'coordinator',
-          userName: 'Timetable Coordinator',
-          action: 'TIMETABLE_GENERATED',
-          entityType: 'TimetableVersion',
-          entityId: `draft-v${newVersionNumber}`,
-          details: `Generated ${result.sessions.length} class periods (${result.scheduledHours} weekly hours) for ${sections.length} sections.`,
-        },
-        ...prev,
-      ]);
+      if (applied.version) setVersions((previous) => [applied.version, ...previous.filter((version) => version.id !== applied.version.id)]);
+      setAuditLogs((previous) => [{
+        id: `log-${Date.now()}`, timestamp: new Date().toLocaleString(), userId: 'coordinator', userName: 'Timetable Coordinator',
+        action: 'TIMETABLE_GENERATED', entityType: 'TimetableVersion', entityId: applied.version?.id || started.jobId,
+        details: `Generated and saved ${candidate.sessions.length} class sessions as a draft.`,
+      }, ...previous]);
+      return { isSuccess: true, sessionsGenerated: candidate.sessions.length, conflicts: [], scheduledHours: candidate.scheduledHours, totalHours: candidate.totalRequestedHours };
+    } catch (error) {
+      return { isSuccess: false, sessionsGenerated: 0, conflicts: [error instanceof Error ? error.message : 'Timetable generation failed.'], scheduledHours: 0, totalHours: 0 };
     }
-
-    return {
-      isSuccess: result.sessions.length > 0,
-      sessionsGenerated: result.sessions.length,
-      conflicts: result.conflicts,
-      scheduledHours: result.scheduledHours,
-      totalHours: result.totalRequestedHours,
-    };
   };
 
   // Publish Status Lifecycle
@@ -993,13 +978,13 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     });
   };
 
-  const moveSessionWithValidation = (
+  const moveSessionWithValidation = async (
     sessionId: string,
     targetDay: DayOfWeek,
     targetTimeSlotId: string,
     targetRoomId: string,
     reason = 'Manual Coordinator Adjustment'
-  ): { success: boolean; error?: string } => {
+  ): Promise<{ success: boolean; error?: string }> => {
     const valResult = validateProposedSessionMove(
       sessions,
       sessionId,
@@ -1041,6 +1026,17 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       };
     });
 
+    try {
+      const response = await fetch(apiUrl('/api/timetable/move'), {
+        method: 'POST', credentials: 'same-origin', headers: getAuthHeaders(),
+        body: JSON.stringify({ sessionId, targetDay, targetTimeSlotId, targetRoomId, reason }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) return { success: false, error: data.message || 'Server rejected the session move.' };
+    } catch {
+      return { success: false, error: 'Could not reach the timetable service. The session was not moved.' };
+    }
+
     setSessions(updatedSessions);
     if (publishStatus === 'Published') {
       setPublishStatus('Draft');
@@ -1077,20 +1073,14 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       ...prev
     ]);
 
-    fetch('/api/timetable/move', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify({ sessionId, targetDay, targetTimeSlotId, targetRoomId, reason }),
-    }).catch(err => console.warn('[SUPABASE_API] Move persistence notice:', err));
-
     return { success: true };
   };
 
-  const swapSessionsWithValidation = (
+  const swapSessionsWithValidation = async (
     sessionAId: string,
     sessionBId: string,
     reason = 'Manual Coordinator Swap'
-  ): { success: boolean; error?: string } => {
+  ): Promise<{ success: boolean; error?: string }> => {
     const valResult = validateProposedSessionSwap(
       sessions,
       sessionAId,
@@ -1138,6 +1128,17 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       return s;
     });
 
+    try {
+      const response = await fetch(apiUrl('/api/timetable/swap'), {
+        method: 'POST', credentials: 'same-origin', headers: getAuthHeaders(),
+        body: JSON.stringify({ sessionAId, sessionBId, reason }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) return { success: false, error: data.message || 'Server rejected the session swap.' };
+    } catch {
+      return { success: false, error: 'Could not reach the timetable service. The sessions were not swapped.' };
+    }
+
     setSessions(updatedSessions);
     if (publishStatus === 'Published') {
       setPublishStatus('Draft');
@@ -1173,12 +1174,6 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       },
       ...prev
     ]);
-
-    fetch('/api/timetable/swap', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify({ sessionAId, sessionBId, reason }),
-    }).catch(err => console.warn('[SUPABASE_API] Swap persistence notice:', err));
 
     return { success: true };
   };
@@ -1523,27 +1518,29 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.success) return { success: false, message: data.message || `Reset failed (${response.status}).` };
+      const bootstrapResponse = await fetch(apiUrl('/api/academic/bootstrap'), { credentials: 'same-origin' });
+      const bootstrap = await bootstrapResponse.json().catch(() => ({}));
+      if (!bootstrapResponse.ok || !bootstrap.success) return { success: false, message: 'Reset completed, but refreshed timetable data could not be loaded. Reload the page.' };
+      if (bootstrap.academicYear) setAcademicYear(bootstrap.academicYear);
+      if (Array.isArray(bootstrap.departments)) setDepartments(bootstrap.departments);
+      if (Array.isArray(bootstrap.programs)) setPrograms(bootstrap.programs);
+      if (Array.isArray(bootstrap.rooms)) setRooms(bootstrap.rooms);
+      if (Array.isArray(bootstrap.facultyMembers)) setFacultyMembers(bootstrap.facultyMembers);
+      if (Array.isArray(bootstrap.sections)) setSections(bootstrap.sections);
+      if (Array.isArray(bootstrap.courses)) setCourses(bootstrap.courses);
+      if (Array.isArray(bootstrap.allocations)) setAllocations(bootstrap.allocations);
+      if (Array.isArray(bootstrap.constraints)) setConstraints(bootstrap.constraints);
+      if (Array.isArray(bootstrap.sessions)) setSessions(bootstrap.sessions);
+      if (Array.isArray(bootstrap.makeupTasks)) setMakeupTasks(bootstrap.makeupTasks);
+      if (Array.isArray(bootstrap.recoveryOpportunities)) setRecoveryOpportunities(bootstrap.recoveryOpportunities);
+      if (Array.isArray(bootstrap.polls)) setPolls(bootstrap.polls);
+      if (Array.isArray(bootstrap.notifications)) setNotifications(bootstrap.notifications);
+      if (Array.isArray(bootstrap.versions)) setVersions(bootstrap.versions);
+      if (bootstrap.publishStatus) setPublishStatus(bootstrap.publishStatus);
+      return { success: true, message: data.message || 'Demo data restored to the seeded starting state.' };
     } catch {
       return { success: false, message: 'Could not reach the server. Demo data was not reset.' };
     }
-    setAcademicYear(INITIAL_ACADEMIC_YEAR);
-    setDepartments(DEPARTMENTS);
-    setPrograms(PROGRAMS);
-    setRooms(ROOMS);
-    setFacultyMembers(FACULTY_MEMBERS);
-    setSections(SECTIONS);
-    setCourses(COURSES);
-    setAllocations(INITIAL_ALLOCATIONS);
-    setConstraints(INITIAL_CONSTRAINTS);
-    setSessions(INITIAL_SESSIONS);
-    setMakeupTasks(INITIAL_MAKEUP_TASKS);
-    setRecoveryOpportunities(INITIAL_RECOVERY_OPPORTUNITIES);
-    setPolls(INITIAL_POLLS);
-    setNotifications(INITIAL_NOTIFICATIONS);
-    setVersions(INITIAL_VERSIONS);
-    setWhatIfSimulation(INITIAL_WHAT_IF_SIMULATION);
-    setPublishStatus('Published');
-    return { success: true, message: 'Demo data restored to the seeded starting state.' };
   };
 
   // Bulk Import Helper
@@ -2325,18 +2322,21 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const toggleSessionLock = (sessionId: string, reason = 'Administrative Lock') => {
-    setSessions(prev =>
-      prev.map(s => {
-        if (s.id !== sessionId) return s;
-        const nextLock = !s.isLocked;
-        return {
-          ...s,
-          isLocked: nextLock,
-          lockReason: nextLock ? reason : undefined,
-        };
-      })
-    );
+  const toggleSessionLock = async (sessionId: string, reason = 'Administrative Lock') => {
+    const session = sessions.find((item) => item.id === sessionId);
+    if (!session) return { success: false, message: 'Session not found.' };
+    const isLocked = !session.isLocked;
+    try {
+      const response = await fetch(apiUrl(`/api/timetable/sessions/${encodeURIComponent(sessionId)}/lock`), {
+        method: 'PUT', credentials: 'same-origin', headers: getAuthHeaders(), body: JSON.stringify({ isLocked, reason }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success || !data.session) return { success: false, message: data.message || 'Could not save session lock.' };
+      setSessions(previous => previous.map(item => item.id === sessionId ? data.session : item));
+      return { success: true };
+    } catch {
+      return { success: false, message: 'Could not reach the server. Session lock was not changed.' };
+    }
   };
 
   const setFacultyProtectedSlot = async (
@@ -2366,23 +2366,20 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     return { success: true };
   };
 
-  const restoreVersion = (versionNumber: number) => {
-    const ver = versions.find(v => v.versionNumber === versionNumber);
-    if (!ver) return;
-    setSessions(ver.sessions);
-    setAuditLogs(prev => [
-      {
-        id: `log-${Date.now()}`,
-        timestamp: new Date().toLocaleString(),
-        userId: 'coordinator',
-        userName: 'Timetable Coordinator',
-        action: 'VERSION_RESTORED',
-        entityType: 'TimetableVersion',
-        entityId: `v-${versionNumber}`,
-        details: `Restored timetable matrix to ${ver.versionLabel}.`,
-      },
-      ...prev,
-    ]);
+  const restoreVersion = async (versionNumber: number): Promise<{ success: boolean; message?: string }> => {
+    try {
+      const response = await fetch(apiUrl(`/api/timetable/versions/${versionNumber}/restore`), {
+        method: 'POST', credentials: 'same-origin', headers: getAuthHeaders(), body: JSON.stringify({}),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success || !data.version?.sessions) return { success: false, message: data.message || 'This version could not be restored.' };
+      setSessions(data.version.sessions);
+      setPublishStatus('Draft');
+      setVersions(previous => previous.map(version => version.versionNumber === versionNumber ? { ...version, isPublished: false, status: 'Draft' } : version));
+      return { success: true, message: data.message || `Restored ${data.version.versionLabel}.` };
+    } catch {
+      return { success: false, message: 'Could not reach the server. This version was not restored.' };
+    }
   };
 
   const applySimulation = () => {
@@ -2405,7 +2402,8 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     const response = await fetch(apiUrl(`/api/notifications/${encodeURIComponent(id)}/read`), {
       method: 'POST', credentials: 'same-origin', headers: getAuthHeaders(), body: JSON.stringify({}),
     });
-    if (!response.ok) return;
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.success) throw new Error(data.message || 'Notification could not be marked as read.');
     setNotifications(prev => prev.map(n => (n.id === id ? { ...n, read: true } : n)));
   };
 
@@ -2540,6 +2538,23 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     return { isSuccess: true };
   };
 
+  const deleteSession = async (sessionId: string): Promise<{ success: boolean; message?: string }> => {
+    try {
+      const response = await fetch(apiUrl(`/api/timetable/sessions/${encodeURIComponent(sessionId)}`), {
+        method: 'DELETE', credentials: 'same-origin', headers: getAuthHeaders(),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) return { success: false, message: data.message || 'Session could not be removed.' };
+      const removed = sessions.find((session) => session.id === sessionId);
+      setSessions((previous) => previous.filter((session) => session.id !== sessionId));
+      setPublishStatus('Draft');
+      setAuditLogs((previous) => [{ id: `log-${Date.now()}`, timestamp: new Date().toLocaleString(), userId: 'coordinator', userName: 'Timetable Coordinator', action: 'CLASS_SESSION_DELETED', entityType: 'ClassSession', entityId: sessionId, details: `Removed ${removed?.courseId || 'class session'} from the working draft.` }, ...previous]);
+      return { success: true, message: data.message || 'Session removed from the working draft.' };
+    } catch {
+      return { success: false, message: 'Could not reach the server. Session was not removed.' };
+    }
+  };
+
   return (
     <TimetableContext.Provider
       value={{
@@ -2628,6 +2643,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         claimMarketplaceSlot,
         requestSubstituteCover,
         addSession,
+        deleteSession,
         runIndependentValidation,
         moveSessionWithValidation,
         swapSessionsWithValidation,

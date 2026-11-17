@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useTimetable } from '../../context/TimetableContext';
+import { useAuth } from '../../context/AuthContext';
 import { TIME_SLOTS } from '../../lib/initialData';
 import { DayOfWeek, ClassSession } from '../../types';
 
@@ -28,6 +29,8 @@ import {
 } from 'lucide-react';
 
 export function TimetableGridView() {
+  const { currentUser, roster } = useAuth();
+  const isFacultyView = currentUser?.roleCode === 'FACULTY';
   const {
     sessions,
     rooms,
@@ -43,6 +46,9 @@ export function TimetableGridView() {
     toggleSessionLock,
     cancelSession,
     addSession,
+    deleteSession,
+    moveSessionWithValidation,
+    swapSessionsWithValidation,
     publishStatus,
     publishMasterTimetable,
     validationReport,
@@ -50,7 +56,8 @@ export function TimetableGridView() {
     academicYear,
   } = useTimetable();
 
-  const [filterMode, setFilterMode] = useState<'section' | 'faculty' | 'room'>('section');
+  const [filterMode, setFilterMode] = useState<'section' | 'faculty' | 'room'>(isFacultyView ? 'faculty' : 'section');
+  const effectiveFacultyId = isFacultyView ? roster?.facultyId || selectedFacultyId : selectedFacultyId;
   const [activeSessionDetail, setActiveSessionDetail] = useState<ClassSession | null>(null);
   const [cancellationReasonInput, setCancellationReasonInput] = useState('');
   const [showCancelModal, setShowCancelModal] = useState(false);
@@ -65,6 +72,13 @@ export function TimetableGridView() {
   const [selectedMobileDay, setSelectedMobileDay] = useState<DayOfWeek>('Monday');
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [publishFeedback, setPublishFeedback] = useState<string | null>(null);
+  const [savingCancellation, setSavingCancellation] = useState(false);
+  const [editSlot, setEditSlot] = useState<{ day: DayOfWeek; timeSlotId: string; roomId: string; reason: string } | null>(null);
+  const [swapTargetId, setSwapTargetId] = useState('');
+  const [showSwapEditor, setShowSwapEditor] = useState(false);
+  const [sessionActionFeedback, setSessionActionFeedback] = useState('');
+  const [sessionActionBusy, setSessionActionBusy] = useState(false);
+  const canManageSessions = ['COORDINATOR', 'COLLEGE_ADMIN', 'SUPER_ADMIN'].includes(currentUser?.roleCode || '');
 
   const days: DayOfWeek[] = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
 
@@ -129,7 +143,7 @@ export function TimetableGridView() {
   // Filter sessions based on active mode
   const filteredSessions = sessions.filter(s => {
     if (filterMode === 'section') return s.sectionId === selectedSectionId;
-    if (filterMode === 'faculty') return s.facultyId === selectedFacultyId;
+    if (filterMode === 'faculty') return s.facultyId === effectiveFacultyId;
     if (filterMode === 'room') return s.roomId === selectedRoomId;
     return true;
   });
@@ -138,15 +152,64 @@ export function TimetableGridView() {
     setActiveSessionDetail(session);
   };
 
-  const executeCancellation = () => {
+  const executeCancellation = async () => {
     if (!activeSessionDetail) return;
-    cancelSession(
+    setSavingCancellation(true);
+    setScheduleError(null);
+    const result = await cancelSession(
       activeSessionDetail.id,
       cancellationReasonInput.trim() || 'Instructor unavailable (Personal/Administrative)'
     );
+    setSavingCancellation(false);
+    if (!result.success) {
+      setScheduleError('The cancellation was not saved. Check your connection and authorization, then try again.');
+      return;
+    }
     setShowCancelModal(false);
     setActiveSessionDetail(null);
     setCancellationReasonInput('');
+  };
+
+  const saveSessionEdit = async () => {
+    if (!activeSessionDetail || !editSlot) return;
+    setSessionActionBusy(true);
+    setSessionActionFeedback('');
+    const result = await moveSessionWithValidation(activeSessionDetail.id, editSlot.day, editSlot.timeSlotId, editSlot.roomId, editSlot.reason.trim() || 'Coordinator schedule correction');
+    setSessionActionBusy(false);
+    if (!result.success) {
+      setSessionActionFeedback(result.error || 'Session was not updated.');
+      return;
+    }
+    setEditSlot(null);
+    setActiveSessionDetail({ ...activeSessionDetail, day: editSlot.day, timeSlotId: editSlot.timeSlotId, roomId: editSlot.roomId });
+    setSessionActionFeedback('Session updated and saved to the working draft.');
+  };
+
+  const saveSessionSwap = async () => {
+    if (!activeSessionDetail || !swapTargetId) return;
+    setSessionActionBusy(true);
+    setSessionActionFeedback('');
+    const result = await swapSessionsWithValidation(activeSessionDetail.id, swapTargetId, 'Coordinator slot swap');
+    setSessionActionBusy(false);
+    if (!result.success) {
+      setSessionActionFeedback(result.error || 'Session slots were not swapped.');
+      return;
+    }
+    setActiveSessionDetail(null);
+    setSwapTargetId('');
+    setShowSwapEditor(false);
+  };
+
+  const removeSession = async () => {
+    if (!activeSessionDetail || !window.confirm('Remove this class from the working draft? This will not cancel it for students until a new timetable is published.')) return;
+    setSessionActionBusy(true);
+    const result = await deleteSession(activeSessionDetail.id);
+    setSessionActionBusy(false);
+    if (!result.success) {
+      setSessionActionFeedback(result.message || 'Session was not removed.');
+      return;
+    }
+    setActiveSessionDetail(null);
   };
 
   return (
@@ -165,7 +228,7 @@ export function TimetableGridView() {
         {/* View Switcher, Publish & More Menu */}
         <div className="flex flex-wrap items-center gap-2">
           {/* View Switcher [ Section ] [ Faculty ] [ Room ] */}
-          <div className="flex bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 p-0.5 rounded-lg text-xs font-semibold">
+          {!isFacultyView && <div className="flex bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 p-0.5 rounded-lg text-xs font-semibold">
             <button
               onClick={() => setFilterMode('section')}
               className={`px-3 py-1 rounded-md transition-colors ${
@@ -196,7 +259,7 @@ export function TimetableGridView() {
             >
               Room
             </button>
-          </div>
+          </div>}
 
           {/* Sub-selector Dropdown */}
           {filterMode === 'section' && (
@@ -213,7 +276,7 @@ export function TimetableGridView() {
             </select>
           )}
 
-          {filterMode === 'faculty' && (
+          {filterMode === 'faculty' && !isFacultyView && (
             <select
               value={selectedFacultyId}
               onChange={e => setSelectedFacultyId(e.target.value)}
@@ -523,6 +586,27 @@ export function TimetableGridView() {
               </div>
             </div>
 
+            {sessionActionFeedback && <p role="status" className="rounded-md border border-[#E5E2D9] bg-white p-2.5 text-xs text-stone-700 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300">{sessionActionFeedback}</p>}
+            {canManageSessions && activeSessionDetail.status !== 'Cancelled' && <div className="space-y-3 border-t border-[#E5E2D9] pt-3 dark:border-zinc-800">
+              <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={() => { setSessionActionFeedback(''); setEditSlot({ day: activeSessionDetail.day, timeSlotId: activeSessionDetail.timeSlotId, roomId: activeSessionDetail.roomId, reason: '' }); }} className="rounded-md border border-[#E5E2D9] px-3 py-1.5 text-xs font-semibold text-stone-700 dark:border-zinc-700 dark:text-zinc-200">Edit Slot</button>
+                <button type="button" onClick={() => { setSessionActionFeedback(''); setSwapTargetId(''); setShowSwapEditor(true); }} className="rounded-md border border-[#E5E2D9] px-3 py-1.5 text-xs font-semibold text-stone-700 dark:border-zinc-700 dark:text-zinc-200">Swap Slot</button>
+                <button type="button" onClick={() => void removeSession()} disabled={sessionActionBusy} className="rounded-md border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-700 disabled:opacity-50 dark:border-rose-900 dark:text-rose-300">Delete Slot</button>
+              </div>
+              {editSlot && <div className="grid gap-2 rounded-lg border border-[#E5E2D9] bg-white p-3 text-xs dark:border-zinc-800 dark:bg-zinc-950 sm:grid-cols-3">
+                <label className="space-y-1">Day<select aria-label="Edit slot day" value={editSlot.day} onChange={event => setEditSlot(value => value ? { ...value, day: event.target.value as DayOfWeek } : value)} className="w-full rounded border border-[#E5E2D9] bg-white p-2 dark:border-zinc-700 dark:bg-zinc-900">{days.map(day => <option key={day} value={day}>{day}</option>)}</select></label>
+                <label className="space-y-1">Time<select aria-label="Edit slot time" value={editSlot.timeSlotId} onChange={event => setEditSlot(value => value ? { ...value, timeSlotId: event.target.value } : value)} className="w-full rounded border border-[#E5E2D9] bg-white p-2 dark:border-zinc-700 dark:bg-zinc-900">{academicYear.timeSlots.filter(slot => !slot.isBreak && !slot.isLunch).map(slot => <option key={slot.id} value={slot.id}>{slot.label || `${slot.startTime}–${slot.endTime}`}</option>)}</select></label>
+                <label className="space-y-1">Room<select aria-label="Edit slot room" value={editSlot.roomId} onChange={event => setEditSlot(value => value ? { ...value, roomId: event.target.value } : value)} className="w-full rounded border border-[#E5E2D9] bg-white p-2 dark:border-zinc-700 dark:bg-zinc-900">{rooms.filter(room => room.isAvailable).map(room => <option key={room.id} value={room.id}>{room.name}</option>)}</select></label>
+                <input aria-label="Reason for slot edit" placeholder="Reason (optional)" value={editSlot.reason} onChange={event => setEditSlot(value => value ? { ...value, reason: event.target.value } : value)} className="rounded border border-[#E5E2D9] p-2 dark:border-zinc-700 dark:bg-zinc-900 sm:col-span-2" />
+                <div className="flex justify-end gap-2 sm:col-span-3"><button type="button" onClick={() => setEditSlot(null)} className="rounded border border-[#E5E2D9] px-3 py-1.5 dark:border-zinc-700">Cancel</button><button type="button" onClick={() => void saveSessionEdit()} disabled={sessionActionBusy} className="rounded bg-[#8C1B2E] px-3 py-1.5 font-semibold text-white disabled:opacity-50">{sessionActionBusy ? 'Saving…' : 'Save Slot'}</button></div>
+              </div>}
+              {showSwapEditor && <div className="flex flex-wrap gap-2">
+                <select aria-label="Choose class to swap with" value={swapTargetId} onChange={event => setSwapTargetId(event.target.value)} className="min-w-48 rounded border border-[#E5E2D9] bg-white p-2 text-xs dark:border-zinc-700 dark:bg-zinc-950"><option value="">Choose another class to swap…</option>{sessions.filter(session => session.id !== activeSessionDetail.id && session.status !== 'Cancelled').map(session => <option key={session.id} value={session.id}>{courses.find(course => course.id === session.courseId)?.code || session.courseId} · {session.sectionId} · {session.day} {session.timeSlotId}</option>)}</select>
+                <button type="button" onClick={() => void saveSessionSwap()} disabled={!swapTargetId || sessionActionBusy} className="rounded border border-[#E5E2D9] px-3 py-1.5 text-xs font-semibold disabled:opacity-50 dark:border-zinc-700">{sessionActionBusy ? 'Swapping…' : 'Confirm Swap'}</button>
+                <button type="button" onClick={() => setShowSwapEditor(false)} className="rounded border border-[#E5E2D9] px-3 py-1.5 text-xs dark:border-zinc-700">Cancel</button>
+              </div>}
+            </div>}
+
             {/* Invariants & Hard Constraint Validation */}
             <div className="p-3.5 bg-white dark:bg-zinc-950 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 space-y-1.5 text-xs">
               <span className="text-[11px] font-semibold text-stone-900 dark:text-zinc-100 flex items-center gap-1.5">
@@ -538,11 +622,15 @@ export function TimetableGridView() {
 
             {/* Actions: Lock, Cancel */}
             <div className="flex flex-col sm:flex-row items-center gap-3 pt-2">
-              <button
-                onClick={() => {
-                  toggleSessionLock(activeSessionDetail.id);
-                  setActiveSessionDetail(prev => prev ? { ...prev, isLocked: !prev.isLocked } : null);
+              {canManageSessions && <button
+                onClick={async () => {
+                  setSessionActionBusy(true);
+                  const result = await toggleSessionLock(activeSessionDetail.id);
+                  setSessionActionBusy(false);
+                  if (!result.success) setSessionActionFeedback(result.message || 'Could not update lock.');
+                  else setActiveSessionDetail(prev => prev ? { ...prev, isLocked: !prev.isLocked } : null);
                 }}
+                disabled={sessionActionBusy}
                 className={`w-full sm:w-auto flex-1 flex items-center justify-center gap-2 py-2 px-4 rounded-lg text-xs font-semibold border transition-all ${
                   activeSessionDetail.isLocked
                     ? 'bg-stone-100 dark:bg-zinc-800 border-[#E5E2D9] dark:border-zinc-700 text-stone-700 dark:text-zinc-300'
@@ -560,7 +648,7 @@ export function TimetableGridView() {
                     <span>Lock Session</span>
                   </>
                 )}
-              </button>
+              </button>}
 
               {activeSessionDetail.status !== 'Cancelled' ? (
                 <button
@@ -582,8 +670,8 @@ export function TimetableGridView() {
 
       {/* Cancellation Reason Modal */}
       {showCancelModal && (
-        <div className="fixed inset-0 bg-stone-900/60 backdrop-blur-xs z-60 flex items-center justify-center p-4 animate-in fade-in duration-150">
-          <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl max-w-md w-full p-6 space-y-4 shadow-xl text-stone-900 dark:text-zinc-100">
+        <div className="fixed inset-0 bg-stone-900/60 backdrop-blur-xs z-[70] flex items-center justify-center p-4 animate-in fade-in duration-150" onClick={() => setShowCancelModal(false)}>
+          <div onClick={event => event.stopPropagation()} className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl max-w-md w-full p-6 space-y-4 shadow-xl text-stone-900 dark:text-zinc-100">
             <h4 className="text-base font-bold font-serif text-stone-900 dark:text-zinc-100">Confirm Class Cancellation</h4>
             <p className="text-xs text-stone-500 dark:text-zinc-400 leading-relaxed">
               Cancelling will release the room, notify enrolled students, and enqueue a replacement class option.
@@ -602,16 +690,17 @@ export function TimetableGridView() {
 
             <div className="flex items-center justify-end gap-3 pt-2">
               <button
-                onClick={() => setShowCancelModal(false)}
+                onClick={() => !savingCancellation && setShowCancelModal(false)}
                 className="px-4 py-2 rounded-lg text-xs font-medium text-stone-600 dark:text-zinc-400 hover:text-stone-900 dark:hover:text-zinc-100"
               >
                 Back
               </button>
               <button
-                onClick={executeCancellation}
+                onClick={() => void executeCancellation()}
+                disabled={savingCancellation}
                 className="px-4 py-2 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-xs font-semibold transition-colors shadow-xs"
               >
-                Confirm Cancellation
+                {savingCancellation ? 'Saving…' : 'Confirm Cancellation'}
               </button>
             </div>
           </div>
@@ -620,8 +709,8 @@ export function TimetableGridView() {
 
       {/* Free Slot Direct Scheduling Modal */}
       {scheduleSlotTarget && (
-        <div className="fixed inset-0 bg-stone-900/60 backdrop-blur-xs z-60 flex items-center justify-center p-4 animate-in fade-in duration-150">
-          <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl max-w-md w-full p-6 space-y-4 shadow-xl text-stone-900 dark:text-zinc-100">
+        <div className="fixed inset-0 bg-stone-900/60 backdrop-blur-xs z-[70] flex items-center justify-center p-4 animate-in fade-in duration-150" onClick={() => setScheduleSlotTarget(null)}>
+          <div onClick={event => event.stopPropagation()} className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl max-w-md w-full p-6 space-y-4 shadow-xl text-stone-900 dark:text-zinc-100">
             <div className="flex items-center justify-between border-b border-[#E5E2D9] dark:border-zinc-800 pb-3">
               <div>
                 <h4 className="text-base font-bold font-serif text-stone-900 dark:text-zinc-100">Schedule Class Session</h4>

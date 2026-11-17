@@ -83,10 +83,20 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
   // Status & Loading States
   const [isLoading, setIsLoading] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
+  const [googleConfigured, setGoogleConfigured] = useState(false);
   const [demoRoleLoading, setDemoRoleLoading] = useState<string | null>(null);
   const [showDemoModal, setShowDemoModal] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    fetch('/api/auth/google/status', { credentials: 'same-origin' })
+      .then(async (response) => response.ok ? response.json() : null)
+      .then((status) => { if (active) setGoogleConfigured(status?.configured === true); })
+      .catch(() => { if (active) setGoogleConfigured(false); });
+    return () => { active = false; };
+  }, []);
 
   // Password Policy Checks (Strict: 12+ chars, uppercase, lowercase, number, symbol)
   const regPasswordPolicy = evaluatePasswordPolicy(regPassword);
@@ -706,6 +716,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
               </button>
             </form>
 
+            {googleConfigured && <>
             {/* Divider */}
             <div className="relative my-5">
               <div className="absolute inset-0 flex items-center">
@@ -752,6 +763,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
                 </>
               )}
             </button>
+            </>}
 
             {/* Demo access section */}
             <div className="mt-6 pt-5 border-t border-[#E5E2D9] dark:border-zinc-800/80">

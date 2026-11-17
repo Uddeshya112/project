@@ -124,6 +124,7 @@ export function WhatIfSimulatorView() {
               onClick={() => {
                 setActiveScenario(s.id);
                 setHasApplied(false);
+                setFeedback('');
               }}
               className={`text-left p-4 rounded-xl border transition-all ${
                 isSelected

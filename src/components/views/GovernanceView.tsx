@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useTimetable } from '../../context/TimetableContext';
 import {
   History,
@@ -15,6 +15,8 @@ import {
 
 export function GovernanceView() {
   const { versions, auditLogs, sessions, restoreVersion } = useTimetable();
+  const [restoreState, setRestoreState] = useState<{ message: string; error: boolean } | null>(null);
+  const [restoring, setRestoring] = useState<number | null>(null);
 
   const lockedSessions = sessions.filter(s => s.isLocked);
 
@@ -35,6 +37,7 @@ export function GovernanceView() {
       </div>
 
       {/* Grid: Version History and Timetable Locks */}
+      {restoreState && <p role={restoreState.error ? 'alert' : 'status'} className={`rounded-lg border p-3 text-xs ${restoreState.error ? 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-200' : 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200'}`}>{restoreState.message}</p>}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Version Control Timeline */}
         <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl p-5 space-y-4 shadow-xs">
@@ -50,7 +53,7 @@ export function GovernanceView() {
 
           <div className="space-y-3">
             {versions.map((ver, idx) => {
-              const isCurrent = idx === versions.length - 1;
+              const isCurrent = idx === 0;
 
               return (
                 <div
@@ -90,11 +93,18 @@ export function GovernanceView() {
 
                     {!isCurrent && (
                       <button
-                        onClick={() => restoreVersion(ver.versionNumber)}
+                        disabled={restoring !== null}
+                        onClick={async () => {
+                          setRestoring(ver.versionNumber);
+                          setRestoreState(null);
+                          const result = await restoreVersion(ver.versionNumber);
+                          setRestoreState({ message: result.message || (result.success ? 'Version restored.' : 'Version could not be restored.'), error: !result.success });
+                          setRestoring(null);
+                        }}
                         className="flex items-center gap-1 text-xs text-[#8C1B2E] hover:text-[#731625] dark:text-red-400 font-semibold transition-colors"
                       >
                         <RotateCcw className="h-3 w-3" />
-                        <span>Restore This Version</span>
+                        <span>{restoring === ver.versionNumber ? 'Restoring…' : 'Restore This Version'}</span>
                       </button>
                     )}
                   </div>

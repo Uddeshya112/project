@@ -1,5 +1,5 @@
-import { Worker, isMainThread, parentPort, workerData } from 'worker_threads';
-import { executeOptimizationEngine, EngineResult } from '../lib/optimizationEngine';
+import { Worker } from 'node:worker_threads';
+import type { EngineResult } from '../lib/optimizationEngine';
 import { AcademicYearConfig, CourseAllocation, Faculty, Room, StudentSection, Course, AcademicConstraint } from '../types';
 
 export interface TimetableJobRequest {
@@ -57,59 +57,52 @@ class TimetableJobManager {
 
     this.jobs.set(jobId, jobState);
 
-    // Execute asynchronously using setImmediate / background execution to keep event loop unblocked
     setImmediate(() => {
-      this.executeJob(jobId, {
-        jobId,
-        academicYear,
-        allocations,
-        facultyMembers,
-        rooms,
-        sections,
-        courses,
-        constraints,
-        options,
+      const job = this.jobs.get(jobId);
+      if (!job || job.status === 'CANCELLED') return;
+      job.status = 'RUNNING';
+      job.startedAt = new Date().toISOString();
+      job.progress = 10;
+      const worker = new Worker(new URL('./solverWorker.ts', import.meta.url), {
+        workerData: { jobId, academicYear, allocations, facultyMembers, rooms, sections, courses, constraints, options },
+        execArgv: process.execArgv.filter((arg) => !arg.startsWith('--input-type')),
+      });
+      job.worker = worker;
+      worker.on('message', (message: { result?: EngineResult; error?: string }) => {
+        const active = this.jobs.get(jobId);
+        if (!active || active.status === 'CANCELLED') return;
+        if (message.error || !message.result) {
+          active.status = 'FAILED';
+          active.error = message.error || 'Solver worker returned no result.';
+        } else {
+          active.status = 'COMPLETED';
+          active.progress = 100;
+          active.result = message.result;
+        }
+        active.completedAt = new Date().toISOString();
+        active.worker = undefined;
+        void worker.terminate();
+      });
+      worker.on('error', (error) => {
+        const active = this.jobs.get(jobId);
+        if (!active || active.status === 'CANCELLED') return;
+        active.status = 'FAILED';
+        active.error = error.message;
+        active.completedAt = new Date().toISOString();
+        active.worker = undefined;
+      });
+      worker.on('exit', (code) => {
+        const active = this.jobs.get(jobId);
+        if (active && active.status === 'RUNNING' && code !== 0) {
+          active.status = 'FAILED';
+          active.error = `Solver worker exited unexpectedly (${code}).`;
+          active.completedAt = new Date().toISOString();
+          active.worker = undefined;
+        }
       });
     });
 
     return jobId;
-  }
-
-  private executeJob(jobId: string, payload: TimetableJobRequest) {
-    const job = this.jobs.get(jobId);
-    if (!job || job.status === 'CANCELLED') return;
-
-    job.status = 'RUNNING';
-    job.startedAt = new Date().toISOString();
-    job.progress = 25;
-
-    try {
-      // Deterministic solve
-      const result = executeOptimizationEngine(
-        payload.academicYear,
-        payload.allocations,
-        payload.facultyMembers,
-        payload.rooms,
-        payload.sections,
-        payload.courses,
-        payload.constraints,
-        payload.options
-      );
-
-      const currentJob = this.jobs.get(jobId);
-      if (!currentJob || currentJob.status === 'CANCELLED') return;
-
-      currentJob.status = 'COMPLETED';
-      currentJob.progress = 100;
-      currentJob.completedAt = new Date().toISOString();
-      currentJob.result = result;
-    } catch (err: any) {
-      const currentJob = this.jobs.get(jobId);
-      if (!currentJob || currentJob.status === 'CANCELLED') return;
-      currentJob.status = 'FAILED';
-      currentJob.error = err?.message || 'Unknown error occurred during generation';
-      currentJob.completedAt = new Date().toISOString();
-    }
   }
 
   public getJob(jobId: string): TimetableJobState | undefined {

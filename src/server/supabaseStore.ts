@@ -44,7 +44,7 @@ import {
   validateProposedSessionMove,
   validateProposedSessionSwap,
 } from '../lib/independentValidator';
-import { executeOptimizationEngine } from '../lib/optimizationEngine';
+import { executeOptimizationEngine, type GeneratedCandidate } from '../lib/optimizationEngine';
 import { checkHardConstraints, findSelfHealingRecoverySlots } from '../lib/recoveryEngine';
 import { ExcelImportPreview } from '../lib/excelMasterService';
 
@@ -1231,6 +1231,24 @@ class SupabaseRelationalStore {
     return { success: true, session };
   }
 
+  public deleteClassSession(sessionId: string, userId = 'coordinator'): boolean {
+    const target = this.activeSessions.find((session) => session.id === sessionId);
+    if (!target) return false;
+    this.activeSessions = this.activeSessions.filter((session) => session.id !== sessionId);
+    if (this.academicYear.publishStatus === 'Published') this.academicYear.publishStatus = 'Draft';
+    this.logAudit(userId, 'CLASS_SESSION_DELETED', 'ClassSession', sessionId, `Removed ${target.courseId} from ${target.day} ${target.timeSlotId}.`);
+    return true;
+  }
+
+  public setSessionLock(sessionId: string, isLocked: boolean, reason: string, userId = 'coordinator'): ClassSession | null {
+    const target = this.activeSessions.find((session) => session.id === sessionId);
+    if (!target) return null;
+    const updated: ClassSession = { ...target, isLocked, lockReason: isLocked ? reason : undefined };
+    this.activeSessions = this.activeSessions.map((session) => session.id === sessionId ? updated : session);
+    this.logAudit(userId, isLocked ? 'SESSION_LOCKED' : 'SESSION_UNLOCKED', 'ClassSession', sessionId, `${isLocked ? 'Locked' : 'Unlocked'} ${updated.courseId}. ${reason}`);
+    return updated;
+  }
+
   public resetDemoDataset() {
     this.seedInitialDatabase();
   }
@@ -1449,8 +1467,49 @@ class SupabaseRelationalStore {
     if (!ver) return null;
 
     this.activeSessions = [...ver.sessions];
+    this.academicYear.publishStatus = 'Draft';
+    this.versions = this.versions.map((version) => ({
+      ...version,
+      isPublished: false,
+      status: version.versionNumber === versionNumber ? 'Draft' : (version.status === 'Published' ? 'Approved' : version.status),
+    }));
     this.logAudit(userId, 'VERSION_RESTORED', 'TimetableVersion', `v-${versionNumber}`, `Restored schedule matrix to ${ver.versionLabel}.`);
     return ver;
+  }
+
+  public applyGeneratedCandidate(candidate: GeneratedCandidate, userId = 'coordinator'): TimetableVersion | null {
+    if (!candidate?.sessions?.length) return null;
+    const validation = validateTimetableIndependently(candidate.sessions, {
+      academicYear: this.academicYear,
+      allocations: [...this.allocations.values()],
+      facultyMembers: [...this.facultyMembers.values()],
+      rooms: [...this.rooms.values()],
+      sections: [...this.groups.values()],
+      courses: [...this.courses.values()],
+      constraints: [...this.constraints.values()],
+    });
+    if (!validation.canPublish) return null;
+    const versionNumber = Math.max(0, ...this.versions.map((version) => version.versionNumber)) + 1;
+    const version: TimetableVersion = {
+      id: `ver-${versionNumber}`,
+      versionNumber,
+      versionLabel: `Draft V${versionNumber}.0`,
+      createdAt: new Date().toISOString(),
+      createdBy: userId,
+      changeSummary: `Generated and validated ${candidate.sessions.length} class sessions.`,
+      reason: 'Asynchronous timetable generation',
+      isPublished: false,
+      status: 'Draft',
+      healthScore: candidate.healthScore,
+      sessionsCount: candidate.sessions.length,
+      hardViolationsCount: validation.hardViolationsCount,
+      sessions: candidate.sessions,
+    };
+    this.activeSessions = [...candidate.sessions];
+    this.academicYear.publishStatus = 'Draft';
+    this.versions.unshift(version);
+    this.logAudit(userId, 'TIMETABLE_GENERATED', 'TimetableVersion', version.id || `ver-${versionNumber}`, version.changeSummary);
+    return version;
   }
 
   // --------------------------------------------------------------------------

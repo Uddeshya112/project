@@ -35,6 +35,7 @@ function MainLayout() {
 
   const handleSignOut = () => {
     logout();
+    window.history.replaceState(null, '', '/');
     setShowWorkspacePicker(false);
     setShowLoginPage(true);
   };

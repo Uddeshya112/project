@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useTimetable } from '../../context/TimetableContext';
 import type { TimeSlot } from '../../types';
 import {
@@ -22,6 +22,13 @@ const fmtHrs = (h: number) => `${Math.round(h * 10) / 10}`;
 
 export function WorkloadSyllabusView() {
   const { academicYear, courses, facultyMembers, sessions } = useTimetable();
+  const [coursePage, setCoursePage] = useState(0);
+  const [facultyPage, setFacultyPage] = useState(0);
+  const pageSize = 50;
+  const coursePageCount = Math.max(1, Math.ceil(courses.length / pageSize));
+  const facultyPageCount = Math.max(1, Math.ceil(facultyMembers.length / pageSize));
+  const visibleCourses = courses.slice(coursePage * pageSize, (coursePage + 1) * pageSize);
+  const visibleFaculty = facultyMembers.slice(facultyPage * pageSize, (facultyPage + 1) * pageSize);
 
   const slotById = new Map(academicYear.timeSlots.map(t => [t.id, t]));
   // Weekly direct-teaching hours per faculty member, from the (non-cancelled) timetable sessions.
@@ -67,7 +74,7 @@ export function WorkloadSyllabusView() {
         )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {courses.map(course => {
+          {visibleCourses.map(course => {
             const faculty = facultyMembers.find(f => f.id === course.primaryFacultyId);
             const courseSessions = sessions.filter(session => session.courseId === course.id);
             const completedHours = courseSessions.filter(session => session.status === 'Completed').reduce((sum, session) => sum + slotHours(slotById.get(session.timeSlotId)), 0);
@@ -106,7 +113,7 @@ export function WorkloadSyllabusView() {
                   </div>
 
                   <span
-                    className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border uppercase tracking-wider ${
+                    className={`shrink-0 whitespace-nowrap text-[10px] font-mono font-bold px-2 py-0.5 rounded border uppercase tracking-wider ${
                       risk === 'RED'
                         ? 'bg-rose-50 text-rose-800 border-rose-200 dark:bg-rose-500/10 dark:text-rose-300 dark:border-rose-500/30'
                         : risk === 'YELLOW'
@@ -162,6 +169,10 @@ export function WorkloadSyllabusView() {
             );
           })}
         </div>
+        {courses.length > pageSize && <div className="flex items-center justify-between text-xs text-stone-500 dark:text-zinc-400">
+          <span>{coursePage * pageSize + 1}–{Math.min((coursePage + 1) * pageSize, courses.length)} of {courses.length} courses</span>
+          <div className="flex gap-2"><button type="button" disabled={coursePage === 0} onClick={() => setCoursePage(page => Math.max(0, page - 1))} className="rounded border border-[#E5E2D9] px-2 py-1 disabled:opacity-40 dark:border-zinc-700">Previous</button><button type="button" disabled={coursePage + 1 >= coursePageCount} onClick={() => setCoursePage(page => Math.min(coursePageCount - 1, page + 1))} className="rounded border border-[#E5E2D9] px-2 py-1 disabled:opacity-40 dark:border-zinc-700">Next</button></div>
+        </div>}
       </div>
 
       {/* UGC Faculty Workload Matrix */}
@@ -199,7 +210,7 @@ export function WorkloadSyllabusView() {
         )}
 
         <div className="divide-y divide-[#E5E2D9] dark:divide-zinc-800">
-          {facultyMembers.map(faculty => {
+          {visibleFaculty.map(faculty => {
             const activeHours = loadByFaculty.get(faculty.id) ?? 0;
             const cap = faculty.maxDirectTeachingHours;
             const isOverloaded = activeHours > cap;
@@ -254,6 +265,10 @@ export function WorkloadSyllabusView() {
             );
           })}
         </div>
+        {facultyMembers.length > pageSize && <div className="flex items-center justify-between text-xs text-stone-500 dark:text-zinc-400">
+          <span>{facultyPage * pageSize + 1}–{Math.min((facultyPage + 1) * pageSize, facultyMembers.length)} of {facultyMembers.length} faculty</span>
+          <div className="flex gap-2"><button type="button" disabled={facultyPage === 0} onClick={() => setFacultyPage(page => Math.max(0, page - 1))} className="rounded border border-[#E5E2D9] px-2 py-1 disabled:opacity-40 dark:border-zinc-700">Previous</button><button type="button" disabled={facultyPage + 1 >= facultyPageCount} onClick={() => setFacultyPage(page => Math.min(facultyPageCount - 1, page + 1))} className="rounded border border-[#E5E2D9] px-2 py-1 disabled:opacity-40 dark:border-zinc-700">Next</button></div>
+        </div>}
       </div>
     </div>
   );
