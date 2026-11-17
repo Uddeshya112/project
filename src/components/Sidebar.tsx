@@ -1,13 +1,11 @@
 import React, { useState, useEffect } from 'react';
+import { ThaparLogo } from './ThaparLogo';
 import { useTimetable, ViewTab } from '../context/TimetableContext';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
-import { ThaparLogo } from './ThaparLogo';
-import { getUserInitials } from '../lib/userUtils';
 import {
   ChevronDown,
   ChevronRight,
-  LogOut,
   X,
   User,
   Sun,
@@ -37,12 +35,11 @@ interface SidebarProps {
 export function Sidebar({
   onOpenProfile,
   onOpenNotifications,
-  onShowLoginPage,
   isOpen = false,
   onClose,
 }: SidebarProps = {}) {
   const { activeView, setActiveView } = useTimetable();
-  const { currentUser, currentWorkspace, logout } = useAuth();
+  const { currentWorkspace } = useAuth();
   const { theme, toggleTheme } = useTheme();
 
   const isSetupActive = ['academic_year', 'departments', 'courses_mgmt', 'faculty_mgmt', 'rooms_mgmt', 'sections_mgmt', 'academic_setup'].includes(activeView);
@@ -100,7 +97,7 @@ export function Sidebar({
               Thapar Timetable
             </h2>
             <p className="text-[10px] text-stone-500 dark:text-zinc-400 mt-0.5 font-medium">
-              {isStudent ? 'Academic Schedule' : isFaculty ? 'Faculty Portal' : isHod ? 'HOD Portal' : isAdmin ? 'Admin Console' : 'Coordinator'}
+              {isStudent ? 'Student Portal' : isFaculty ? 'Faculty Portal' : isHod ? 'HOD Portal' : isAdmin ? 'Admin Console' : 'Coordinator Portal'}
             </p>
           </div>
         </div>
@@ -270,7 +267,7 @@ export function Sidebar({
             <button
               onClick={() => handleSelect('grid')}
               className={`w-full text-left px-3 py-2 rounded-lg transition-all flex items-center gap-2.5 ${
-                activeView === 'grid' || activeView === 'generation_validator' || activeView === 'whatif' || activeView === 'syllabus'
+                activeView === 'grid'
                   ? 'bg-[#8C1B2E] text-white font-semibold shadow-xs'
                   : 'hover:bg-stone-100 dark:hover:bg-zinc-800 text-stone-800 dark:text-zinc-200'
               }`}
@@ -283,7 +280,7 @@ export function Sidebar({
             <button
               onClick={() => handleSelect('academic_setup')}
               className={`w-full text-left px-3 py-2 rounded-lg transition-all flex items-center gap-2.5 ${
-                ['academic_setup', 'courses_mgmt', 'faculty_mgmt', 'rooms_mgmt', 'sections_mgmt', 'allocations', 'availability'].includes(activeView)
+                ['academic_setup', 'master_excel', 'academic_year', 'departments', 'programs', 'courses_mgmt', 'faculty_mgmt', 'rooms_mgmt', 'sections_mgmt', 'students', 'allocations', 'availability', 'constraints', 'generation_validator', 'timetable_review'].includes(activeView)
                   ? 'bg-[#8C1B2E] text-white font-semibold shadow-xs'
                   : 'hover:bg-stone-100 dark:hover:bg-zinc-800 text-stone-800 dark:text-zinc-200'
               }`}
@@ -404,8 +401,8 @@ export function Sidebar({
         )}
       </div>
 
-      {/* Footer Settings & User Info */}
-      <div className="p-2.5 border-t border-[#E5E2D9] dark:border-zinc-800 bg-[#F4F2EC] dark:bg-zinc-950/60 space-y-1.5">
+      {/* Footer Settings */}
+      <div className="p-2.5 border-t border-[#E5E2D9] dark:border-zinc-800 bg-[#F4F2EC] dark:bg-zinc-950/60">
         <div className="flex items-center justify-between px-2 py-1">
           <button
             onClick={toggleTheme}
@@ -417,30 +414,6 @@ export function Sidebar({
           </button>
         </div>
 
-        <div className="flex items-center justify-between p-2 rounded-lg bg-white dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800">
-          <div className="flex items-center gap-2 min-w-0">
-            <div className="w-6 h-6 rounded-full bg-[#8C1B2E]/10 text-[#8C1B2E] border border-[#8C1B2E]/30 flex items-center justify-center font-bold text-[10px] shrink-0">
-              {getUserInitials(currentUser?.name)}
-            </div>
-            <div className="min-w-0">
-              <div className="text-[11px] font-semibold text-stone-900 dark:text-zinc-200 truncate">
-                {currentUser?.name || 'User'}
-              </div>
-              <div className="text-[10px] text-stone-500 truncate capitalize">
-                {currentWorkspace}
-              </div>
-            </div>
-          </div>
-
-          <button
-            onClick={() => (onShowLoginPage ? onShowLoginPage() : logout())}
-            className="p-1 text-stone-400 hover:text-[#8C1B2E] dark:text-zinc-400 dark:hover:text-red-400 rounded transition-colors"
-            title="Sign out"
-            aria-label="Sign out"
-          >
-            <LogOut className="h-3.5 w-3.5" />
-          </button>
-        </div>
       </div>
     </div>
   );

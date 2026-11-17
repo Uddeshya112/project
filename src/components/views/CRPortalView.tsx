@@ -23,7 +23,6 @@ export function CRPortalView() {
   const {
     academicYear,
     sections,
-    sessions,
     publishedSessions,
     allocations,
     courses,
@@ -36,6 +35,7 @@ export function CRPortalView() {
     refresh,
     isLoading,
   } = useTimetable();
+  const sessions = publishedSessions ?? [];
   const { workingDays: days, timeSlots } = academicYear;
 
   const sectionId = roster?.crSectionId ?? roster?.sectionId ?? null;

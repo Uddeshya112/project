@@ -58,7 +58,7 @@ export function AuthGovernanceView() {
   const [info, setInfo] = useState<string | null>(null);
   const [editing, setEditing] = useState<AdminUser | null>(null);
   const [form, setForm] = useState({ email: '', name: '', roleCode: 'FACULTY' as RoleCode, department: '', password: '' });
-  const limit = 25;
+  const limit = 20;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -131,7 +131,7 @@ export function AuthGovernanceView() {
         </div>
         <h1 className="text-2xl sm:text-3xl font-serif font-bold text-stone-900 dark:text-zinc-100 tracking-tight">Users & Roles</h1>
         <p className="text-xs sm:text-sm text-stone-600 dark:text-zinc-400 mt-1 max-w-3xl leading-relaxed">
-          Students and faculty in the imported roster get access automatically the first time they sign in with Google. Coordinator, HOD and admin roles are assigned here. Role, lock and password changes sign the user out everywhere immediately.
+          Student and faculty accounts can be linked to the imported roster. Coordinator, HOD and admin roles are assigned here. Role, lock and password changes sign the user out everywhere immediately.
         </p>
       </div>
 
@@ -295,7 +295,7 @@ export function AuthGovernanceView() {
               <input id="new-dept" value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} className={input} />
             </Field>
             <Field id="new-password" label="Password (optional)">
-              <input id="new-password" type="password" autoComplete="new-password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="Leave blank for Google sign-in only" className={input} />
+              <input id="new-password" type="password" autoComplete="new-password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="Set an initial password (optional)" className={input} />
             </Field>
             <button type="submit" disabled={busy !== null} className="w-full py-2 bg-[#8C1B2E] hover:bg-[#731625] disabled:opacity-60 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5">
               {busy === 'create' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}

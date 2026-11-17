@@ -319,6 +319,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
 
   // Dynamic operational state
   const [sessions, setSessions] = useState<ClassSession[]>(INITIAL_SESSIONS);
+  const [publishedSessions, setPublishedSessions] = useState<ClassSession[]>(INITIAL_SESSIONS);
   const [makeupTasks, setMakeupTasks] = useState<MakeupTask[]>(INITIAL_MAKEUP_TASKS);
   const [recoveryOpportunities, setRecoveryOpportunities] = useState<RecoveryOpportunity[]>(INITIAL_RECOVERY_OPPORTUNITIES);
   const [polls, setPolls] = useState<StudentPoll[]>(INITIAL_POLLS);
@@ -431,6 +432,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
             if (Array.isArray(data.allocations)) setAllocations(data.allocations);
             if (Array.isArray(data.constraints)) setConstraints(data.constraints);
             if (Array.isArray(data.sessions)) setSessions(data.sessions);
+            if (Array.isArray(data.publishedSessions)) setPublishedSessions(data.publishedSessions);
             if (Array.isArray(data.versions)) setVersions(data.versions);
             if (Array.isArray(data.notifications)) setNotifications(data.notifications);
             if (Array.isArray(data.makeupTasks)) setMakeupTasks(data.makeupTasks);
@@ -1359,6 +1361,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     }
 
     setPublishStatus('Published');
+    setPublishedSessions(sessions);
     setAcademicYear(prev => ({
       ...prev,
       publishStatus: 'Published',
@@ -1375,13 +1378,13 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       {
         id: `notif-pub-${Date.now()}`,
         type: 'system_alert',
-        title: 'Master Timetable Published & Live',
+        title: 'Master Schedule Published',
         message: `Official semester timetable has been verified (0 violations) and published for campus access across all sections and faculty.`,
-        timestamp: 'Just now',
+        timestamp: new Date().toISOString(),
         read: false,
         category: 'Success',
       },
-      ...prev,
+      ...prev.filter(item => item.title !== 'Master Schedule Published' && item.title !== 'Master Timetable Published & Live'),
     ]);
 
     setAuditLogs(prev => [
@@ -1403,6 +1406,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
 
   const unpublishMasterTimetable = async (): Promise<{ success: boolean }> => {
     setPublishStatus('Draft');
+    setPublishedSessions([]);
     setAcademicYear(prev => ({
       ...prev,
       publishStatus: 'Draft',
@@ -1421,7 +1425,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         type: 'system_alert',
         title: 'Timetable Returned to Draft Mode',
         message: 'The master timetable has been unpublished and returned to draft editing mode.',
-        timestamp: 'Just now',
+        timestamp: new Date().toISOString(),
         read: false,
         category: 'Info',
       },
@@ -1531,6 +1535,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       if (Array.isArray(bootstrap.allocations)) setAllocations(bootstrap.allocations);
       if (Array.isArray(bootstrap.constraints)) setConstraints(bootstrap.constraints);
       if (Array.isArray(bootstrap.sessions)) setSessions(bootstrap.sessions);
+      if (Array.isArray(bootstrap.publishedSessions)) setPublishedSessions(bootstrap.publishedSessions);
       if (Array.isArray(bootstrap.makeupTasks)) setMakeupTasks(bootstrap.makeupTasks);
       if (Array.isArray(bootstrap.recoveryOpportunities)) setRecoveryOpportunities(bootstrap.recoveryOpportunities);
       if (Array.isArray(bootstrap.polls)) setPolls(bootstrap.polls);
@@ -2149,18 +2154,18 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       return { success: false };
     }
 
-    setSessions(prev =>
-      prev.map(s =>
+    const updatedSessions = sessions.map(s =>
         s.id === sessionId
           ? {
               ...s,
-              status: 'Cancelled',
+              status: 'Cancelled' as const,
               cancellationReason,
               cancellationTimestamp: new Date().toISOString(),
             }
           : s
-      )
-    );
+      );
+    setSessions(updatedSessions);
+    if (publishStatus === 'Published') setPublishedSessions(updatedSessions);
 
     const newTaskId = `makeup-${Date.now()}`;
     const newMakeupTask: MakeupTask = {
@@ -2176,7 +2181,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       createdAt: new Date().toISOString(),
     };
 
-    setMakeupTasks(prev => [newMakeupTask, ...prev]);
+    setMakeupTasks(prev => [newMakeupTask, ...prev.filter(task => task.cancelledSessionId !== sessionId)]);
 
     const discoveredOpps = findSelfHealingRecoverySlots(
       newMakeupTask,
@@ -2188,22 +2193,22 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     );
 
     if (discoveredOpps.length > 0) {
-      setRecoveryOpportunities(prev => [...discoveredOpps, ...prev]);
+      setRecoveryOpportunities(prev => [...discoveredOpps.filter(option => !prev.some(existing => existing.makeupTaskId === option.makeupTaskId && existing.targetDay === option.targetDay && existing.timeSlotId === option.timeSlotId && existing.roomId === option.roomId)), ...prev]);
     }
 
     setNotifications(prev => [
       {
         id: `notif-${Date.now()}`,
         type: 'cancellation',
-        title: `Class Disruption: ${targetSession.courseId}`,
-        message: `${targetSession.day} session was cancelled. Reason: ${cancellationReason}. Self-healing engine generated replacement slot proposals.`,
-        timestamp: 'Just now',
+        title: `Class Disrupted: ${targetSession.courseId}`,
+        message: `${targetSession.day} session was cancelled. Reason: ${cancellationReason}. Suggested makeup slots are available for review.`,
+        timestamp: new Date().toISOString(),
         read: false,
         category: 'Critical',
         actionable: true,
         actionPayload: { sessionId, sectionId: targetSession.sectionId },
       },
-      ...prev,
+      ...prev.filter(item => !(item.type === 'cancellation' && item.actionPayload?.sessionId === sessionId)),
     ]);
 
     setAuditLogs(prev => [
@@ -2262,7 +2267,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         type: 'makeup_request',
         title: `Makeup Scheduled: ${makeupTask.courseId}`,
         message: `Recovery class locked for ${opp.targetDay} in ${roomObj?.name || opp.roomId}. Students and Faculty notified.`,
-        timestamp: 'Just now',
+        timestamp: new Date().toISOString(),
         read: false,
         category: 'Success',
       },
@@ -2379,6 +2384,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.success || !data.version?.sessions) return { success: false, message: data.message || 'This version could not be restored.' };
       setSessions(data.version.sessions);
+      setPublishedSessions(data.version.sessions);
       setPublishStatus('Published');
       setVersions(previous => previous.map(version => ({
         ...version,
@@ -2399,7 +2405,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         type: 'system_alert',
         title: `Simulation Applied: ${whatIfSimulation.title}`,
         message: 'Sandbox contingency measures applied to candidate staging branch.',
-        timestamp: 'Just now',
+        timestamp: new Date().toISOString(),
         read: false,
         category: 'Warning',
       },
@@ -2430,8 +2436,8 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
           id: `notif-${Date.now()}`,
           type: 'makeup_request',
           title: 'Automated Recovery Batch Complete',
-          message: `Self-healing solver matched and scheduled ${matched} makeup slot(s) with zero constraint conflicts.`,
-          timestamp: 'Just now',
+          message: `The schedule optimizer placed ${matched} makeup slot(s) without constraint conflicts.`,
+          timestamp: new Date().toISOString(),
           read: false,
           category: 'Success',
         },
@@ -2487,7 +2493,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         type: 'makeup_request',
         title: `Substitute Cover Requested (${course?.code || courseId})`,
         message: `Requested ${substitute?.name || 'Faculty Member'} to cover ${day} slot for ${sectionId}.`,
-        timestamp: 'Just now',
+        timestamp: new Date().toISOString(),
         read: false,
         category: 'Info',
       },
@@ -2505,7 +2511,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         type: 'makeup_request',
         title: `Student Demand: Makeup Request (${course?.code || courseId})`,
         message: `${section?.name} Class Representative launched makeup petition. 47/52 students signed availability.`,
-        timestamp: 'Just now',
+        timestamp: new Date().toISOString(),
         read: false,
         category: 'Info',
         actionable: true,
@@ -2665,8 +2671,8 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         publishMasterTimetable,
         unpublishMasterTimetable,
         compareTimetableVersions,
-        activeVersionNumber: 1,
-        publishedSessions: publishStatus === 'Published' ? sessions : [],
+        activeVersionNumber: versions.find(version => version.isPublished || version.status === 'Published')?.versionNumber ?? versions[0]?.versionNumber ?? 1,
+        publishedSessions,
         refresh: async () => {},
         isLoading: false,
         loadError: null,

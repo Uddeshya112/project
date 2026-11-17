@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { useTimetable } from '../context/TimetableContext';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
-import { ThaparLogo } from './ThaparLogo';
 import { getUserInitials } from '../lib/userUtils';
 import { Sidebar } from './Sidebar';
 import { AcademicInboxModal } from './modals/AcademicInboxModal';
@@ -152,11 +151,11 @@ export function DashboardLayout({
   const getWorkspaceTitle = () => {
     switch (currentWorkspace) {
       case 'Student': return 'Student Portal';
-      case 'CR': return 'Class Representative Portal';
+      case 'CR': return 'Student Portal';
       case 'Faculty': return 'Faculty Portal';
-      case 'Coordinator': return 'Coordinator';
-      case 'Admin': return 'Operations & Governance';
-      case 'HOD': return 'Department Portal';
+      case 'Coordinator': return 'Coordinator Portal';
+      case 'Admin': return 'Admin Console';
+      case 'HOD': return 'HOD Portal';
     }
   };
 
@@ -164,7 +163,7 @@ export function DashboardLayout({
     <div className="min-h-screen bg-[#F7F6F2] dark:bg-[#0c0c0e] text-stone-900 dark:text-zinc-100 flex flex-col font-sans antialiased">
       {/* 1. Compact Enterprise Header */}
       <header className="h-12 bg-[#FAF9F5] dark:bg-zinc-900 border-b border-[#E5E2D9] dark:border-zinc-800 px-3 sm:px-5 flex items-center justify-between sticky top-0 z-30">
-        {/* Left: Mobile Drawer Trigger + Brand + Role Context */}
+        {/* Left: Mobile Drawer Trigger + Portal Context */}
         <div className="flex items-center gap-2.5">
           <button
             onClick={() => setIsMobileNavOpen(!isMobileNavOpen)}
@@ -174,27 +173,15 @@ export function DashboardLayout({
             <Menu className="h-4 w-4" />
           </button>
 
-          <div className="flex items-center gap-2">
-            <ThaparLogo size="sm" variant="mark-only" />
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs font-bold text-stone-900 dark:text-zinc-100 tracking-tight">
-                Thapar Timetable
-              </span>
-              {currentWorkspace !== 'Student' && (
-                <>
-                  <span className="text-stone-400 dark:text-zinc-600 text-xs">/</span>
-                  <span className="text-xs text-stone-600 dark:text-zinc-400 font-medium">
-                    {getWorkspaceTitle()}
-                  </span>
-                </>
-              )}
-            </div>
-          </div>
+          <span className="text-xs text-stone-600 dark:text-zinc-400 font-semibold">{getWorkspaceTitle()}</span>
         </div>
 
         {/* Right: Multi-Role Switcher + Theme Toggle + Notifications + User Profile */}
         <div className="flex items-center gap-2">
           {currentUser?.isDemoUser && (
+            <details className="relative">
+              <summary className="list-none cursor-pointer inline-flex items-center gap-1 rounded-md border border-[#E5E2D9] bg-white px-2 py-1 text-[10px] font-semibold text-stone-600 hover:text-[#8C1B2E] dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">Presentation controls <ChevronDown className="h-3 w-3" /></summary>
+              <div className="absolute right-0 mt-1 z-40 rounded-lg border border-[#E5E2D9] bg-white p-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
             <button
               type="button"
               disabled={resettingDemo}
@@ -210,11 +197,13 @@ export function DashboardLayout({
                   setResettingDemo(false);
                 }
               }}
-              className="inline-flex items-center gap-1 rounded-md border border-[#E5E2D9] bg-white px-2 py-1 text-[10px] font-semibold text-stone-600 hover:text-[#8C1B2E] disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+              className="inline-flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-[11px] font-semibold text-stone-600 hover:bg-stone-50 hover:text-[#8C1B2E] disabled:opacity-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
               title="Restore the shared demo dataset"
             >
               <RotateCcw className={`h-3 w-3 ${resettingDemo ? 'animate-spin' : ''}`} />{resettingDemo ? 'Resetting…' : 'Reset Demo'}
             </button>
+              </div>
+            </details>
           )}
           {/* Quick Workspace Switcher */}
           {authorizedWorkspaces.length > 1 && (

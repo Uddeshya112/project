@@ -72,7 +72,7 @@ export function GovernanceView() {
                         </span>
                       ) : null}
                     </div>
-                    <span className="text-xs font-mono text-emerald-700 dark:text-emerald-400 font-semibold">
+                    <span className={`text-xs font-mono font-semibold ${ver.healthScore >= 80 ? 'text-emerald-700 dark:text-emerald-400' : ver.healthScore >= 60 ? 'text-amber-700 dark:text-amber-400' : 'text-rose-700 dark:text-rose-400'}`}>
                       Health {ver.healthScore}%
                     </span>
                   </div>
@@ -98,7 +98,7 @@ export function GovernanceView() {
                           setRestoreState({ message: result.message || (result.success ? 'Version restored.' : 'Version could not be restored.'), error: !result.success });
                           setRestoring(null);
                         }}
-                        className="flex items-center gap-1 text-xs text-[#8C1B2E] hover:text-[#731625] dark:text-red-400 font-semibold transition-colors"
+                        className="flex shrink-0 items-center gap-1 whitespace-nowrap text-xs text-[#8C1B2E] hover:text-[#731625] dark:text-red-400 font-semibold transition-colors"
                       >
                         <RotateCcw className="h-3 w-3" />
                         <span>{restoring === ver.versionNumber ? 'Restoring…' : 'Restore This Version'}</span>

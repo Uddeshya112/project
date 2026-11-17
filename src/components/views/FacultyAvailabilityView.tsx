@@ -29,7 +29,7 @@ export function FacultyAvailabilityView() {
 
   return <section className="mx-auto max-w-7xl space-y-5">
     <header className="flex flex-col gap-3 border-b border-[#E5E2D9] pb-4 sm:flex-row sm:items-end sm:justify-between dark:border-zinc-800">
-      <div><h1 className="font-serif text-2xl font-bold text-stone-900 dark:text-zinc-100">My Availability</h1><p className="mt-1 text-sm text-stone-500 dark:text-zinc-400">Choose periods to keep free. Changes are saved to the timetable database.</p></div>
+      <div><h1 className="font-serif text-2xl font-bold text-stone-900 dark:text-zinc-100">My Availability</h1><p className="mt-1 text-sm text-stone-500 dark:text-zinc-400">Manage periods when you are unavailable for teaching.</p></div>
       <label className="flex items-center gap-2 text-xs text-stone-600 dark:text-zinc-300">Reason
         <select value={reason} onChange={(event) => setReason(event.target.value as typeof reason)} className="rounded-lg border border-[#E5E2D9] bg-white px-2.5 py-2 dark:border-zinc-700 dark:bg-zinc-900">
           <option>Personal</option><option>Research</option><option>Department</option><option>Meeting</option>
@@ -41,7 +41,7 @@ export function FacultyAvailabilityView() {
       <table className="w-full min-w-[760px] border-collapse text-left text-xs">
         <thead className="bg-[#FAF9F5] dark:bg-zinc-900"><tr><th className="p-3">Period</th>{academicYear.workingDays.map((day) => <th key={day} className="p-3">{day}</th>)}</tr></thead>
         <tbody>{academicYear.timeSlots.filter((slot) => !slot.isBreak && !slot.isLunch && slot.id !== academicYear.lunchPeriodId).map((slot) => <tr key={slot.id} className="border-t border-[#E5E2D9] dark:border-zinc-800">
-          <th className="p-3 font-medium">{slot.label}<span className="block text-[10px] font-normal text-stone-500">{slot.startTime}–{slot.endTime}</span></th>
+          <th className="p-3 font-medium">Period {slot.periodNumber}<span className="block text-[10px] font-normal text-stone-500">{slot.startTime}–{slot.endTime}</span></th>
           {academicYear.workingDays.map((day) => {
             const protectedSlot = faculty.preferences.protectedSlots.find((item) => item.day === day && item.periodId === slot.id);
             const key = `${day}:${slot.id}`;

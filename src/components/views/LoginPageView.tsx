@@ -82,6 +82,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
 
   // Status & Loading States
   const [isLoading, setIsLoading] = useState(false);
+  const [isResendingVerification, setIsResendingVerification] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [googleConfigured, setGoogleConfigured] = useState(false);
   const [demoRoleLoading, setDemoRoleLoading] = useState<string | null>(null);
@@ -113,7 +114,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
       const res = await loginAsDemoRole(roleKey);
       setDemoRoleLoading(null);
       if (res.success && res.authorizedWorkspaces) {
-        setSuccessMessage(`Authenticated as ${roleKey} (Public Demo)`);
+        setSuccessMessage(`Authenticated as ${roleKey} presentation account`);
         onSuccessLogin?.(res.authorizedWorkspaces);
       } else {
         setErrorMessage(res.message || 'Failed to authenticate demo account.');
@@ -398,6 +399,25 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
     }
   };
 
+  const handleResendVerification = async () => {
+    const verificationEmail = registeredEmail || loginEmail.trim();
+    if (!verificationEmail || isResendingVerification) return;
+    setIsResendingVerification(true);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    try {
+      const result = await apiFetch<{ success: boolean; message?: string }>('/api/auth/resend-verification', {
+        method: 'POST',
+        body: JSON.stringify({ email: verificationEmail }),
+      });
+      setSuccessMessage(result.message || 'If your account is still pending, a new verification link has been sent.');
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Could not resend the verification email.');
+    } finally {
+      setIsResendingVerification(false);
+    }
+  };
+
   /**
    * Handle Forgot Password Submit (Step 1: Request OTP)
    */
@@ -592,7 +612,10 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
             className="mb-4 p-3 bg-rose-50/80 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900/60 rounded-xl text-rose-800 dark:text-rose-300 text-xs flex items-start gap-2.5 shadow-2xs"
           >
             <AlertCircle className="h-4 w-4 shrink-0 text-[#8C1B2E] dark:text-red-400 mt-0.5" />
-            <span className="leading-relaxed font-medium block">{errorMessage}</span>
+            <div className="leading-relaxed font-medium">
+              <span>{errorMessage}</span>
+              {errorMessage.includes('waiting for email verification') && <button type="button" onClick={() => void handleResendVerification()} disabled={isResendingVerification} className="ml-1 underline disabled:opacity-50">{isResendingVerification ? 'Sending…' : 'Resend verification email'}</button>}
+            </div>
           </div>
         )}
 
@@ -765,15 +788,12 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
             </button>
             </>}
 
-            {/* Demo access section */}
+            {/* Presentation role switcher */}
             <div className="mt-6 pt-5 border-t border-[#E5E2D9] dark:border-zinc-800/80">
               <div className="flex items-center justify-between mb-2.5">
                 <div className="flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                  <span className="text-xs font-semibold text-stone-800 dark:text-zinc-200">Demo access</span>
-                  <span className="text-[10px] text-amber-700 dark:text-amber-400 font-mono bg-amber-50 dark:bg-amber-950/40 px-1.5 py-0.5 rounded border border-amber-200 dark:border-amber-900/40">
-                    Public Demo
-                  </span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-stone-400" />
+                  <span className="text-xs font-semibold text-stone-800 dark:text-zinc-200">Presentation Role Switcher</span>
                 </div>
                 <button
                   type="button"
@@ -783,10 +803,6 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
                   Account details
                 </button>
               </div>
-              <p className="text-[11px] text-stone-500 dark:text-zinc-400 mb-3 leading-relaxed">
-                Demo account — data is for testing only. Click a role to authenticate immediately:
-              </p>
-
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <button
                   type="button"
@@ -860,7 +876,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
                   type="button"
                   onClick={() => handleDemoLoginClick('HOD')}
                   disabled={Boolean(demoRoleLoading) || isLoading || isGoogleLoading}
-                  className="sm:col-span-2 p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-850 active:bg-stone-100 disabled:opacity-50 text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs"
+                  className="p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-850 active:bg-stone-100 disabled:opacity-50 text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs"
                 >
                   <div className="flex items-center justify-between w-full">
                     <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white transition-colors">Continue as HOD</span>
@@ -1123,7 +1139,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
                 Your account has been created successfully.
               </p>
               <p className="text-xs text-stone-500 dark:text-zinc-400 leading-relaxed max-w-sm mx-auto pt-1">
-                Please verify your email address (if confirmation is required), then sign in using your email and password.
+                Open the verification link sent to your email, then sign in using the same email and password.
               </p>
             </div>
 
@@ -1132,6 +1148,13 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
                 {registeredEmail}
               </div>
             )}
+
+            {errorMessage && <p role="alert" className="text-xs text-rose-700 dark:text-rose-300">{errorMessage}</p>}
+            {successMessage && <p role="status" className="text-xs text-emerald-700 dark:text-emerald-300">{successMessage}</p>}
+
+            <button type="button" onClick={() => void handleResendVerification()} disabled={isResendingVerification || !registeredEmail} className="w-full rounded-lg border border-[#E5E2D9] px-3 py-2 text-xs font-semibold text-stone-700 hover:border-[#8C1B2E] disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300">
+              {isResendingVerification ? 'Sending…' : 'Resend verification email'}
+            </button>
 
             <button
               type="button"
@@ -1472,7 +1495,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
 
       {/* Production Footer Note */}
       <div className="mt-6 text-center text-xs text-stone-500 dark:text-zinc-500">
-        Thapar Institute of Engineering & Technology · Unofficial demo
+        Thapar Institute of Engineering & Technology · Academic Timetable Portal
       </div>
 
       {/* Demo Information Modal */}
@@ -1483,7 +1506,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
               <div className="flex items-center gap-2">
                 <ShieldCheck className="h-5 w-5 text-amber-600 dark:text-amber-400" />
                 <div>
-                  <h3 className="text-sm font-bold font-serif text-stone-900 dark:text-zinc-100">Public Demo Directory</h3>
+                  <h3 className="text-sm font-bold font-serif text-stone-900 dark:text-zinc-100">Presentation Accounts</h3>
                   <p className="text-[11px] text-stone-500 dark:text-zinc-400">Pre-seeded accounts for independent review</p>
                 </div>
               </div>
@@ -1540,7 +1563,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
               </div>
 
               <div className="text-[11px] text-stone-500 dark:text-zinc-500 leading-relaxed border-t border-[#E5E2D9] dark:border-zinc-800/60 pt-2.5">
-                🔒 Security Note: Demo accounts use the application's real bcrypt password hashing and server-authoritative RBAC. Data modifications can be reverted anytime with the <strong className="text-stone-700 dark:text-zinc-400">Reset Demo Data</strong> button in the top navigation bar.
+                🔒 Security Note: Presentation accounts use the application's server-authoritative role permissions. Changes can be reverted from the Presentation controls menu.
               </div>
             </div>
 

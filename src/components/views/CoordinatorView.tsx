@@ -267,10 +267,10 @@ export function CoordinatorView() {
       {/* 2. Header */}
       <div className="border-b border-[#E5E2D9] dark:border-zinc-800 pb-2.5">
         <h1 className="text-2xl font-bold font-serif text-stone-900 dark:text-zinc-100 tracking-tight">
-          Coordinator Timetable Portal
+          Coordinator Portal
         </h1>
         <p className="text-xs text-stone-500 dark:text-zinc-400 mt-0.5">
-          Thapar Institute of Engineering & Technology — Academic Schedule Command
+          Thapar Institute of Engineering & Technology — Academic Operations
         </p>
       </div>
 
@@ -494,7 +494,6 @@ export function CoordinatorView() {
                       </>
                     ) : (
                       <>
-                        <Sparkles className="h-4 w-4 text-amber-300" />
                         <span>Generate New Draft</span>
                       </>
                     )}
@@ -512,7 +511,6 @@ export function CoordinatorView() {
                       </>
                     ) : (
                       <>
-                        <Sparkles className="h-4 w-4 text-amber-300" />
                         <span>Generate Timetable</span>
                       </>
                     )}
