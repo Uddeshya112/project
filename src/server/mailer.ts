@@ -17,6 +17,10 @@ export function checkMailerConfiguration() {
   }
 }
 
+export function hasMailerConfiguration(): boolean {
+  return Boolean(process.env.SMTP_URL || process.env.RESEND_API_KEY || process.env.MAILER_SERVICE_URL);
+}
+
 export async function sendEmail({
   to,
   subject,
@@ -48,63 +52,59 @@ export async function sendEmail({
     }
   }
 
-  // Send asynchronously
-  (async () => {
-    try {
-      if (smtpUrl) {
-        const transporter = nodemailer.createTransport(smtpUrl);
-        await transporter.sendMail({
-          from: process.env.SMTP_FROM || 'noreply@thapar.edu',
-          to,
-          subject,
-          text,
-          html,
-        });
-        return;
-      }
-
-      if (resendApiKey) {
-        const res = await fetch('https://api.resend.com/emails', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${resendApiKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            from: process.env.RESEND_FROM || 'noreply@thapar.edu',
-            to: [to],
-            subject,
-            html: html || text,
-            text,
-          }),
-        });
-        if (!res.ok) {
-          const errText = await res.text();
-          console.error('[MAILER RESEND ERROR] Failed to send email:', errText);
-        }
-        return;
-      }
-
-      if (mailerServiceUrl) {
-        const res = await fetch(mailerServiceUrl, {
-          method: 'POST',
-          headers: {
-            'Authorization': mailerServiceToken ? `Bearer ${mailerServiceToken}` : '',
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ to, subject, html, text }),
-        });
-        if (!res.ok) {
-          console.error('[MAILER SERVICE ERROR] Failed to send email via service URL.');
-        }
-        return;
-      }
-    } catch (err: any) {
-      console.error('[MAILER ERROR] Exception while sending email:', err?.message || err);
+  try {
+    if (smtpUrl) {
+      const transporter = nodemailer.createTransport(smtpUrl);
+      await transporter.sendMail({
+        from: process.env.SMTP_FROM || 'noreply@thapar.edu',
+        to,
+        subject,
+        text,
+        html,
+      });
+      return true;
     }
-  })().catch(err => {
-    console.error('[MAILER ERROR] Background email dispatch error:', err);
-  });
 
-  return true;
+    if (resendApiKey) {
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${resendApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: process.env.RESEND_FROM || 'noreply@thapar.edu',
+          to: [to],
+          subject,
+          html: html || text,
+          text,
+        }),
+      });
+      if (!res.ok) {
+        console.error('[MAILER RESEND ERROR] Provider rejected an email with status', res.status);
+        return false;
+      }
+      return true;
+    }
+
+    if (mailerServiceUrl) {
+      const res = await fetch(mailerServiceUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': mailerServiceToken ? `Bearer ${mailerServiceToken}` : '',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ to, subject, html, text }),
+      });
+      if (!res.ok) {
+        console.error('[MAILER SERVICE ERROR] Provider rejected an email with status', res.status);
+        return false;
+      }
+      return true;
+    }
+    return false;
+  } catch (err: any) {
+    console.error('[MAILER ERROR] Email dispatch failed:', err?.message || err);
+    return false;
+  }
 }
