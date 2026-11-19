@@ -34,6 +34,7 @@ export interface PendingRegistration {
   roleName: string;
   department: string;
   createdAt: string;
+  status?: 'PENDING';
 }
 
 export interface RateLimitRecord {

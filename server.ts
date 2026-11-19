@@ -191,6 +191,11 @@ app.use('/api', (req: Request, res: Response, next: NextFunction) => {
   });
 });
 const connectSources = ["'self'"];
+const allowLocalViteDev = process.env.NODE_ENV !== 'production' && !process.env.RENDER && !process.env.VERCEL;
+if (allowLocalViteDev) {
+  // Vite's React refresh preamble is inline, and its HMR client uses a separate loopback WebSocket port.
+  connectSources.push('ws://localhost:*', 'ws://127.0.0.1:*');
+}
 const configuredSupabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
 if (configuredSupabaseUrl) {
   try {
@@ -207,7 +212,7 @@ app.use(
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        scriptSrc: ["'self'"],
+        scriptSrc: ["'self'", ...(allowLocalViteDev ? ["'unsafe-inline'"] : [])],
         styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
         imgSrc: ["'self'", "data:", "blob:", "https://images.unsplash.com"],
         // Explicit allow-list; custom API hosts can be added via CSP_CONNECT_SRC.
@@ -318,7 +323,7 @@ interface StoredUser {
   institutionId: string;
   institutionName: string;
   department: string;
-  status: 'ACTIVE' | 'LOCKED';
+  status: 'ACTIVE' | 'LOCKED' | 'PENDING';
   createdAt: string;
   authorizedWorkspaces?: WorkspaceType[];
   isDemoUser?: boolean;
@@ -338,6 +343,7 @@ export interface PendingRegistration {
   roleName: string;
   department: string;
   createdAt: string;
+  status?: 'PENDING';
 }
 
 export type OneTimeTokenPurpose = 'email_verification' | 'password_reset';
@@ -652,7 +658,7 @@ async function loadPersistedUsers() {
       institutionId: existing?.institutionId || 'inst-thapar',
       institutionName: existing?.institutionName || 'Thapar Institute of Engineering and Technology',
       department: String(row.department || existing?.department || ''),
-      status: row.status === 'LOCKED' ? 'LOCKED' : 'ACTIVE',
+      status: row.status === 'LOCKED' ? 'LOCKED' : row.status === 'PENDING' ? 'PENDING' : 'ACTIVE',
       createdAt: new Date(row.created_at || existing?.createdAt || Date.now()).toISOString(),
       authorizedWorkspaces: existing?.authorizedWorkspaces,
       isDemoUser: Boolean(row.is_demo),
@@ -935,10 +941,16 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
 
   let user = usersDatabase.get(normalizedEmail);
 
-  if (!user && pendingRegistrationsDatabase.has(normalizedEmail)) {
-    return res.status(401).json({
+  if (pendingRegistrationsDatabase.has(normalizedEmail)) {
+    const pending = pendingRegistrationsDatabase.get(normalizedEmail)!;
+    const passwordCheck = await verifyPassword(String(password), pending.passwordHash);
+    if (!passwordCheck.isValid) {
+      return res.status(401).json({ success: false, message: 'Invalid institutional credentials. Please check your email and password.' });
+    }
+    return res.status(403).json({
       success: false,
-      message: 'Invalid institutional credentials. Please check your email and password.',
+      error: 'ACCOUNT_PENDING_APPROVAL',
+      message: 'Waiting for Admin Approval. Your account will be available after an administrator approves your request.',
     });
   }
 
@@ -950,6 +962,9 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
       });
     }
 
+    if (user.status === 'PENDING') {
+      return res.status(403).json({ success: false, error: 'ACCOUNT_PENDING_APPROVAL', message: 'Waiting for Admin Approval. Your account will be available after an administrator approves your request.' });
+    }
     if (user.status === 'LOCKED') {
       return res.status(403).json({
         success: false,
@@ -1097,6 +1112,13 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
       user.id = authUser.id;
     }
 
+    if (user.status === 'PENDING') {
+      return res.status(403).json({ success: false, error: 'ACCOUNT_PENDING_APPROVAL', message: 'Waiting for Admin Approval. Your account will be available after an administrator approves your request.' });
+    }
+    if (user.status === 'LOCKED') {
+      return res.status(403).json({ success: false, message: 'This account has been administratively locked. Contact Dean of Academic Affairs.' });
+    }
+
     user.lastLoginAt = new Date().toISOString();
     try {
       await persistUserRecord(user);
@@ -1180,6 +1202,9 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
     });
   }
 
+  if (user.status === 'PENDING') {
+    return res.status(403).json({ success: false, error: 'ACCOUNT_PENDING_APPROVAL', message: 'Waiting for Admin Approval. Your account will be available after an administrator approves your request.' });
+  }
   if (user.status === 'LOCKED') {
     return res.status(403).json({
       success: false,
@@ -1677,6 +1702,20 @@ app.post('/api/academic/faculty/:id/availability', requireAuth, requireRole(['FA
   if (req.authenticatedUser?.roleCode === 'FACULTY' && ownFacultyId !== facultyId) {
     return res.status(403).json({ success: false, message: 'Faculty may only update their own availability.' });
   }
+  const state = supabaseStore.getBootstrapState();
+  const timeSlots = state.academicYear?.timeSlots || [];
+  const periodIndex = timeSlots.findIndex((slot: any) => slot.id === periodId);
+  const overlapsScheduledClass = (state.sessions || []).some((session: any) => {
+    if (session.facultyId !== facultyId || session.day !== day || session.status === 'Cancelled') return false;
+    const startIndex = timeSlots.findIndex((slot: any) => slot.id === session.timeSlotId);
+    const duration = Math.max(1, Number(session.durationPeriods) || 1);
+    return periodIndex >= startIndex && periodIndex < startIndex + duration;
+  });
+  const alreadyProtected = (state.facultyMembers || []).find((item: any) => item.id === facultyId)
+    ?.preferences?.protectedSlots?.some((slot: any) => slot.day === day && slot.periodId === periodId);
+  if (!alreadyProtected && overlapsScheduledClass) {
+    return res.status(409).json({ success: false, message: 'This period contains a scheduled class and cannot be marked as available.' });
+  }
   const faculty = supabaseStore.toggleFacultyProtectedSlot(facultyId, day as DayOfWeek, periodId, reason);
   if (!faculty) return res.status(404).json({ success: false, message: 'Faculty record not found.' });
   return res.json({ success: true, faculty });
@@ -1698,6 +1737,7 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
   }
 
   const { name, email, password } = req.body;
+  const requestedRoleCode = String(req.body?.roleCode || 'STUDENT') as RoleCode;
 
   if (!name || !email || !password) {
     return res.status(400).json({
@@ -1725,6 +1765,10 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
     });
   }
 
+  if (!['STUDENT', 'FACULTY', 'COORDINATOR'].includes(requestedRoleCode)) {
+    return res.status(400).json({ success: false, message: 'Choose Student, Faculty, or Coordinator as the requested role.' });
+  }
+
   // Require allowed email domain
   const allowedDomains = (process.env.ALLOWED_EMAIL_DOMAINS || 'thapar.edu')
     .split(',')
@@ -1750,42 +1794,7 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
     });
   }
 
-  // Default to lowest role (STUDENT), never FACULTY.
-  // Only emails in an admin-managed allowlist (role_assignments table) may receive staff roles.
-  let roleCode: RoleCode = 'STUDENT';
-  let roleName = 'Student';
-  let department = 'Computer Science and Engineering (CSED)';
-
-  if (supabaseAdmin) {
-    try {
-      const { data: assignment } = await supabaseAdmin
-        .from('role_assignments')
-        .select('role_code, role_name, department')
-        .eq('email', normalizedEmail)
-        .maybeSingle();
-
-      if (assignment?.role_code) {
-        roleCode = assignment.role_code as RoleCode;
-        roleName = assignment.role_name || (roleCode === 'COORDINATOR' ? 'Timetable Coordinator' : roleCode === 'FACULTY' ? 'Faculty Member' : 'Student');
-        if (assignment.department) {
-          department = assignment.department;
-        }
-      }
-    } catch (err: any) {
-      console.warn('[REGISTRATION] Error querying role_assignments:', err?.message || err);
-    }
-  } else {
-    const preStaff = PRE_AUTHORIZED_STAFF[normalizedEmail];
-    if (preStaff) {
-      roleCode = preStaff.roleCode;
-      roleName = preStaff.roleName;
-      department = preStaff.department;
-    }
-  }
-
   if (usersDatabase.has(normalizedEmail)) {
-    // Keep duplicate-signup responses generic while never allowing a second
-    // registration attempt to replace an existing account's password.
     return res.status(201).json({
       success: true,
       message: 'If this email already has an account, sign in with the existing password or use Forgot Password.',
@@ -1793,251 +1802,46 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
       requiresLogin: true,
     });
   }
+  if (pendingRegistrationsDatabase.has(normalizedEmail)) {
+    return res.status(202).json({ success: true, status: 'PENDING', message: 'Your account request is already waiting for Admin Approval.', email: normalizedEmail, roleCode: pendingRegistrationsDatabase.get(normalizedEmail)?.roleCode });
+  }
 
-  const trimmedName = String(name).trim();
-  const user: StoredUser = {
-    id: 'usr_' + crypto.randomUUID(),
-    name: trimmedName,
+  const pending: PendingRegistration = {
+    id: 'preg_' + crypto.randomUUID(),
     email: normalizedEmail,
-    passwordHash: supabaseAdmin ? 'SUPABASE_AUTH_MANAGED' : hashPasswordBcryptSync(String(password)),
-    roleId: `role-${roleCode.toLowerCase()}`,
-    roleCode,
-    roleName,
-    institutionId: 'inst-thapar',
-    institutionName: 'Thapar Institute of Engineering and Technology',
-    department,
-    status: 'ACTIVE',
+    name: String(name).trim(),
+    passwordHash: hashPasswordBcryptSync(String(password)),
+    roleCode: requestedRoleCode,
+    roleName: ROLE_LABELS[requestedRoleCode],
+    department: 'Computer Science and Engineering (CSED)',
     createdAt: new Date().toISOString(),
-    emailVerified: true,
+    status: 'PENDING',
   };
-
-  let createdAuthUserId: string | null = null;
-  let persistedUserRecord = false;
   try {
-    if (supabaseAdmin) {
-      // Server-only Admin API creation bypasses the confirmation email. The
-      // public client and service key never leave this server process.
-      const { data, error } = await supabaseAdmin.auth.admin.createUser({
-        email: normalizedEmail,
-        password: String(password),
-        email_confirm: true,
-        user_metadata: { name: trimmedName },
-      });
-      if (error || !data.user) {
-        const duplicate = error?.code === 'email_exists' || error?.code === 'user_already_exists';
-        if (!duplicate) console.error('[REGISTRATION] Supabase account creation failed:', error?.code || 'unknown error');
-        return res.status(duplicate ? 201 : 503).json({
-          success: duplicate,
-          message: duplicate
-            ? 'If this email already has an account, sign in with the existing password or use Forgot Password.'
-            : 'Account creation is temporarily unavailable. Please try again shortly.',
-          email: normalizedEmail,
-          requiresLogin: duplicate,
-        });
-      }
-      user.id = data.user.id;
-      createdAuthUserId = data.user.id;
-    }
-
-    const authorizedWorkspaces = resolveWorkspacesForUser(user);
-    user.authorizedWorkspaces = authorizedWorkspaces;
-
-    // Insert (never upsert) so concurrent duplicate registrations cannot
-    // overwrite the first account's credentials.
-    await persistNewUserRecord(user);
-    persistedUserRecord = Boolean(academicDb);
-
-    if (supabaseAdmin) {
-      const { error } = await supabaseAdmin.from('profiles').upsert({
-        id: user.id,
-        email: normalizedEmail,
-        name: trimmedName,
-        institution_id: 'inst-thapar',
-        department,
-        role_code: roleCode,
-        role_name: roleName,
-        authorized_workspaces: authorizedWorkspaces,
-        is_demo_user: false,
-        status: 'ACTIVE',
-      });
-      if (error) throw new Error('Profile persistence failed.');
-    }
-
-    usersDatabase.set(normalizedEmail, user);
-    pendingRegistrationsDatabase.delete(normalizedEmail);
-    persistentStore.deletePendingRegistration(normalizedEmail);
-    persistentStore.invalidateUserTokens(normalizedEmail);
-
-    return res.status(201).json({
+    persistentStore.setPendingRegistration(normalizedEmail, pending);
+    await persistentStore.persistPendingRegistration(normalizedEmail);
+    return res.status(202).json({
       success: true,
-      message: 'Account created. You can now sign in with your email and password.',
+      status: 'PENDING',
+      message: 'Registration request submitted. Waiting for Admin Approval before you can sign in.',
       email: normalizedEmail,
-      user: {
-        id: user.id,
-        email: normalizedEmail,
-        name: trimmedName,
-        roleCode,
-        roleName,
-        department,
-        emailVerified: true,
-        authorizedWorkspaces,
-      },
-      requiresLogin: true,
+      roleCode: requestedRoleCode,
     });
   } catch (err) {
-    if (persistedUserRecord && academicDb) {
-      await academicDb.query('delete from intellischedule.users where email = $1', [normalizedEmail]).catch(() => []);
-    }
-    if (createdAuthUserId && supabaseAdmin) {
-      await supabaseAdmin.auth.admin.deleteUser(createdAuthUserId).catch(() => ({ error: null }));
-    }
-    const dbError = err as { code?: string };
-    if (dbError?.code === '23505') {
-      return res.status(201).json({
-        success: true,
-        message: 'If this email already has an account, sign in with the existing password or use Forgot Password.',
-        email: normalizedEmail,
-        requiresLogin: true,
-      });
-    }
-    console.error('[REGISTRATION] Could not persist account:', err instanceof Error ? err.message : 'unknown error');
-    return res.status(503).json({ success: false, message: 'Account could not be saved. Please try again.' });
+    persistentStore.deletePendingRegistration(normalizedEmail);
+    console.error('[REGISTRATION] Could not persist approval request:', err instanceof Error ? err.message : 'unknown error');
+    return res.status(503).json({ success: false, message: 'Registration request could not be saved. Please try again.' });
   }
 });
 
 // POST /api/auth/verify-email
 app.post('/api/auth/verify-email', async (req: Request, res: Response) => {
-  const { token } = req.body;
-  if (!token || typeof token !== 'string') {
-    return res.status(400).json({
-      success: false,
-      message: 'Verification token is required.',
-    });
-  }
-
-  const record = consumeOneTimeToken(token, 'email_verification');
-
-  if (!record) {
-    return res.status(400).json({
-      success: false,
-      message: 'Invalid or expired verification token.',
-    });
-  }
-  try {
-    await persistentStore.persistOneTimeToken(token);
-  } catch (err) {
-    console.error('[AUTH] Could not persist consumed verification token:', err instanceof Error ? err.message : 'unknown error');
-    return res.status(503).json({ success: false, message: 'Verification could not be completed. Please retry.' });
-  }
-
-  let user = usersDatabase.get(record.email);
-  const pending = pendingRegistrationsDatabase.get(record.email);
-
-  if (pending) {
-    user = {
-      id: 'usr_' + crypto.randomUUID(),
-      name: pending.name,
-      email: pending.email,
-      passwordHash: pending.passwordHash,
-      roleId: 'role-' + pending.roleCode.toLowerCase(),
-      roleCode: pending.roleCode as RoleCode,
-      roleName: pending.roleName,
-      institutionId: 'inst-thapar',
-      institutionName: 'Thapar Institute of Engineering and Technology',
-      department: pending.department,
-      status: 'ACTIVE',
-      createdAt: new Date().toISOString(),
-      emailVerified: true,
-      profile: {},
-    };
-    try {
-      await persistUserRecord(user);
-    } catch (err) {
-      console.error('[AUTH] Could not persist verified account:', err instanceof Error ? err.message : 'unknown error');
-      return res.status(503).json({ success: false, message: 'Your account could not be saved yet. Please retry verification.' });
-    }
-    usersDatabase.set(pending.email, user);
-    pendingRegistrationsDatabase.delete(pending.email);
-  } else if (user) {
-    user.emailVerified = true;
-    usersDatabase.set(record.email, user);
-  }
-
-  if (user && supabaseAdmin) {
-    try {
-      await supabaseAdmin.from('profiles').update({ email_verified: true }).eq('email', record.email);
-    } catch {}
-  }
-
-  return res.json({
-    success: true,
-    message: 'Email verified successfully. You can now sign in.',
-  });
+  return res.status(410).json({ success: false, error: 'ADMIN_APPROVAL_REQUIRED', message: 'Email verification has been replaced by Admin approval. Your request remains pending until an administrator reviews it.' });
 });
 
 // POST /api/auth/resend-verification
 app.post('/api/auth/resend-verification', async (req: Request, res: Response) => {
-  const clientIp = req.ip || req.socket.remoteAddress || '127.0.0.1';
-  const { email } = req.body;
-
-  if (!email) {
-    return res.status(400).json({
-      success: false,
-      message: 'Institutional email is required.',
-    });
-  }
-
-  const normalizedEmail = String(email).trim().toLowerCase();
-  const ipRate = checkRateLimit(`resend_ip_${clientIp}`, 10, 60000);
-  const emailRate = checkRateLimit(`resend_email_${normalizedEmail}`, 3, 60000);
-
-  if (ipRate.limited || emailRate.limited) {
-    return res.status(429).json({
-      success: false,
-      message: 'Too many verification requests. Please try again later.',
-    });
-  }
-
-  const user = usersDatabase.get(normalizedEmail);
-  const pending = pendingRegistrationsDatabase.get(normalizedEmail);
-  let rawToken: string | undefined = undefined;
-
-  const dummyToken = issueOneTimeToken(normalizedEmail, 'email_verification', 24 * 60 * 60 * 1000);
-
-  if ((user && user.emailVerified === false) || pending) {
-    rawToken = dummyToken.rawToken;
-    try {
-      await persistentStore.persistOneTimeToken(rawToken);
-    } catch (err) {
-      console.error('[REGISTRATION] Could not persist resend token:', err instanceof Error ? err.message : 'unknown error');
-      return res.status(503).json({ success: false, message: 'Verification email could not be prepared. Please retry.' });
-    }
-
-    const appUrl = (process.env.APP_URL || (process.env.NODE_ENV === 'production' ? 'https://tiet-timetable-six.vercel.app' : 'http://localhost:3000')).replace(/\/+$/, '');
-    const emailSent = await sendEmail({
-      to: normalizedEmail,
-      subject: 'Verify your IntelliSchedule account',
-      text: `Please verify your email address by clicking: ${appUrl}/verify-email#token=${rawToken}`,
-      html: `<p>Please verify your email address by clicking <a href="${appUrl}/verify-email#token=${rawToken}">here</a>.</p>`,
-    });
-    if (!emailSent) {
-      return res.status(503).json({ success: false, error: 'VERIFICATION_EMAIL_FAILED', message: 'The verification email could not be sent. Please try again later or contact the app administrator.' });
-    }
-  } else {
-    oneTimeTokensDatabase.delete(dummyToken.record.tokenHash);
-  }
-
-  const responseData: Record<string, any> = {
-    success: true,
-    message: 'If an unverified account exists with this email, a verification link has been sent.',
-  };
-
-  if (isTestTokenAllowed(req) && rawToken) {
-    responseData.verificationToken = rawToken;
-  }
-
-  await new Promise(resolve => setTimeout(resolve, AUTH_TIMING_FLOOR_MS));
-  return res.json(responseData);
+  return res.status(410).json({ success: false, error: 'ADMIN_APPROVAL_REQUIRED', message: 'Email verification is no longer used. Account requests are reviewed by an Admin.' });
 });
 
 // -------------------------------------------------------------
@@ -2534,7 +2338,7 @@ export async function authenticateRequestAsync(req: Request): Promise<{ user: St
   const session = persistentStore.getSession(token);
   if (session) {
     for (const user of usersDatabase.values()) {
-      if (user.id === session.userId) {
+      if (user.id === session.userId && user.status === 'ACTIVE') {
         return { user, session };
       }
     }
@@ -2598,7 +2402,7 @@ export async function authenticateRequestAsync(req: Request): Promise<{ user: St
           institutionId: profile?.institution_id || 'inst-thapar',
           institutionName: 'Thapar Institute of Engineering and Technology',
           department,
-          status: (profile?.status as any) || 'ACTIVE',
+          status: profile?.status === 'PENDING' ? 'PENDING' : profile?.status === 'LOCKED' ? 'LOCKED' : 'ACTIVE',
           createdAt: authUser.created_at || new Date().toISOString(),
           authorizedWorkspaces: profile?.authorized_workspaces || (roleCode === 'COORDINATOR' ? ['Coordinator', 'Faculty'] : [roleCode as any]),
           isDemoUser: Boolean(profile?.is_demo_user),
@@ -2608,6 +2412,8 @@ export async function authenticateRequestAsync(req: Request): Promise<{ user: St
         if (normalizedEmail) {
           usersDatabase.set(normalizedEmail, user);
         }
+
+        if (user.status !== 'ACTIVE') return null;
 
         return { user };
       }
@@ -2684,7 +2490,39 @@ export function requireRole(allowedRoles: RoleCode[]) {
 // SUPABASE-BACKED MASTER ACADEMIC & TIMETABLE API ENDPOINTS
 // -------------------------------------------------------------
 
-function sanitizeAcademicState(state: any, roleCode?: string) {
+function sanitizeAcademicState(state: any, roleCode?: string, user?: StoredUser) {
+  if (roleCode === 'HOD') {
+    const linkedFaculty = (state.facultyMembers || []).find((faculty: any) => faculty.id === user?.profile?.facultyId || faculty.email?.toLowerCase() === user?.email?.toLowerCase());
+    const departmentId = linkedFaculty?.departmentId || (state.departments || []).find((department: any) => department.id === user?.department || department.name === user?.department)?.id;
+    if (!departmentId) return { ...state, departments: [], programs: [], courses: [], facultyMembers: [], rooms: [], sections: [], students: [], allocations: [], constraints: [], sessions: [], publishedSessions: [], versions: [], notifications: [], polls: [], makeupTasks: [], recoveryOpportunities: [], auditLogs: [] };
+    const sectionIds = new Set((state.sections || []).filter((item: any) => item.departmentId === departmentId).map((item: any) => item.id));
+    const courseIds = new Set((state.courses || []).filter((item: any) => item.departmentId === departmentId).map((item: any) => item.id));
+    const facultyIds = new Set((state.facultyMembers || []).filter((item: any) => item.departmentId === departmentId).map((item: any) => item.id));
+    const scoped = (sessions: any[]) => (sessions || []).filter((item: any) => sectionIds.has(item.sectionId) || facultyIds.has(item.facultyId));
+    return {
+      ...state,
+      departments: (state.departments || []).filter((item: any) => item.id === departmentId),
+      programs: (state.programs || []).filter((item: any) => item.departmentId === departmentId),
+      courses: (state.courses || []).filter((item: any) => courseIds.has(item.id)),
+      facultyMembers: (state.facultyMembers || []).filter((item: any) => facultyIds.has(item.id)),
+      sections: (state.sections || []).filter((item: any) => sectionIds.has(item.id)),
+      students: (state.students || []).filter((item: any) => sectionIds.has(item.sectionId)),
+      allocations: (state.allocations || []).filter((item: any) => sectionIds.has(item.sectionId) && courseIds.has(item.courseId)),
+      sessions: scoped(state.sessions), publishedSessions: scoped(state.publishedSessions),
+      versions: (state.versions || []).map((version: any) => ({ ...version, sessions: scoped(version.sessions || []) })),
+      polls: (state.polls || []).filter((item: any) => sectionIds.has(item.sectionId)),
+      makeupTasks: (state.makeupTasks || []).filter((item: any) => sectionIds.has(item.sectionId)),
+      recoveryOpportunities: (state.recoveryOpportunities || []).filter((item: any) => sectionIds.has(item.sectionId)),
+      notifications: (state.notifications || []).filter((item: any) => !item.actionPayload?.sectionId || sectionIds.has(item.actionPayload.sectionId)),
+      auditLogs: (state.auditLogs || []).filter((log: any) =>
+        (log.entityType === 'DepartmentTimetable' && String(log.entityId).startsWith(`${departmentId}:`)) ||
+        (log.entityType === 'ClassSession' && (state.sessions || []).some((session: any) => session.id === log.entityId && (sectionIds.has(session.sectionId) || facultyIds.has(session.facultyId)))) ||
+        (log.entityType === 'Faculty' && facultyIds.has(log.entityId)) ||
+        (log.entityType === 'StudentSection' && sectionIds.has(log.entityId)) ||
+        (log.entityType === 'Course' && courseIds.has(log.entityId))
+      ),
+    };
+  }
   if (roleCode !== 'STUDENT' && roleCode !== 'CLASS_REPRESENTATIVE') return state;
   return {
     ...state,
@@ -2707,10 +2545,11 @@ app.get('/api/academic/bootstrap', requireAuth, (req: AuthenticatedRequest, res:
     const sectionId = req.authenticatedUser?.profile?.sectionId || student?.sectionId;
     state.polls = state.polls.filter((poll: any) => poll.sectionId === sectionId);
     state.notifications = state.notifications.filter((item: any) =>
-      !['cancellation', 'poll_created'].includes(item.type) || item.actionPayload?.sectionId === sectionId,
+      !/master academic dataset persisted/i.test(`${item.title || ''} ${item.message || ''}`) &&
+      (!['cancellation', 'poll_created'].includes(item.type) || item.actionPayload?.sectionId === sectionId),
     );
   }
-  const sanitized = sanitizeAcademicState(state, req.authenticatedUser?.roleCode);
+  const sanitized = sanitizeAcademicState(state, req.authenticatedUser?.roleCode, req.authenticatedUser);
   return res.json({
     success: true,
     ...sanitized,
@@ -2719,13 +2558,20 @@ app.get('/api/academic/bootstrap', requireAuth, (req: AuthenticatedRequest, res:
 });
 
 // Paginated Students Query Endpoint
-app.get('/api/students', requireAuth, requireRole(['SUPER_ADMIN', 'COLLEGE_ADMIN', 'COORDINATOR', 'HOD']), (req: Request, res: Response) => {
+app.get('/api/students', requireAuth, requireRole(['SUPER_ADMIN', 'COLLEGE_ADMIN', 'COORDINATOR', 'HOD']), (req: AuthenticatedRequest, res: Response) => {
   const page = parseInt(req.query.page as string) || 1;
   const limit = Math.min(100, parseInt(req.query.limit as string) || 20);
   const search = (req.query.search as string) || '';
   const sectionId = (req.query.sectionId as string) || '';
 
-  const result = supabaseStore.queryStudents(page, limit, search, sectionId);
+  let departmentId: string | undefined;
+  if (req.authenticatedUser?.roleCode === 'HOD') {
+    const state = supabaseStore.getBootstrapState();
+    const linkedFaculty = (state.facultyMembers || []).find((faculty: any) => faculty.id === req.authenticatedUser?.profile?.facultyId || faculty.email?.toLowerCase() === req.authenticatedUser?.email.toLowerCase());
+    departmentId = linkedFaculty?.departmentId || (state.departments || []).find((department: any) => department.id === req.authenticatedUser?.department || department.name === req.authenticatedUser?.department)?.id;
+    if (!departmentId) return res.status(403).json({ success: false, message: 'HOD account is not linked to a department.' });
+  }
+  const result = supabaseStore.queryStudents(page, limit, search, sectionId, departmentId);
   return res.json({
     success: true,
     ...result,
@@ -2926,7 +2772,7 @@ app.post('/api/academic/faculty', requireAuth, requireRole(['COORDINATOR', 'COLL
         departmentId: departmentId || 'dept-cse',
         designation: designation || 'Assistant Professor',
         subjectsQualified: Array.isArray(subjectsQualified) ? subjectsQualified : ['CS501'],
-        maxDirectTeachingHours: Number(maxDirectTeachingHours) || 14,
+        maxDirectTeachingHours: designation === 'Assistant Professor' ? 16 : designation === 'Visiting Faculty' ? (Number(maxDirectTeachingHours) || 14) : 14,
         weeklyHoursLimit: 40,
         preferences: preferences || {
           preferredDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
@@ -3561,6 +3407,20 @@ app.post('/api/recovery/cancel-class', requireAuth, requireRole(['FACULTY', 'COO
   });
 });
 
+app.post('/api/recovery/undo-cancel', requireAuth, requireRole(['FACULTY', 'COORDINATOR', 'COLLEGE_ADMIN', 'HOD', 'SUPER_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
+  const sessionId = String(req.body?.sessionId || '');
+  const user = req.authenticatedUser;
+  const state = supabaseStore.getBootstrapState();
+  const session = (state.sessions || []).find((item: any) => item.id === sessionId && item.status === 'Cancelled');
+  if (!session) return res.status(404).json({ success: false, message: 'Cancelled class was not found.' });
+  if (user?.roleCode === 'FACULTY') {
+    const faculty = (state.facultyMembers || []).find((item: any) => item.email?.toLowerCase() === user.email.toLowerCase() || item.id === user.profile?.facultyId);
+    if (!faculty || session.facultyId !== faculty.id) return res.status(403).json({ success: false, message: 'Faculty may only undo cancellations for their own classes.' });
+  }
+  const success = supabaseStore.undoClassCancellation(sessionId, user?.name);
+  return success ? res.json({ success: true }) : res.status(409).json({ success: false, message: 'Cancellation could not be reversed.' });
+});
+
 app.post('/api/recovery/request-change', requireAuth, requireRole(['FACULTY', 'HOD']), (req: AuthenticatedRequest, res: Response) => {
   const sessionId = String(req.body?.sessionId || '');
   const details = String(req.body?.details || '').trim();
@@ -3779,6 +3639,7 @@ app.get('/api/notifications', requireAuth, (req: AuthenticatedRequest, res: Resp
   const userId = user.id;
 
   const filtered = state.notifications.filter((n: any) => {
+    if (['STUDENT', 'CLASS_REPRESENTATIVE'].includes(userRole) && /master academic dataset persisted/i.test(`${n.title || ''} ${n.message || ''}`)) return false;
     if (n.userId && n.userId === userId) return true;
     if (!n.recipientRole || n.recipientRole === 'ALL' || n.recipientRole === '*') return true;
     if (n.recipientRole === userRole || n.recipientRole === userDashboardRole) return true;
@@ -3849,9 +3710,26 @@ function redactAuditLog(log: any): any {
 }
 
 // Immutable Audit Events (Redacted for Security & Privacy)
-app.get('/api/audit', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN', 'HOD']), (_req: Request, res: Response) => {
+app.get('/api/audit', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN', 'HOD']), (req: AuthenticatedRequest, res: Response) => {
   const state = supabaseStore.getBootstrapState();
-  const sanitizedLogs = (state.auditLogs || []).map(redactAuditLog);
+  let logs = state.auditLogs || [];
+  if (req.authenticatedUser?.roleCode === 'HOD') {
+    const linkedFaculty = (state.facultyMembers || []).find((faculty: any) => faculty.id === req.authenticatedUser?.profile?.facultyId || faculty.email?.toLowerCase() === req.authenticatedUser?.email.toLowerCase());
+    const departmentId = linkedFaculty?.departmentId || (state.departments || []).find((department: any) => department.id === req.authenticatedUser?.department || department.name === req.authenticatedUser?.department)?.id;
+    if (!departmentId) return res.status(403).json({ success: false, message: 'HOD account is not linked to a department.' });
+    const facultyIds = new Set((state.facultyMembers || []).filter((faculty: any) => faculty.departmentId === departmentId).map((faculty: any) => faculty.id));
+    const sectionIds = new Set((state.sections || []).filter((section: any) => section.departmentId === departmentId).map((section: any) => section.id));
+    const sessionIds = new Set((state.sessions || []).filter((session: any) => sectionIds.has(session.sectionId) || facultyIds.has(session.facultyId)).map((session: any) => session.id));
+    const courseIds = new Set((state.courses || []).filter((course: any) => course.departmentId === departmentId).map((course: any) => course.id));
+    logs = logs.filter((log: any) =>
+      (log.entityType === 'DepartmentTimetable' && String(log.entityId).startsWith(`${departmentId}:`)) ||
+      (log.entityType === 'ClassSession' && sessionIds.has(log.entityId)) ||
+      (log.entityType === 'Faculty' && facultyIds.has(log.entityId)) ||
+      (log.entityType === 'StudentSection' && sectionIds.has(log.entityId)) ||
+      (log.entityType === 'Course' && courseIds.has(log.entityId))
+    );
+  }
+  const sanitizedLogs = logs.map(redactAuditLog);
   return res.json({ success: true, auditLogs: sanitizedLogs });
 });
 
@@ -3885,6 +3763,57 @@ function adminUserView(user: StoredUser, extra: Record<string, any> = {}) {
   };
 }
 
+app.get('/api/admin/pending-registrations', requireAuth, requireRole(ADMIN_ROLES), (req: AuthenticatedRequest, res: Response) => {
+  const search = String(req.query.search ?? '').trim().toLowerCase();
+  const registrations = [...pendingRegistrationsDatabase.values()]
+    .filter((item) => !search || item.email.includes(search) || item.name.toLowerCase().includes(search))
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    .map((item) => ({ id: item.id, email: item.email, name: item.name, requestedRoleCode: item.roleCode, createdAt: item.createdAt, status: 'PENDING' as const }));
+  return res.json({ success: true, total: registrations.length, registrations });
+});
+
+app.post('/api/admin/pending-registrations/:email/approve', requireAuth, requireRole(ADMIN_ROLES), async (req: AuthenticatedRequest, res: Response) => {
+  const email = decodeURIComponent(String(req.params.email)).trim().toLowerCase();
+  const pending = pendingRegistrationsDatabase.get(email);
+  if (!pending) return res.status(404).json({ success: false, message: 'Pending registration not found.' });
+  if (usersDatabase.has(email)) return res.status(409).json({ success: false, message: 'An account already exists for this email.' });
+
+  const roleCode = String(req.body?.roleCode || pending.roleCode) as RoleCode;
+  if (!['STUDENT', 'FACULTY', 'COORDINATOR'].includes(roleCode)) {
+    return res.status(400).json({ success: false, message: 'Select a valid approved role.' });
+  }
+  const roleName = ROLE_LABELS[roleCode];
+  const user: StoredUser = {
+    id: 'usr_' + crypto.randomUUID(), name: pending.name, email, passwordHash: pending.passwordHash,
+    roleId: `role-${roleCode.toLowerCase()}`, roleCode, roleName,
+    institutionId: 'inst-thapar', institutionName: 'Thapar Institute of Engineering and Technology',
+    department: pending.department, status: 'ACTIVE', createdAt: pending.createdAt, emailVerified: true,
+    profile: { requestedRoleCode: pending.roleCode, approvedBy: req.authenticatedUser?.id },
+  };
+
+  try {
+    await persistNewUserRecord(user);
+  } catch (err) {
+    const dbError = err as { code?: string };
+    if (dbError?.code === '23505') return res.status(409).json({ success: false, message: 'An account already exists for this email.' });
+    console.error('[ADMIN] Could not persist approved registration:', err instanceof Error ? err.message : 'unknown error');
+    return res.status(503).json({ success: false, message: 'Approval could not be saved. Please retry.' });
+  }
+
+  usersDatabase.set(email, user);
+  persistentStore.deletePendingRegistration(email);
+  persistentStore.invalidateUserTokens(email);
+  return res.json({ success: true, user: adminUserView(user), message: `${email} approved as ${roleName}.` });
+});
+
+app.post('/api/admin/pending-registrations/:email/reject', requireAuth, requireRole(ADMIN_ROLES), (req: AuthenticatedRequest, res: Response) => {
+  const email = decodeURIComponent(String(req.params.email)).trim().toLowerCase();
+  if (!pendingRegistrationsDatabase.has(email)) return res.status(404).json({ success: false, message: 'Pending registration not found.' });
+  persistentStore.deletePendingRegistration(email);
+  persistentStore.invalidateUserTokens(email);
+  return res.json({ success: true, message: 'Registration request rejected.' });
+});
+
 app.get('/api/admin/users', requireAuth, requireRole(ADMIN_ROLES), async (req: AuthenticatedRequest, res: Response) => {
   const page = Math.max(1, Number(req.query.page) || 1);
   const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 25));
@@ -3917,7 +3846,7 @@ app.get('/api/admin/users', requireAuth, requireRole(ADMIN_ROLES), async (req: A
         institutionId: profile.institution_id || 'inst-thapar',
         institutionName: 'Thapar Institute of Engineering and Technology',
         department: profile.department || seeded?.department || '',
-        status: profile.status === 'LOCKED' ? 'LOCKED' : 'ACTIVE',
+        status: profile.status === 'LOCKED' ? 'LOCKED' : profile.status === 'PENDING' ? 'PENDING' : 'ACTIVE',
         createdAt: authUser.created_at,
         authorizedWorkspaces: profile.authorized_workspaces || seeded?.authorizedWorkspaces,
         isDemoUser: Boolean(profile.is_demo_user || seeded?.isDemoUser),

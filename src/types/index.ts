@@ -202,6 +202,7 @@ export interface ClassSession {
   electiveGroupId?: string;
   cancellationReason?: string;
   cancellationTimestamp?: string;
+  statusBeforeCancellation?: SessionStatus;
   originalSessionId?: string; // If this is a rescheduled makeup
   version: number;
 }
