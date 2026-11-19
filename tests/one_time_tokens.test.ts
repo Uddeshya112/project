@@ -3,11 +3,11 @@ import assert from 'node:assert';
 
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:3000';
 
-test('Typed one-time tokens cross-use and lifecycle enforcement', async () => {
+test('Registration signs in without email verification; password-reset tokens remain purpose-bound', async () => {
   const email = `token.test.${Date.now()}@thapar.edu`;
   const password = 'Password123!';
 
-  // 1. Register unverified user -> receives verification token
+  // 1. Registration creates an active account and never returns a verification token.
   const regRes = await fetch(`${BASE_URL}/api/auth/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Test-Mode': 'true' },
@@ -21,35 +21,24 @@ test('Typed one-time tokens cross-use and lifecycle enforcement', async () => {
   });
   assert.strictEqual(regRes.status, 201);
   const regData = await regRes.json();
-  const verifyToken = regData.verificationToken;
-  assert.ok(verifyToken, 'Verification token expected in test mode');
+  assert.strictEqual(regData.user?.emailVerified, true);
+  assert.strictEqual(regData.verificationToken, undefined);
 
-  // 2. Try using verification token at /api/auth/reset-password -> MUST fail with 400
-  const resetWithVerifyTokenRes = await fetch(`${BASE_URL}/api/auth/reset-password`, {
+  // 2. The just-created credentials can sign in immediately.
+  const loginRes = await fetch(`${BASE_URL}/api/auth/login`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Test-Mode': 'true' },
-    body: JSON.stringify({
-      token: verifyToken,
-      newPassword: 'NewPassword123!',
-    }),
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
   });
-  assert.strictEqual(resetWithVerifyTokenRes.status, 400);
+  assert.strictEqual(loginRes.status, 200);
 
-  // 3. Verify email with valid token
+  // 3. No email-verification token was issued, so the legacy endpoint rejects an empty token.
   const verifyRes = await fetch(`${BASE_URL}/api/auth/verify-email`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Test-Mode': 'true' },
-    body: JSON.stringify({ token: verifyToken }),
+    body: JSON.stringify({ token: '' }),
   });
-  assert.strictEqual(verifyRes.status, 200);
-
-  // 4. Try reusing verification token -> MUST fail with 400
-  const reuseVerifyRes = await fetch(`${BASE_URL}/api/auth/verify-email`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Test-Mode': 'true' },
-    body: JSON.stringify({ token: verifyToken }),
-  });
-  assert.strictEqual(reuseVerifyRes.status, 400);
+  assert.strictEqual(verifyRes.status, 400);
 
   // 5. Request password reset -> receives reset token
   const forgotRes = await fetch(`${BASE_URL}/api/auth/forgot-password`, {
@@ -62,7 +51,7 @@ test('Typed one-time tokens cross-use and lifecycle enforcement', async () => {
   const resetToken = forgotData.resetToken;
   assert.ok(resetToken, 'Reset token expected in test mode');
 
-  // 6. Try using reset token at /api/auth/verify-email -> MUST fail with 400
+  // 5. Try using a reset token at /api/auth/verify-email -> MUST fail with 400
   const verifyWithResetTokenRes = await fetch(`${BASE_URL}/api/auth/verify-email`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Test-Mode': 'true' },

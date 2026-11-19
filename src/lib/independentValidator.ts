@@ -10,6 +10,7 @@ import {
   DayOfWeek,
   AcademicConstraint
 } from '../types';
+import { facultyTeachingCap, facultyTeachingPeriods } from './facultyWorkload';
 
 export type ViolationCode =
   | 'FACULTY_COLLISION'
@@ -625,14 +626,12 @@ export function validateTimetableIndependently(
   });
 
   // Check Faculty Weekly Teaching Limits
-  const facultyWeeklyHours = new Map<string, number>();
-  activeSessions.forEach(s => {
-    facultyWeeklyHours.set(s.facultyId, (facultyWeeklyHours.get(s.facultyId) || 0) + 1);
-  });
-  facultyWeeklyHours.forEach((hours, facId) => {
+  const facultyIds = new Set(activeSessions.map((session) => session.facultyId));
+  facultyIds.forEach((facId) => {
     const fac = facultyMap.get(facId);
     if (fac) {
-      const maxHours = fac.maxDirectTeachingHours || fac.weeklyHoursLimit || 40;
+      const hours = facultyTeachingPeriods(activeSessions, facId);
+      const maxHours = facultyTeachingCap(fac);
       if (hours > maxHours) {
         violations.push({
           id: `viol-fac-max-load-${facId}`,

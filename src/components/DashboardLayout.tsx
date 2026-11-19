@@ -160,9 +160,9 @@ export function DashboardLayout({
   };
 
   return (
-    <div className="min-h-screen bg-[#F7F6F2] dark:bg-[#0c0c0e] text-stone-900 dark:text-zinc-100 flex flex-col font-sans antialiased">
+    <div className="study-workspace min-h-screen bg-[#F7F6F2] dark:bg-[#0c0c0e] text-stone-900 dark:text-zinc-100 flex flex-col font-sans antialiased">
       {/* 1. Compact Enterprise Header */}
-      <header className="h-12 bg-[#FAF9F5] dark:bg-zinc-900 border-b border-[#E5E2D9] dark:border-zinc-800 px-3 sm:px-5 flex items-center justify-between sticky top-0 z-30">
+      <header className="study-topbar h-12 bg-[#FAF9F5] dark:bg-zinc-900 border-b border-[#E5E2D9] dark:border-zinc-800 px-3 sm:px-5 flex items-center justify-between sticky top-0 z-30">
         {/* Left: Mobile Drawer Trigger + Portal Context */}
         <div className="flex items-center gap-2.5">
           <button
@@ -308,7 +308,7 @@ export function DashboardLayout({
         />
 
         {/* Main Workspace */}
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6 bg-[#F7F6F2] dark:bg-[#0c0c0e]">
+        <main className="study-content flex-1 overflow-y-auto p-4 sm:p-6 bg-[#F7F6F2] dark:bg-[#0c0c0e]">
           {loadError && (
             <div role="alert" className="mb-4 p-3 rounded-xl border border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/40 text-rose-800 dark:text-rose-300 text-xs flex items-center justify-between gap-3">
               <span>Could not load the latest timetable data: {loadError}</span>
