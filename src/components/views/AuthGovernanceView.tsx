@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ShieldCheck, Users, Activity, Plus, Search, Loader2, Lock, Unlock, LogOut, Trash2, Pencil, X, KeyRound } from 'lucide-react';
+import { ShieldCheck, Users, Activity, Plus, Search, Loader2, Lock, Unlock, LogOut, Trash2, Pencil, X, KeyRound, Check, XCircle } from 'lucide-react';
 import { useAuth, type RoleCode } from '../../context/AuthContext';
 import { ROLES } from '../../lib/authData';
 import { api } from '../../lib/api';
@@ -12,7 +12,7 @@ interface AdminUser {
   roleCode: RoleCode;
   roleName: string;
   department: string;
-  status: 'ACTIVE' | 'LOCKED';
+  status: 'ACTIVE' | 'LOCKED' | 'PENDING';
   isDemoUser: boolean;
   hasPassword: boolean;
   googleLinked: boolean;
@@ -28,6 +28,14 @@ interface SessionSummary {
   activeSessions: number;
   lastSignIn: string;
   expiresAt: string;
+}
+
+interface PendingRegistration {
+  id: string;
+  email: string;
+  name: string;
+  requestedRoleCode: 'STUDENT' | 'FACULTY' | 'COORDINATOR';
+  createdAt: string;
 }
 
 const SAMPLE_EMAILS = /@(demo\.thapar\.local)$|^(kn\.murthy|a\.sharma|p\.gupta|s\.roy|aarav\.m|rahul\.v|dean)@thapar\.edu$/;
@@ -52,6 +60,8 @@ export function AuthGovernanceView() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [pendingRegistrations, setPendingRegistrations] = useState<PendingRegistration[]>([]);
+  const [pendingRoleChoices, setPendingRoleChoices] = useState<Record<string, PendingRegistration['requestedRoleCode']>>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -63,24 +73,33 @@ export function AuthGovernanceView() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [usersResult, sessionsResult] = await Promise.allSettled([
+      const [usersResult, sessionsResult, pendingResult] = await Promise.allSettled([
         api<{ users: AdminUser[]; total: number }>(`/api/admin/users?search=${encodeURIComponent(search)}&page=${page}&limit=${limit}`),
         api<{ sessions: SessionSummary[] }>('/api/admin/sessions'),
+        api<{ registrations: PendingRegistration[] }>('/api/admin/pending-registrations'),
       ]);
       const failures: string[] = [];
       if (usersResult.status === 'fulfilled') {
         setUsers(Array.isArray(usersResult.value.users) ? usersResult.value.users : []);
         setTotal(Number.isFinite(usersResult.value.total) ? usersResult.value.total : usersResult.value.users?.length || 0);
       } else failures.push(usersResult.reason instanceof Error ? usersResult.reason.message : 'Accounts could not be loaded.');
-      if (sessionsResult.status === 'fulfilled') setSessions(Array.isArray(sessionsResult.value.sessions) ? sessionsResult.value.sessions : []);
+      if (sessionsResult.status === 'fulfilled') {
+        const activeSessions = Array.isArray(sessionsResult.value.sessions) ? sessionsResult.value.sessions : [];
+        if (currentUser && !activeSessions.some((session) => session.userId === currentUser.id)) {
+          activeSessions.unshift({ userId: currentUser.id, name: currentUser.name, email: currentUser.email, roleCode: (currentUser.roleCode || 'STUDENT') as RoleCode, activeSessions: 1, lastSignIn: currentUser.lastLoginAt || new Date().toISOString(), expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString() });
+        }
+        setSessions(activeSessions);
+      }
       else failures.push(sessionsResult.reason instanceof Error ? sessionsResult.reason.message : 'Active sessions could not be loaded.');
+      if (pendingResult.status === 'fulfilled') setPendingRegistrations(Array.isArray(pendingResult.value.registrations) ? pendingResult.value.registrations : []);
+      else failures.push(pendingResult.reason instanceof Error ? pendingResult.reason.message : 'Pending registrations could not be loaded.');
       setError(failures.length ? failures.join(' ') : null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load users.');
     } finally {
       setLoading(false);
     }
-  }, [search, page]);
+  }, [search, page, currentUser]);
 
   useEffect(() => {
     const t = setTimeout(load, 250);
@@ -143,6 +162,38 @@ export function AuthGovernanceView() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-4">
+          <section className={`${card} overflow-hidden`} aria-labelledby="pending-approvals-title">
+            <div className="p-4 border-b border-[#E5E2D9] dark:border-zinc-800 flex items-center justify-between">
+              <div>
+                <h2 id="pending-approvals-title" className="text-sm font-serif font-bold text-stone-900 dark:text-zinc-100">Pending Account Approvals</h2>
+                <p className="mt-1 text-[11px] text-stone-500 dark:text-zinc-400">Role requests remain unable to sign in until an Admin approves them.</p>
+              </div>
+              <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold text-amber-900 dark:bg-amber-950/50 dark:text-amber-300">{pendingRegistrations.length} pending</span>
+            </div>
+            {pendingRegistrations.length === 0 ? (
+              <p className="p-4 text-xs text-stone-500 dark:text-zinc-400">No account requests are waiting for approval.</p>
+            ) : (
+              <ul className="divide-y divide-[#E5E2D9] dark:divide-zinc-800">
+                {pendingRegistrations.map((registration) => {
+                  const roleCode = pendingRoleChoices[registration.email] || registration.requestedRoleCode;
+                  return <li key={registration.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
+                      <div className="truncate text-xs font-semibold text-stone-900 dark:text-zinc-100">{registration.name}</div>
+                      <div className="truncate text-[11px] text-stone-500 dark:text-zinc-400">{registration.email} · Requested {registration.requestedRoleCode} · {fmt(registration.createdAt)}</div>
+                    </div>
+                    <div className="flex shrink-0 flex-wrap items-center gap-2">
+                      <label className="sr-only" htmlFor={`approve-role-${registration.id}`}>Approved role for {registration.email}</label>
+                      <select id={`approve-role-${registration.id}`} value={roleCode} onChange={(event) => setPendingRoleChoices(prev => ({ ...prev, [registration.email]: event.target.value as PendingRegistration['requestedRoleCode'] }))} className={`${input} w-auto min-w-32`}>
+                        <option value="STUDENT">Student</option><option value="FACULTY">Faculty</option><option value="COORDINATOR">Coordinator</option>
+                      </select>
+                      <button type="button" disabled={busy !== null} onClick={() => void act(`approve-${registration.id}`, () => api(`/api/admin/pending-registrations/${encodeURIComponent(registration.email)}/approve`, { method: 'POST', body: { roleCode } }), `Approved ${registration.email} as ${roleCode}.`)} className="inline-flex items-center gap-1 rounded-lg bg-emerald-700 px-2.5 py-2 text-[11px] font-semibold text-white disabled:opacity-50"><Check className="h-3.5 w-3.5" />Approve</button>
+                      <button type="button" disabled={busy !== null} onClick={() => window.confirm(`Reject and remove ${registration.email}'s pending request?`) && void act(`reject-${registration.id}`, () => api(`/api/admin/pending-registrations/${encodeURIComponent(registration.email)}/reject`, { method: 'POST' }), `Rejected ${registration.email}.`)} className="inline-flex items-center gap-1 rounded-lg border border-rose-200 px-2.5 py-2 text-[11px] font-semibold text-rose-800 hover:bg-rose-50 dark:border-rose-900 dark:text-rose-300 dark:hover:bg-rose-950/30 disabled:opacity-50"><XCircle className="h-3.5 w-3.5" />Reject</button>
+                    </div>
+                  </li>;
+                })}
+              </ul>
+            )}
+          </section>
           <div className={`${card} overflow-hidden`}>
             <div className="p-4 border-b border-[#E5E2D9] dark:border-zinc-800 flex flex-wrap items-center justify-between gap-3 bg-white dark:bg-zinc-950/50">
               <div>
@@ -160,14 +211,14 @@ export function AuthGovernanceView() {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs border-collapse">
+              <table className="w-full min-w-[780px] table-fixed text-left text-xs border-collapse">
                 <thead>
                   <tr className="border-b border-[#E5E2D9] dark:border-zinc-800 bg-[#F4F2EC] dark:bg-zinc-950/80 text-stone-600 dark:text-zinc-400 font-mono">
                     <th className="p-3 font-semibold">User</th>
                     <th className="p-3 font-semibold">Role</th>
                     <th className="p-3 font-semibold">Sign-in</th>
                     <th className="p-3 font-semibold">Status</th>
-                    <th className="p-3 font-semibold text-right">Actions</th>
+                    <th className="w-32 p-3 font-semibold text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#E5E2D9] dark:divide-zinc-800">
@@ -191,7 +242,7 @@ export function AuthGovernanceView() {
                             <div className="text-[11px] font-mono text-stone-500 dark:text-zinc-400">{u.email}</div>
                             {u.department && <div className="text-[10px] text-stone-400">{u.department}</div>}
                           </td>
-                          <td className="p-3"><span className={`px-2 py-0.5 rounded text-[10px] font-mono font-semibold ${roleBadge(u.roleCode)}`}>{u.roleName}</span></td>
+                          <td className="p-3"><span className={`whitespace-nowrap px-2 py-0.5 rounded text-[10px] font-mono font-semibold ${roleBadge(u.roleCode)}`}>{u.roleName}</span></td>
                           <td className="p-3 text-[11px] text-stone-600 dark:text-zinc-400">
                             {[u.googleLinked && 'Google', u.hasPassword && 'Password'].filter(Boolean).join(' + ') || 'Google (not yet linked)'}
                             <div className="text-[10px] text-stone-400">Last: {fmt(u.lastLoginAt)}</div>
@@ -200,7 +251,7 @@ export function AuthGovernanceView() {
                             <span className={`text-[10px] font-mono font-semibold ${u.status === 'ACTIVE' ? 'text-emerald-700 dark:text-emerald-400' : 'text-rose-700 dark:text-rose-400'}`}>{u.status}</span>
                           </td>
                           <td className="p-3">
-                            <div className="flex justify-end gap-1">
+                            <div className="flex justify-end gap-1 whitespace-nowrap">
                               <IconButton label={`Edit ${u.email}`} onClick={() => setEditing(u)}><Pencil className="h-3.5 w-3.5" /></IconButton>
                               {!self && (
                                 <IconButton

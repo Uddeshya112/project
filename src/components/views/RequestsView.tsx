@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Check } from 'lucide-react';
+import { Check, CalendarCheck } from 'lucide-react';
 import { useTimetable } from '../../context/TimetableContext';
 
 const formatTimestamp = (value: string) => {
@@ -8,8 +8,9 @@ const formatTimestamp = (value: string) => {
 };
 
 export function RequestsView() {
-  const { notifications, markNotificationRead } = useTimetable();
+  const { notifications, markNotificationRead, makeupTasks, recoveryOpportunities, scheduleMakeup } = useTimetable();
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [schedulingId, setSchedulingId] = useState<string | null>(null);
   const requests = notifications.filter(item => ['makeup_request', 'approval_needed', 'cancellation'].includes(item.type));
 
   const markRead = async (id: string) => {
@@ -35,6 +36,11 @@ export function RequestsView() {
             <time className="mt-2 block text-[11px] text-stone-400">{formatTimestamp(item.timestamp)}</time>
           </div>
           {!item.read && <button type="button" onClick={() => void markRead(item.id)} disabled={savingId !== null} className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-[#E5E2D9] bg-white px-3 py-1.5 text-xs font-semibold text-stone-700 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-200"><Check className="h-3.5 w-3.5" />{savingId === item.id ? 'Saving…' : 'Mark read'}</button>}
+          {item.type === 'cancellation' && (() => {
+            const task = makeupTasks.find((entry) => entry.cancelledSessionId === item.actionPayload?.sessionId);
+            const options = task ? recoveryOpportunities.filter((entry) => entry.makeupTaskId === task.id && entry.status === 'Proposed') : [];
+            return options.slice(0, 3).map((option) => <button key={option.id} type="button" onClick={() => { setSchedulingId(option.id); void scheduleMakeup(option.id).finally(() => setSchedulingId(null)); }} disabled={schedulingId !== null} className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-[#8C1B2E] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"><CalendarCheck className="h-3.5 w-3.5" />{schedulingId === option.id ? 'Scheduling…' : `Schedule ${option.targetDay} ${option.timeSlotId}`}</button>);
+          })()}
         </article>
       ))}
     </div>

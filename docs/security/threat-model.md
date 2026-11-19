@@ -28,4 +28,4 @@ Accounts and roles; the published timetable (what students and faculty act on); 
 
 ## Not covered
 
-No WAF, no malware scanning of uploads (the Excel file is parsed in the browser; only JSON rows reach the server), no MFA, no email verification for password accounts created by admins.
+No WAF, no malware scanning of uploads (the Excel file is parsed in the browser; only JSON rows reach the server), no MFA, and no email ownership verification for public self-registration. With self-registration enabled, a person can claim an unused institutional email address; restore email verification before general production access.

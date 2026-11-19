@@ -5,6 +5,34 @@
 **Current Phase**: GOVERNANCE BASELINE ADDED — CURRENT SYSTEM REVALIDATION PENDING  
 **Last Updated**: 2026-10-10
 
+## 2026-11-17 — Study environment frontend preview
+
+- **INFERRED / REQUESTED SCOPE:** Refresh the website UI across the existing role workspaces using the supplied TIET study-environment HTML references. Keep current authentication, role permissions, navigation actions, and data workflows in place.
+- **Implemented locally:** Added a responsive editorial sign-in composition with animated schedule cards, a warm paper/ink/crimson visual system, a dark role navigation rail, a softened workspace canvas, and reduced-motion handling. The styles are attached to existing shared layout and login components.
+- **Files changed for this work:** `src/index.css`, `src/components/DashboardLayout.tsx`, `src/components/Sidebar.tsx`, `src/components/views/LoginPageView.tsx`.
+- **VERIFIED:** `npm run build` completed after the final CSS import-order adjustment. It reported the existing >500 kB JS chunk warning. Local dev server started at `http://localhost:3000` in autonomous local database mode.
+- **UNVERIFIED:** Browser rendering, smaller-screen behavior, and all role views remain to be reviewed by the user in the local preview. No application tests were run. `git diff --check` reports CRLF line endings as trailing whitespace on the inserted JSX lines in the existing CRLF file; no whitespace-only normalization was applied to avoid rewriting the full file.
+- **Dependencies / security / data:** No dependency, API, auth, role-permission, or database changes. This redesign only changes presentation code; local preview is using the repository's autonomous local database mode.
+- **Deployment:** Not pushed and not deployed. Awaiting user review of the preview.
+
+### Preview startup fix — 2026-11-17
+
+- **VERIFIED:** The initial blank preview came from Helmet CSP blocking Vite's inline React-refresh preamble and loopback HMR websocket. Development-only CSP allowances now permit that preamble and websocket; the production policy stays unchanged. Chrome headless rendered the sign-in React tree and reported `[vite] connected` without CSP or React preamble errors.
+- **VERIFIED:** `npm run lint` (`tsc --noEmit`) completed without diagnostics. `npm run build` completed and still reports the >500 kB JS bundle warning.
+- **VERIFIED:** Tablet width is now included in the stacked sign-in layout after screenshot review. Preview remains at `http://127.0.0.1:3000`.
+- **UNVERIFIED:** User has not yet confirmed the preview across other role pages or mobile device sizes. No app workflows or tests were exercised.
+- **Deployment:** Still not pushed and not deployed; awaiting the user's frontend review.
+
+## 2026-11-17 — Immediate password registration
+
+- **REQUESTED SCOPE:** Remove email verification from registration and make a successful registration proceed directly into sign-in.
+- **Implemented locally:** `/api/auth/register` now creates an active user rather than an email-verification pending record, does not send verification mail or issue a verification token, uses Supabase Auth Admin with `email_confirm: true` when configured, and persists the application account. The local/custom DB fallback stores a bcrypt hash. Duplicate registrations do not overwrite a password. The sign-up UI immediately calls the normal login API and no longer displays a verification prompt or resend action.
+- **Docs / regression coverage:** Updated deploy and threat-model docs. Updated focused tests for immediate registration/login and duplicate credential protection.
+- **VERIFIED:** `npm run lint` passed. `npm run build` passed (existing >500 kB JavaScript chunk warning remains).
+- **BLOCKED VERIFICATION:** `npm test` could not reach its spawned local test server on port 3100 (`Timed out waiting for the local test server`). The isolated environment returned socket permission errors when trying the tests against the separate server; no integration-test pass is claimed.
+- **SECURITY RISK (explicitly requested):** Signup no longer proves ownership of an `@thapar.edu` mailbox, so an attacker can register an unused institutional address. Restore email verification before general production access.
+- **Deployment:** Not pushed or deployed. Existing production users/data have not been changed.
+
 ---
 
 > **State integrity notice (2026-10-10):** The status table and measurements below were present in the repository before this governance change. They are retained as historical project notes, not independently verified current evidence. The connected GitHub inspection in this change read repository files/tree only; it did not execute a local build, tests, database queries, security scans, benchmark, restore, or production smoke test. Treat each old result as **UNVERIFIED** until reproduced against the current commit/environment. Repository evidence takes precedence over this file.
@@ -311,3 +339,49 @@
 - **VERIFIED:** `npm run build` passed; the existing Vite large-chunk warning remains (main JavaScript bundle approximately 1.30 MB minified).
 - **VERIFIED:** `git -c core.whitespace=cr-at-eol diff --check` passed. The repository's Windows working tree uses CRLF line endings.
 - **UNVERIFIED:** GitHub Actions was not rerun yet; no production login attempt or hosted service change was performed.
+
+## 15. Current Session — Production Registration Delivery and Public Roles (2026-11-17)
+
+### Verified diagnosis
+
+- **VERIFIED in Render logs:** Production has no configured email provider (`SMTP_URL`, `RESEND_API_KEY`, or `MAILER_SERVICE_URL`). Signup persisted a pending registration, but the verification email send failed. A subsequent login failed against Supabase Auth because the unverified custom app account is not an `auth.users` account. The login will not work until a verification link is delivered and consumed.
+- **VERIFIED in Supabase:** The project is `ACTIVE_HEALTHY`; there is one pending registration created at approximately 16:00 UTC, zero `intellischedule.users`, and 263 `auth.users`. The count alone does not establish which person owns the pending record.
+- **VERIFIED in Render configuration:** The API service deploys from `main`. Commit `4d81e270336e135bfbe2e95258e940e22cdc0384` is on `fix/full-e2e-sync`, so that later generic 401 behavior is not in the production branch. The email-provider blocker is independent of this status response.
+- **VERIFIED in Supabase security advisors:** `public.roles` has RLS disabled and direct grants to `anon` and `authenticated`. The application only needs server-side service-role access to this legacy table.
+
+### Changes prepared
+
+- Added an idempotent migration to enable RLS on `public.roles` and revoke browser-role table grants when the legacy table exists. It is safe on installations where that table is absent.
+- Removed the raw email address and provider error details from failed Supabase login logs.
+- **CURRENT USER CHANGE:** Registration now creates an active account without email verification and signs in immediately. Resend-verification actions were removed from login and registration; duplicate signups cannot replace existing credentials.
+- Updated Render auth deployment guidance and documented the no-email-verification risk in the runbook and threat model.
+
+### Verification and release status
+
+- **VERIFIED:** `npm run lint` passed; `npm run build` passed with the existing approximately 1.30 MB main-bundle warning; `git -c core.whitespace=cr-at-eol diff --check` passed.
+- **NOT RUN:** Automated tests were not run.
+- **NOT DEPLOYED:** No production database schema, Render environment variable, Supabase data, or deployment was changed.
+- **REQUIRES HUMAN ACTION:** Configure `RESEND_API_KEY` and a verified `RESEND_FROM` (or SMTP equivalents) on Render, then redeploy. Afterward use **Resend verification email** for the pending signup, verify from the email link, and sign in.
+- **REQUIRES HUMAN REVIEW/DEPLOY APPROVAL:** The new RLS migration is production-impacting and should be reviewed and applied through the normal deployment process; no direct production SQL was run.
+
+## 16. Current Session — RBAC, Approval Queue, Scheduling and Scoping (2026-11-20)
+
+### Changes made in the local checkout
+
+- Registration now accepts Student, Faculty, or Coordinator as a requested role and stores it as a durable pending registration. Pending accounts receive a waiting-for-Admin-approval screen and cannot authenticate or access protected APIs until an Admin approves them. Admin Users now has a pending registration queue with role selection, Approve, and Reject actions. Legacy verification/resend API routes return `410 ADMIN_APPROVAL_REQUIRED` so they cannot bypass approval.
+- Faculty timetable controls no longer show Publish or free-slot assignment controls. The direct scheduling modal is gated to coordinator/admin roles in the UI; the existing server schedule-session endpoint also rejects Faculty. Faculty can filter their own timetable to scheduled classes, cancel those classes, and undo a cancellation. Availability updates are rejected when the selected period overlaps the faculty member's active scheduled class.
+- Coordinator timetable cells now render every session assigned to the same day/period, preserving parallel lab batches and each batch's cancellation state. Student timetable already renders a list of sessions per cell.
+- Coordinator Requests & Disruptions now offers direct Schedule Makeup actions for available recovery proposals. Student notifications omit the internal master-dataset persisted event.
+- HOD bootstrap, paginated student results, and audit logs are filtered by the linked HOD department. Unlinked HOD accounts receive no academic bootstrap scope and are rejected from student/audit queries.
+- Weekly workload checks now use designation caps: Professor and Associate Professor 14, Assistant Professor 16, Visiting Faculty retains its explicit appointment value. Combined same-course lectures in the same period count once; lab sessions count by their duration/batch. Admin user table role badges/actions and the timetable More menu have explicit overflow/contrast styles. Repeated same-version publish audit writes are deduplicated for five seconds.
+- Pending Supabase profiles are rejected by bearer-token authentication as well as the application session-cookie path. Sign-out clears app identity synchronously and waits for server logout before a subsequent login.
+
+### Verification and release status
+
+- **VERIFIED:** `npm run lint` passed.
+- **VERIFIED:** `npm run build` passed. Vite continues to warn that the main JavaScript bundle is approximately 1.31 MB minified.
+- **VERIFIED:** `git -c core.whitespace=cr-at-eol diff --check` passed; the checkout uses CRLF line endings.
+- **NOT RUN:** Automated tests were not run.
+- **NOT DEPLOYED / NOT PUSHED:** Changes are only in the local checkout; no hosted service, database, or remote branch was changed.
+- **LIMITATION:** No new database migration was necessary: account approvals use the existing durable `pending_registrations` table, and the users table retains its existing ACTIVE/LOCKED status constraint. The solver performance claims in the pasted prompt are not treated as verified guarantees; no algorithm replacement or 10,000-student speed claim was made.
+- Admin Users now includes the authenticated Admin in the live-session panel when the durable session endpoint returns no row for the current identity, so a signed-in Admin is not shown as zero active sessions. This is a UI fallback for the current authenticated browser; it does not fabricate additional devices.

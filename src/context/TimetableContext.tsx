@@ -247,6 +247,7 @@ interface TimetableContextType {
 
   // Routine Timetable Operations
   cancelSession: (sessionId: string, reason: string) => Promise<{ success: boolean }>;
+  undoCancellation: (sessionId: string) => Promise<{ success: boolean }>;
   scheduleMakeup: (opportunityId: string) => Promise<{ success: boolean }>;
   votePoll: (pollId: string, optionId: string) => Promise<{ success: boolean }>;
   createPoll: (input: { sectionId: string; courseId: string; question: string; options: Array<{ day: DayOfWeek; timeSlotLabel: string }> }) => Promise<{ success: boolean; message?: string }>;
@@ -2159,6 +2160,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
           ? {
               ...s,
               status: 'Cancelled' as const,
+              statusBeforeCancellation: s.status === 'Cancelled' ? s.statusBeforeCancellation : s.status,
               cancellationReason,
               cancellationTimestamp: new Date().toISOString(),
             }
@@ -2226,6 +2228,25 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     ]);
 
     return { success: true };
+  };
+
+  const undoCancellation = async (sessionId: string): Promise<{ success: boolean }> => {
+    try {
+      const response = await fetch(apiUrl('/api/recovery/undo-cancel'), { method: 'POST', credentials: 'same-origin', headers: getAuthHeaders(), body: JSON.stringify({ sessionId }) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) return { success: false };
+      const session = sessions.find((item) => item.id === sessionId);
+      const restoredStatus = session?.statusBeforeCancellation || 'Published';
+      const updated = (items: ClassSession[]) => items.map((item) => item.id === sessionId ? { ...item, status: restoredStatus, statusBeforeCancellation: undefined, cancellationReason: undefined, cancellationTimestamp: undefined } : item);
+      setSessions(updated);
+      setPublishedSessions(updated);
+      setMakeupTasks((items) => items.filter((item) => item.cancelledSessionId !== sessionId));
+      setRecoveryOpportunities((items) => items.filter((item) => makeupTasks.find((task) => task.id === item.makeupTaskId)?.cancelledSessionId !== sessionId));
+      setNotifications((items) => items.filter((item) => item.actionPayload?.sessionId !== sessionId));
+      return { success: true };
+    } catch {
+      return { success: false };
+    }
   };
 
   const scheduleMakeup = async (opportunityId: string): Promise<{ success: boolean }> => {
@@ -2644,6 +2665,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         commitMasterImport,
         bulkGenerateGroups,
         cancelSession,
+        undoCancellation,
         scheduleMakeup,
         votePoll,
         createPoll,

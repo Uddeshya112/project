@@ -44,6 +44,7 @@ import {
   validateProposedSessionMove,
   validateProposedSessionSwap,
 } from '../lib/independentValidator';
+import { facultyTeachingCap } from '../lib/facultyWorkload';
 import { executeOptimizationEngine, type GeneratedCandidate } from '../lib/optimizationEngine';
 import { calculateHealthScore, checkHardConstraints, findSelfHealingRecoverySlots } from '../lib/recoveryEngine';
 import { ExcelImportPreview } from '../lib/excelMasterService';
@@ -373,8 +374,12 @@ class SupabaseRelationalStore {
     };
   }
 
-  public queryStudents(page = 1, limit = 20, search = '', sectionId?: string) {
+  public queryStudents(page = 1, limit = 20, search = '', sectionId?: string, departmentId?: string) {
     let all = Array.from(this.students.values());
+    if (departmentId) {
+      const departmentSections = new Set([...this.groups.values()].filter((section) => section.departmentId === departmentId).map((section) => section.id));
+      all = all.filter((student) => departmentSections.has(student.sectionId));
+    }
     if (search.trim()) {
       const q = search.toLowerCase().trim();
       all = all.filter(s =>
@@ -491,7 +496,7 @@ class SupabaseRelationalStore {
   // Faculty
   public createFaculty(fac: Omit<Faculty, 'id'>, userId = 'coordinator'): Faculty {
     const id = `fac-${fac.email.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '')}`;
-    const newFaculty: Faculty = { ...fac, id };
+    const newFaculty: Faculty = { ...fac, maxDirectTeachingHours: facultyTeachingCap({ ...fac, id } as Faculty), id };
     this.facultyMembers.set(id, newFaculty);
 
     this.logAudit(userId, 'CREATE_FACULTY', 'Faculty', id, `Added faculty member ${newFaculty.name} (${newFaculty.email})`);
@@ -502,6 +507,7 @@ class SupabaseRelationalStore {
     const existing = this.facultyMembers.get(id);
     if (!existing) throw new Error(`Faculty with ID ${id} not found.`);
     const updated = { ...existing, ...updates, id };
+    updated.maxDirectTeachingHours = facultyTeachingCap(updated);
     this.facultyMembers.set(id, updated);
 
     this.logAudit(userId, 'UPDATE_FACULTY', 'Faculty', id, `Updated faculty profile for ${updated.name}`);
@@ -788,7 +794,7 @@ class SupabaseRelationalStore {
           departmentId: deptId,
           designation: facIn.designation,
           subjectsQualified: facIn.subjectsQualified || [],
-          maxDirectTeachingHours: facIn.maxDirectTeachingHours || 14,
+          maxDirectTeachingHours: facIn.designation === 'Visiting Faculty' ? (facIn.maxDirectTeachingHours || 14) : facIn.designation === 'Assistant Professor' ? 16 : 14,
           weeklyHoursLimit: 40,
           preferences: facIn.preferences || {
             preferredDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
@@ -1566,6 +1572,7 @@ class SupabaseRelationalStore {
         ? {
             ...s,
             status: 'Cancelled',
+            statusBeforeCancellation: s.status === 'Cancelled' ? s.statusBeforeCancellation : s.status,
             cancellationReason: reason,
             cancellationTimestamp: new Date().toISOString(),
           }
@@ -1617,6 +1624,24 @@ class SupabaseRelationalStore {
 
     this.logAudit(userId, 'CLASS_CANCELLED', 'ClassSession', sessionId, `Cancelled ${target.courseId} (${target.day} ${target.timeSlotId}). Reason: ${reason}.`);
     return { success: true, task: newTask };
+  }
+
+  public undoClassCancellation(sessionId: string, userId = 'coordinator'): boolean {
+    const target = this.activeSessions.find((session) => session.id === sessionId && session.status === 'Cancelled');
+    if (!target) return false;
+    this.activeSessions = this.activeSessions.map((session) => session.id === sessionId ? {
+      ...session,
+      status: session.statusBeforeCancellation || 'Published',
+      statusBeforeCancellation: undefined,
+      cancellationReason: undefined,
+      cancellationTimestamp: undefined,
+    } : session);
+    const taskIds = new Set(this.makeupTasks.filter((task) => task.cancelledSessionId === sessionId).map((task) => task.id));
+    this.makeupTasks = this.makeupTasks.filter((task) => task.cancelledSessionId !== sessionId);
+    this.recoveryOpportunities = this.recoveryOpportunities.filter((opportunity) => !taskIds.has(opportunity.makeupTaskId));
+    this.notifications = this.notifications.filter((notification) => notification.actionPayload?.sessionId !== sessionId);
+    this.logAudit(userId, 'CLASS_CANCELLATION_REVERSED', 'ClassSession', sessionId, `Restored ${target.courseId} (${target.day} ${target.timeSlotId}) after cancellation.`);
+    return true;
   }
 
   public requestScheduleChange(sessionId: string, details: string, userName = 'Faculty') {
@@ -1778,6 +1803,7 @@ class SupabaseRelationalStore {
   }
 
   private logAudit(userId: string, action: string, entityType: string, entityId: string, details: string) {
+    if (action === 'TIMETABLE_PUBLISHED' && this.auditEvents.some((event) => event.action === action && event.entityType === entityType && event.entityId === entityId && Date.now() - Date.parse(event.timestamp) < 5_000)) return;
     this.auditEvents.unshift({
       id: `audit-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       timestamp: new Date().toISOString(),

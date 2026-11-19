@@ -26,7 +26,7 @@ interface LoginPageViewProps {
   onSuccessLogin: (workspaces?: any[]) => void;
 }
 
-type AuthScreenMode = 'login' | 'register' | 'register_success' | 'forgot_password' | 'forgot_success' | 'reset_password' | 'reset_success' | 'recovery_invalid';
+type AuthScreenMode = 'login' | 'register' | 'pending_approval' | 'forgot_password' | 'forgot_success' | 'reset_password' | 'reset_success' | 'recovery_invalid';
 
 export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
   const {
@@ -53,9 +53,10 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
   const [regEmail, setRegEmail] = useState('');
   const [regPassword, setRegPassword] = useState('');
   const [regConfirmPassword, setRegConfirmPassword] = useState('');
+  const [regRoleCode, setRegRoleCode] = useState<'STUDENT' | 'FACULTY' | 'COORDINATOR'>('STUDENT');
+  const [pendingApprovalEmail, setPendingApprovalEmail] = useState('');
   const [showRegPassword, setShowRegPassword] = useState(false);
   const [showRegConfirmPassword, setShowRegConfirmPassword] = useState(false);
-  const [registeredEmail, setRegisteredEmail] = useState('');
 
   // Forgot Password & OTP States
   const [forgotEmail, setForgotEmail] = useState('');
@@ -82,7 +83,6 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
 
   // Status & Loading States
   const [isLoading, setIsLoading] = useState(false);
-  const [isResendingVerification, setIsResendingVerification] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [googleConfigured, setGoogleConfigured] = useState(false);
   const [demoRoleLoading, setDemoRoleLoading] = useState<string | null>(null);
@@ -288,6 +288,11 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
           onSuccessLogin(res.authorizedWorkspaces);
         }, 350);
       } else {
+        if (res.pendingApproval) {
+          setPendingApprovalEmail(emailTrim);
+          setScreenMode('pending_approval');
+          return;
+        }
         // Remain on login page and display safe error. Never trigger Google OAuth!
         setErrorMessage(res.message);
       }
@@ -352,7 +357,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
   /**
    * Handle Register Submit (POST /api/auth/register)
    * Enforces 12+ chars, uppercase, lowercase, number, symbol policy
-   * Does NOT auto-login, redirects to clean register_success screen
+   * Creates a pending account request; sign-in is enabled only after Admin approval.
    */
   const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -381,14 +386,27 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
     setIsLoading(true);
 
     try {
-      const res = await register(nameTrim, emailTrim, regPassword);
+      const res = await register(nameTrim, emailTrim, regPassword, regRoleCode);
       if (res.success) {
-        setRegisteredEmail(res.email || emailTrim);
+        if (res.status === 'PENDING') {
+          setPendingApprovalEmail(res.email || emailTrim);
+          setRegPassword('');
+          setRegConfirmPassword('');
+          setScreenMode('pending_approval');
+          return;
+        }
         setLoginEmail(res.email || emailTrim);
         setLoginPassword('');
         setRegPassword('');
         setRegConfirmPassword('');
-        setScreenMode('register_success');
+        const signIn = await login(emailTrim, regPassword);
+        if (signIn.success) {
+          if (signIn.roleKey) setCurrentRole(signIn.roleKey);
+          onSuccessLogin(signIn.authorizedWorkspaces);
+        } else {
+          setScreenMode('login');
+          setErrorMessage(`Your account was created, but sign-in did not complete. ${signIn.message} You can sign in below.`);
+        }
       } else {
         setErrorMessage(res.message || 'Registration failed.');
       }
@@ -396,25 +414,6 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
       setErrorMessage('Failed to create account. Please verify your details.');
     } finally {
       setIsLoading(false);
-    }
-  };
-
-  const handleResendVerification = async () => {
-    const verificationEmail = registeredEmail || loginEmail.trim();
-    if (!verificationEmail || isResendingVerification) return;
-    setIsResendingVerification(true);
-    setErrorMessage(null);
-    setSuccessMessage(null);
-    try {
-      const result = await apiFetch<{ success: boolean; message?: string }>('/api/auth/resend-verification', {
-        method: 'POST',
-        body: JSON.stringify({ email: verificationEmail }),
-      });
-      setSuccessMessage(result.message || 'If your account is still pending, a new verification link has been sent.');
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Could not resend the verification email.');
-    } finally {
-      setIsResendingVerification(false);
     }
   };
 
@@ -597,9 +596,20 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
   };
 
   return (
-    <div className="min-h-screen w-full bg-[#F7F6F2] dark:bg-[#0c0c0e] text-stone-900 dark:text-zinc-100 flex flex-col justify-center items-center p-3 sm:p-4 font-sans relative overflow-x-hidden selection:bg-[#8C1B2E]/20 selection:text-[#8C1B2E]">
+    <div className="study-login min-h-screen w-full bg-[#F7F6F2] dark:bg-[#0c0c0e] text-stone-900 dark:text-zinc-100 flex flex-col justify-center items-center p-3 sm:p-4 font-sans relative overflow-x-hidden selection:bg-[#8C1B2E]/20 selection:text-[#8C1B2E]">
+      <div className="study-login-story" aria-hidden="true">
+        <div className="study-story-kicker"><span className="study-live-dot" /> TIET · ACADEMIC LIFE, IN RHYTHM</div>
+        <h1>Make room<br />for <em>what’s next.</em></h1>
+        <p className="study-story-copy">Your week, your classes, your campus — all moving together.</p>
+        <div className="study-course-stack">
+          <div className="study-course-card study-course-one"><span>MON · 09:00</span><strong>Data Structures</strong><small>CS 201 · LH 3</small></div>
+          <div className="study-course-card study-course-two"><span>TUE · 11:00</span><strong>Design Studio</strong><small>DES 104 · Studio B</small></div>
+          <div className="study-course-card study-course-three"><span>THU · 14:00</span><strong>Signals &amp; Systems</strong><small>EC 204 · Block C</small></div>
+        </div>
+        <div className="study-story-foot"><span>ONE CAMPUS, EVERY CLASS</span><span>01 / 05</span></div>
+      </div>
       {/* Main Centered Minimal Card */}
-      <div className="w-full max-w-[430px] max-h-[calc(100vh-1.5rem)] overflow-y-auto bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-2xl p-5 sm:p-6 shadow-xs relative z-10 transition-all">
+      <div className="study-login-card w-full max-w-[430px] max-h-[calc(100vh-1.5rem)] overflow-y-auto bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-2xl p-5 sm:p-6 shadow-xs relative z-10 transition-all">
         {/* Thapar Brand Header - Primary visual identity */}
         <div className="mb-6 text-center">
           <ThaparLogo size="md" variant="full" />
@@ -614,7 +624,6 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
             <AlertCircle className="h-4 w-4 shrink-0 text-[#8C1B2E] dark:text-red-400 mt-0.5" />
             <div className="leading-relaxed font-medium">
               <span>{errorMessage}</span>
-              {errorMessage.includes('Invalid institutional credentials') && <button type="button" onClick={() => void handleResendVerification()} disabled={isResendingVerification} className="ml-1 underline disabled:opacity-50">{isResendingVerification ? 'Sending…' : 'Resend verification email'}</button>}
             </div>
           </div>
         )}
@@ -666,6 +675,16 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
                     required
                   />
                 </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label htmlFor="reg-role" className="text-xs font-medium text-stone-700 dark:text-zinc-300 block">Request role</label>
+                <select id="reg-role" value={regRoleCode} onChange={event => setRegRoleCode(event.target.value as typeof regRoleCode)} disabled={isLoading} className="w-full rounded-xl border border-[#E5E2D9] bg-white px-3 py-2.5 text-xs text-stone-900 outline-none focus:border-[#8C1B2E] dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100">
+                  <option value="STUDENT">Student</option>
+                  <option value="FACULTY">Faculty</option>
+                  <option value="COORDINATOR">Coordinator</option>
+                </select>
+                <p className="text-[10px] text-stone-500 dark:text-zinc-400">An Admin must approve the requested role before you can sign in.</p>
               </div>
 
               {/* Password */}
@@ -1122,51 +1141,17 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
           </div>
         )}
 
-        {/* ======================================================== */}
-        {/* VIEW 2B: REGISTRATION SUCCESS (NO AUTO-LOGIN)             */}
-        {/* ======================================================== */}
-        {screenMode === 'register_success' && (
-          <div className="text-center space-y-5 py-2">
-            <div className="w-12 h-12 rounded-2xl bg-emerald-100 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400 flex items-center justify-center mx-auto shadow-xs">
-              <CheckCircle2 className="h-6 w-6" />
+        {screenMode === 'pending_approval' && (
+          <div className="space-y-5 py-3 text-center">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border border-amber-300 bg-amber-100 text-amber-800 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-300">
+              <ShieldAlert className="h-6 w-6" aria-hidden="true" />
             </div>
-
-            <div className="space-y-1.5">
-              <h2 className="text-xl font-bold font-serif text-stone-900 dark:text-zinc-100 tracking-tight">
-                Account created
-              </h2>
-              <p className="text-xs text-stone-600 dark:text-zinc-400 leading-relaxed max-w-sm mx-auto">
-                Your account has been created successfully.
-              </p>
-              <p className="text-xs text-stone-500 dark:text-zinc-400 leading-relaxed max-w-sm mx-auto pt-1">
-                Open the verification link sent to your email, then sign in using the same email and password.
-              </p>
+            <div className="space-y-2">
+              <h2 className="text-lg font-bold font-serif text-stone-900 dark:text-zinc-100">Waiting for Admin Approval</h2>
+              <p className="mx-auto max-w-sm text-xs leading-relaxed text-stone-600 dark:text-zinc-400">The account request for <span className="font-semibold">{pendingApprovalEmail}</span> is awaiting review. You can sign in after an Admin approves it.</p>
             </div>
-
-            {registeredEmail && (
-              <div className="p-3 bg-[#F4F2EC] dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl text-xs font-mono text-stone-700 dark:text-zinc-300 break-all">
-                {registeredEmail}
-              </div>
-            )}
-
-            {errorMessage && <p role="alert" className="text-xs text-rose-700 dark:text-rose-300">{errorMessage}</p>}
-            {successMessage && <p role="status" className="text-xs text-emerald-700 dark:text-emerald-300">{successMessage}</p>}
-
-            <button type="button" onClick={() => void handleResendVerification()} disabled={isResendingVerification || !registeredEmail} className="w-full rounded-lg border border-[#E5E2D9] px-3 py-2 text-xs font-semibold text-stone-700 hover:border-[#8C1B2E] disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300">
-              {isResendingVerification ? 'Sending…' : 'Resend verification email'}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                setScreenMode('login');
-                setErrorMessage(null);
-                setSuccessMessage(null);
-              }}
-              className="w-full py-2.5 bg-[#8C1B2E] hover:bg-[#721525] active:bg-[#5a111e] text-white rounded-lg text-xs font-semibold shadow-xs transition-all flex items-center justify-center gap-2"
-            >
-              <span>Go to Login</span>
-              <ArrowRight className="h-4 w-4" />
+            <button type="button" onClick={() => { setLoginEmail(pendingApprovalEmail); setScreenMode('login'); }} className="w-full rounded-lg bg-[#8C1B2E] py-2.5 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-[#721525]">
+              Return to sign in
             </button>
           </div>
         )}

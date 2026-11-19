@@ -3,7 +3,7 @@ import assert from 'node:assert';
 
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:3000';
 
-test('Pre-registration account takeover prevention', async () => {
+test('Duplicate registration cannot replace a created account password', async () => {
   const victimEmail = `victim.${Date.now()}@thapar.edu`;
   const attackerPwd = 'AttackerPassword123!';
   const victimPwd = 'VictimPassword123!';
@@ -22,7 +22,7 @@ test('Pre-registration account takeover prevention', async () => {
   });
   assert.strictEqual(reg1Res.status, 201);
 
-  // 2. Victim registers victim's address with victimPwd (overwrites pending)
+  // 2. A second registration must not replace the first account's credentials.
   const reg2Res = await fetch(`${BASE_URL}/api/auth/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Test-Mode': 'true' },
@@ -36,38 +36,21 @@ test('Pre-registration account takeover prevention', async () => {
   });
   assert.strictEqual(reg2Res.status, 201);
   const reg2Data = await reg2Res.json();
-  const victimToken = reg2Data.verificationToken;
-  assert.ok(victimToken, 'Verification token for victim registration expected');
+  assert.strictEqual(reg2Data.verificationToken, undefined);
 
-  // 3. Attacker tries to log in before verification -> 401
-  const loginAttackerUnverified = await fetch(`${BASE_URL}/api/auth/login`, {
+  // 3. First account is active immediately.
+  const loginAttacker = await fetch(`${BASE_URL}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: victimEmail, password: attackerPwd }),
   });
-  assert.strictEqual(loginAttackerUnverified.status, 401);
+  assert.strictEqual(loginAttacker.status, 200);
 
-  // 4. Victim verifies using victimToken
-  const verifyRes = await fetch(`${BASE_URL}/api/auth/verify-email`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token: victimToken }),
-  });
-  assert.strictEqual(verifyRes.status, 200);
-
-  // 5. Attacker tries to log in with attackerPwd -> MUST fail (401)
-  const loginAttackerRes = await fetch(`${BASE_URL}/api/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: victimEmail, password: attackerPwd }),
-  });
-  assert.strictEqual(loginAttackerRes.status, 401);
-
-  // 6. Victim logs in with victimPwd -> MUST succeed (200)
-  const loginVictimRes = await fetch(`${BASE_URL}/api/auth/login`, {
+  // 4. The second password cannot replace the first one.
+  const loginSecondRegistration = await fetch(`${BASE_URL}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: victimEmail, password: victimPwd }),
   });
-  assert.strictEqual(loginVictimRes.status, 200);
+  assert.strictEqual(loginSecondRegistration.status, 401);
 });

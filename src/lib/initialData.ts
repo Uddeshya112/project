@@ -127,6 +127,7 @@ for (let i = 1; i <= 500; i++) {
   const facId = `fac-${String(i).padStart(4, '0')}`;
   const emailName = `${fName}.${lName}`.toLowerCase().replace(/[^a-z.]/g, '');
   const email = i === 1 ? 'a.sharma@thapar.edu' : `${emailName}.${2000 + i}@thapar.edu`;
+  const designation = prng.choice(designations);
 
   FACULTY_MEMBERS.push({
     id: facId,
@@ -134,9 +135,9 @@ for (let i = 1; i <= 500; i++) {
     employeeId: `EMP-${2000 + i}`,
     email,
     departmentId: dept.id,
-    designation: prng.choice(designations),
+    designation,
     subjectsQualified: ['CS301', 'CS302', 'CS303', 'CS304', 'CS305'],
-    maxDirectTeachingHours: prng.choice([12, 14, 16]),
+    maxDirectTeachingHours: designation === 'Assistant Professor' ? 16 : 14,
     weeklyHoursLimit: 40,
     status: 'Active',
     preferences: {
