@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { useTimetable } from '../../context/TimetableContext';
 import { ThaparLogo } from '../ThaparLogo';
 import { evaluatePasswordPolicy } from '../../lib/passwordPolicy';
 import { supabaseClient, apiFetch } from '../../lib/supabaseClient';
@@ -36,8 +35,6 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
     requestPasswordReset,
     resetPassword
   } = useAuth();
-
-  const { setCurrentRole } = useTimetable();
 
   // Screen Mode: 'login' | 'register' | 'forgot_password' | 'reset_password'
   const [screenMode, setScreenMode] = useState<AuthScreenMode>('login');
@@ -145,9 +142,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
         if (resp.ok) {
           const data = await resp.json();
           if (data.authenticated && data.user) {
-            const roleKey = data.role || data.user.roleKey;
             const workspaces = data.authorizedWorkspaces || data.user.authorizedWorkspaces;
-            if (roleKey) setCurrentRole(roleKey);
             onSuccessLogin(workspaces);
           }
         }
@@ -174,9 +169,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
           if (resp.ok) {
             const data = await resp.json();
             if (data.authenticated && data.user) {
-              const roleKey = data.role || data.user.roleKey;
               const workspaces = data.authorizedWorkspaces || data.user.authorizedWorkspaces;
-              if (roleKey) setCurrentRole(roleKey);
               setTimeout(() => {
                 onSuccessLogin(workspaces);
               }, 300);
@@ -239,7 +232,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
     checkSupabaseRecovery();
 
     return () => window.removeEventListener('message', handleAuthMessage);
-  }, [setCurrentRole, onSuccessLogin]);
+  }, [onSuccessLogin]);
 
   // Password Requirement Checks
   const reqLength = newPassword.length >= 8;
@@ -281,9 +274,6 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
       const res = await login(emailTrim, loginPassword);
       if (res.success) {
         setSuccessMessage(res.message);
-        if (res.roleKey) {
-          setCurrentRole(res.roleKey);
-        }
         setTimeout(() => {
           onSuccessLogin(res.authorizedWorkspaces);
         }, 350);
@@ -401,7 +391,6 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
         setRegConfirmPassword('');
         const signIn = await login(emailTrim, regPassword);
         if (signIn.success) {
-          if (signIn.roleKey) setCurrentRole(signIn.roleKey);
           onSuccessLogin(signIn.authorizedWorkspaces);
         } else {
           setScreenMode('login');

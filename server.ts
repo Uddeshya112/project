@@ -2610,10 +2610,14 @@ function sanitizeAcademicState(state: any, roleCode?: string, user?: StoredUser)
 app.get('/api/academic/bootstrap', requireAuth, (req: AuthenticatedRequest, res: Response) => {
   const state = supabaseStore.getBootstrapState(req.authenticatedUser?.id);
   const sanitized = sanitizeAcademicState(state, req.authenticatedUser?.roleCode, req.authenticatedUser);
+  // ETags make the client's frequent cross-portal refresh cheap when the
+  // scoped academic data has not changed. Keep the cache private and vary it
+  // by session cookie so one user's role projection is never reused for another.
+  res.setHeader('Cache-Control', 'private, no-cache, must-revalidate');
+  res.vary('Cookie');
   return res.json({
     success: true,
     ...sanitized,
-    timestamp: new Date().toISOString(),
   });
 });
 

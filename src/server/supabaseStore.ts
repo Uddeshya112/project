@@ -85,6 +85,7 @@ class SupabaseRelationalStore {
   private allocations: Map<string, CourseAllocation> = new Map();
   private constraints: Map<string, AcademicConstraint> = new Map();
   private versions: TimetableVersion[] = [];
+  private versionHealthCache = new WeakMap<TimetableVersion, { sessions: ClassSession[]; score: ReturnType<typeof calculateHealthScore> }>();
   private activeSessions: ClassSession[] = [];
   private notifications: NotificationItem[] = [];
   private auditEvents: AuditLog[] = [];
@@ -311,7 +312,16 @@ class SupabaseRelationalStore {
   public getBootstrapState(userId?: string) {
     const publishedVersion = this.versions.find((version) => version.isPublished || version.status === 'Published');
     const versions = this.versions.map((version) => {
-      const score = calculateHealthScore(version.sessions || [], [...this.rooms.values()], [...this.facultyMembers.values()], [...this.groups.values()], [...this.courses.values()], this.academicYear);
+      const versionSessions = version.sessions || [];
+      let cached = this.versionHealthCache.get(version);
+      if (!cached || cached.sessions !== versionSessions) {
+        cached = {
+          sessions: versionSessions,
+          score: calculateHealthScore(versionSessions, [...this.rooms.values()], [...this.facultyMembers.values()], [...this.groups.values()], [...this.courses.values()], this.academicYear),
+        };
+        this.versionHealthCache.set(version, cached);
+      }
+      const score = cached.score;
       return { ...version, sessionsCount: version.sessions?.length ?? 0, healthScore: score.overallScore, hardViolationsCount: score.hardConstraintViolations };
     });
     return {

@@ -408,3 +408,12 @@
 - **BLOCKED:** `npm test` could not reach the spawned local server on port 3100 because this environment denies loopback socket access; the suite timed out before running the API tests. No API integration-test pass is claimed.
 - **LIVE CHECK (2026-11-20):** Vercel serves the public site with HTTP 200, and Render `/api/health/live` returns `LIVE`. The Vercel HTML is still a cached older build (response age about 29 hours; old `index-B6lTHKxu.js` asset). `/robots.txt` still returns SPA HTML. Authenticated live flows could not be tested through the deployment fetch endpoint, so no claim is made that production login/RBAC behavior is verified.
 - **NOT PUSHED OR DEPLOYED:** Changes remain local on `fix/full-e2e-sync`; the live Render/Vercel services and Supabase data were not modified.
+
+## 18. Startup and Refresh Latency (2026-11-24)
+
+- Login no longer statically imports the timetable context and solver. `TimetableProvider` and the dashboard are loaded only after authentication. The production entry bundle fell from 445.58 kB (126.80 kB gzip) to 326.44 kB (92.15 kB gzip), a measured reduction of 119.14 kB (34.65 kB gzip); the timetable context is now its own authenticated chunk.
+- Bootstrap refreshes now revalidate via private cookie-varying ETags, omit the changing timestamp that prevented cache hits, prevent overlapping polling requests, stop polling while the tab is hidden, and refresh when the tab becomes visible again. Explicit demo reset bypasses the conditional cache.
+- Historical version health scores are cached by immutable version/session references rather than recomputed on every bootstrap request. Timetable job progress polling starts after 200 ms and backs off gradually instead of always waiting 700 ms.
+- **VERIFIED:** TypeScript lint, production build, and all 17 focused solver/password/persistence tests passed after these changes.
+- **LIMITATION:** This environment cannot reach a locally spawned API server, so browser-visible bootstrap 304 behavior and production response latency were not measured here. The bundle-size reduction is directly measured from the production build outputs.
+- **NOT DEPLOYED:** These latency improvements do not change production until the branch is merged/deployed.

@@ -419,14 +419,22 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (authStatus !== 'AUTHENTICATED') return;
     let isMounted = true;
+    let requestInFlight = false;
+    let pollTimer: number | undefined;
     const controller = new AbortController();
     const loadBootstrapData = async () => {
+      if (requestInFlight || controller.signal.aborted) return;
+      requestInFlight = true;
       try {
         const res = await fetch('/api/academic/bootstrap', {
           credentials: 'same-origin',
           signal: controller.signal,
+          cache: 'no-cache',
           headers: { 'X-Requested-With': 'XMLHttpRequest' },
         });
+        // The server uses an authenticated, cookie-varying ETag. An unchanged
+        // bootstrap can return 304 without downloading or parsing the dataset.
+        if (res.status === 304) return;
         if (res.ok) {
           const data = await res.json();
           if (data.success && isMounted) {
@@ -453,13 +461,24 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       } catch (err) {
         if (controller.signal.aborted) return;
         console.warn('[SUPABASE_SYNC] Initial bootstrap load completed with local state active:', err);
+      } finally {
+        requestInFlight = false;
+        if (isMounted && !controller.signal.aborted && !document.hidden) {
+          pollTimer = window.setTimeout(() => { void loadBootstrapData(); }, 10_000);
+        }
       }
     };
+    const refreshWhenVisible = () => {
+      if (document.hidden) return;
+      if (pollTimer !== undefined) window.clearTimeout(pollTimer);
+      void loadBootstrapData();
+    };
     loadBootstrapData();
-    const syncTimer = window.setInterval(() => { void loadBootstrapData(); }, 10_000);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
     return () => {
       isMounted = false;
-      window.clearInterval(syncTimer);
+      if (pollTimer !== undefined) window.clearTimeout(pollTimer);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
       controller.abort();
     };
   }, [authStatus]);
@@ -903,12 +922,14 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
 
       const deadline = Date.now() + 120_000;
       let job: any;
+      let pollDelayMs = 200;
       while (Date.now() < deadline) {
-        await new Promise((resolve) => window.setTimeout(resolve, 700));
+        await new Promise((resolve) => window.setTimeout(resolve, pollDelayMs));
         const statusResponse = await fetch(apiUrl(`/api/timetable/jobs/${encodeURIComponent(started.jobId)}`), { credentials: 'same-origin' });
         job = await statusResponse.json().catch(() => ({}));
         if (!statusResponse.ok) throw new Error(job.message || 'Could not read generation progress.');
         if (job.status === 'COMPLETED' || job.status === 'FAILED' || job.status === 'CANCELLED') break;
+        pollDelayMs = Math.min(900, Math.round(pollDelayMs * 1.5));
       }
       if (!job || !['COMPLETED', 'FAILED', 'CANCELLED'].includes(job.status)) {
         void fetch(apiUrl(`/api/timetable/jobs/${encodeURIComponent(started.jobId)}/cancel`), { method: 'POST', credentials: 'same-origin', headers: getAuthHeaders(), body: '{}' });
@@ -1532,7 +1553,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.success) return { success: false, message: data.message || `Reset failed (${response.status}).` };
-      const bootstrapResponse = await fetch(apiUrl('/api/academic/bootstrap'), { credentials: 'same-origin' });
+      const bootstrapResponse = await fetch(apiUrl('/api/academic/bootstrap'), { credentials: 'same-origin', cache: 'no-store' });
       const bootstrap = await bootstrapResponse.json().catch(() => ({}));
       if (!bootstrapResponse.ok || !bootstrap.success) return { success: false, message: 'Reset completed, but refreshed timetable data could not be loaded. Reload the page.' };
       if (bootstrap.academicYear) setAcademicYear(bootstrap.academicYear);
