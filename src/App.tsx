@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { Suspense, useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { TimetableProvider } from './context/TimetableContext';
 import { ThemeProvider } from './context/ThemeContext';
-import { DashboardLayout } from './components/DashboardLayout';
+const DashboardLayout = React.lazy(() => import('./components/DashboardLayout').then((module) => ({ default: module.DashboardLayout })));
 import { LoginPageView } from './components/views/LoginPageView';
 import { VerifyEmailView } from './components/views/VerifyEmailView';
 import { WorkspaceSelectionView } from './components/views/WorkspaceSelectionView';
@@ -71,10 +71,12 @@ function MainLayout() {
   }
 
   return (
-    <DashboardLayout
-      onSignOutToLogin={handleSignOut}
-      onOpenWorkspacePicker={() => setShowWorkspacePicker(true)}
-    />
+    <Suspense fallback={<div role="status" className="flex min-h-screen items-center justify-center text-sm text-stone-500">Loading your workspace…</div>}>
+      <DashboardLayout
+        onSignOutToLogin={handleSignOut}
+        onOpenWorkspacePicker={() => setShowWorkspacePicker(true)}
+      />
+    </Suspense>
   );
 }
 

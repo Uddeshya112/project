@@ -16,7 +16,7 @@ Y = allowed, - = refused (403). "own" = restricted by the server to the user's o
 | Action (endpoint) | Admin | Coordinator | HOD | Faculty | CR | Student |
 | --- | :-: | :-: | :-: | :-: | :-: | :-: |
 | Sign in, own profile, change own password, mark notification read | Y | Y | Y | Y | Y | Y |
-| Load app data (`GET /api/academic/bootstrap`): timetable shown | draft | draft | draft | published | published | published |
+| Load app data (`GET /api/academic/bootstrap`): timetable shown | all | all | own department | published schedule | own section | own section |
 | Student roster, audit log, version details, solver benchmark | Y | Y | Y | - | - | - |
 | Academic data create/update/delete, bulk groups, subgroups, academic year, Excel import, toggle soft constraints | Y | Y | - | - | - | - |
 | Generate, select routine, move, swap, lock/unlock, restore version, set Draft/Review | Y | Y | - | - | - | - |
@@ -34,7 +34,7 @@ Notes:
 
 - Adding a class: staff add to the working draft, which creates a new version. Faculty add a class for themselves to the published timetable (mirrored into the draft), and an in-app notification is posted.
 - Faculty are matched to a faculty record by email; an account without a matching record gets 403 "not linked to a faculty record" for faculty actions.
-- `GET /api/academic/bootstrap` returns the full academic dataset to every signed-in user; the portals show students and faculty only their own section or classes. See [security/threat-model.md](security/threat-model.md).
+- `GET /api/academic/bootstrap` is projected by role on the server: HOD sees the linked department; Student and CR see their linked section, own student record, related classes and notifications; Faculty receives schedule/occupancy data without the student roster or audit log. The separate academic catalog read endpoints are restricted to Admin, Coordinator, and HOD, with HOD results department-scoped. See [security/threat-model.md](security/threat-model.md).
 - Admins cannot change their own role, lock themselves or delete their own account.
 
 ## Workspaces

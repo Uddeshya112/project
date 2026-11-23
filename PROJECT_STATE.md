@@ -385,3 +385,26 @@
 - **NOT DEPLOYED / NOT PUSHED:** Changes are only in the local checkout; no hosted service, database, or remote branch was changed.
 - **LIMITATION:** No new database migration was necessary: account approvals use the existing durable `pending_registrations` table, and the users table retains its existing ACTIVE/LOCKED status constraint. The solver performance claims in the pasted prompt are not treated as verified guarantees; no algorithm replacement or 10,000-student speed claim was made.
 - Admin Users now includes the authenticated Admin in the live-session panel when the durable session endpoint returns no row for the current identity, so a signed-in Admin is not shown as zero active sessions. This is a UI fallback for the current authenticated browser; it does not fabricate additional devices.
+
+## 17. Current Session — Scope, Lighthouse and Timetable Search Audit (2026-11-20)
+
+### Changes
+
+- Academic bootstrap now runs only for authenticated sessions, sends same-origin credentials, aborts in-flight requests on sign-out, and keeps the 10-second sync for signed-in cross-portal updates. This removes repeated unauthenticated bootstrap 401s from the login-page load.
+- Student/CR bootstrap is narrowed server-side to the linked section and the user's own student record, with related sessions, courses, staff names, rooms, polls, recovery items and notifications. Faculty receives no student roster, student count, or audit log. HOD receives the linked department projection. Catalog GETs and timetable-version GETs now enforce staff roles and apply HOD scoping; `/api/me` and `/api/me/timetable` no longer fall back to the first roster record or invented Student defaults.
+- Student notifications omit system/admin events. HOD, Student, CR, and Faculty notification reads now use the same server-side scope projection as bootstrap.
+- Coordinator, HOD, and syllabus workload displays use the shared designation cap and combined-lecture/lab-period counting helper.
+- Timetable search uses an initial MRV+degree order and a bounded 32-allocation dynamic MRV window on larger problems, plus seeded slot ordering. The test result now reports `isFeasible=false` separately from actual candidate hard violations; incomplete search is not misreported as a conflict count.
+- Dashboard and portal views are lazy-loaded; the login route no longer includes the academic spreadsheet-import view in its initial JavaScript payload. Removed the duplicate font downloads, enlarged the password visibility hit target, and added the login page's main landmark. Added a crawl-blocking `public/robots.txt` for this signed-in campus application.
+- Solver benchmark fixtures now distinguish complete schedules from hard violations, count different subgroup batches as parallel rather than section collisions, and report comparative counters honestly. The 1,100-allocation fixture requests about 2,200 timetable periods.
+
+### Verification and release status
+
+- **VERIFIED:** Solver verification completed with zero hard violations for complete candidates, including 1,100 allocations / approximately 2,200 requested periods at about 555 ms on this run. Timing varies by host; this is a measured fixture, not a production guarantee.
+- **VERIFIED:** The same solver run passed deterministic output, property checks, hard-constraint audits, lab blocks, subgroup scheduling, and the asynchronous job lifecycle.
+- **VERIFIED:** `npm run lint` and `npm run build` passed after the final server/scope and solver changes. Vite still reports the lazy `AcademicSetupHubView` chunk at about 573 kB minified; the initial application bundle is about 446 kB (127 kB gzip).
+- **VERIFIED:** `node --import tsx --test --test-concurrency=1 tests/engine.test.ts tests/password.test.ts tests/persistent_state.test.ts` passed all 17 tests. The solver tests include exact fixed-session placement and independent hard-constraint checks after local search.
+- **VERIFIED:** `npm run test:solver` passed. Synthetic scale fixtures through 1,100 allocations (about 2,200 requested periods) completed with zero hard violations on this run; seeded determinism, subgroup/lab rules, property tests, and infeasibility cases also passed. This is not a production-scale 10,000-student guarantee.
+- **BLOCKED:** `npm test` could not reach the spawned local server on port 3100 because this environment denies loopback socket access; the suite timed out before running the API tests. No API integration-test pass is claimed.
+- **LIVE CHECK (2026-11-20):** Vercel serves the public site with HTTP 200, and Render `/api/health/live` returns `LIVE`. The Vercel HTML is still a cached older build (response age about 29 hours; old `index-B6lTHKxu.js` asset). `/robots.txt` still returns SPA HTML. Authenticated live flows could not be tested through the deployment fetch endpoint, so no claim is made that production login/RBAC behavior is verified.
+- **NOT PUSHED OR DEPLOYED:** Changes remain local on `fix/full-e2e-sync`; the live Render/Vercel services and Supabase data were not modified.

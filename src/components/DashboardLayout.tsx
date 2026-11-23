@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { Suspense, lazy, useState, useEffect } from 'react';
 import { useTimetable } from '../context/TimetableContext';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
@@ -7,23 +7,23 @@ import { Sidebar } from './Sidebar';
 import { AcademicInboxModal } from './modals/AcademicInboxModal';
 import { UserProfileModal } from './modals/UserProfileModal';
 
-// Views
-import { CoordinatorView } from './views/CoordinatorView';
-import { TimetableGridView } from './views/TimetableGridView';
-import { RecoveryEngineView } from './views/RecoveryEngineView';
-import { FacultyPortalView } from './views/FacultyPortalView';
-import { FacultyAvailabilityView } from './views/FacultyAvailabilityView';
-import { StudentPortalView } from './views/StudentPortalView';
-import { CRPortalView } from './views/CRPortalView';
-import { AdminPortalView } from './views/AdminPortalView';
-import { GovernanceView } from './views/GovernanceView';
-import { AcademicSetupHubView } from './views/AcademicSetupHubView';
-import { GenerateTimetablePage } from './views/GenerateTimetablePage';
-import { SettingsView } from './views/SettingsView';
-import { WhatIfSimulatorView } from './views/WhatIfSimulatorView';
-import { WorkloadSyllabusView } from './views/WorkloadSyllabusView';
-import { RequestsView } from './views/RequestsView';
-import { HodPortalView } from './views/HodPortalView';
+// Keep portal and spreadsheet-import code out of the sign-in/initial page bundle.
+const CoordinatorView = lazy(() => import('./views/CoordinatorView').then((m) => ({ default: m.CoordinatorView })));
+const TimetableGridView = lazy(() => import('./views/TimetableGridView').then((m) => ({ default: m.TimetableGridView })));
+const RecoveryEngineView = lazy(() => import('./views/RecoveryEngineView').then((m) => ({ default: m.RecoveryEngineView })));
+const FacultyPortalView = lazy(() => import('./views/FacultyPortalView').then((m) => ({ default: m.FacultyPortalView })));
+const FacultyAvailabilityView = lazy(() => import('./views/FacultyAvailabilityView').then((m) => ({ default: m.FacultyAvailabilityView })));
+const StudentPortalView = lazy(() => import('./views/StudentPortalView').then((m) => ({ default: m.StudentPortalView })));
+const CRPortalView = lazy(() => import('./views/CRPortalView').then((m) => ({ default: m.CRPortalView })));
+const AdminPortalView = lazy(() => import('./views/AdminPortalView').then((m) => ({ default: m.AdminPortalView })));
+const GovernanceView = lazy(() => import('./views/GovernanceView').then((m) => ({ default: m.GovernanceView })));
+const AcademicSetupHubView = lazy(() => import('./views/AcademicSetupHubView').then((m) => ({ default: m.AcademicSetupHubView })));
+const GenerateTimetablePage = lazy(() => import('./views/GenerateTimetablePage').then((m) => ({ default: m.GenerateTimetablePage })));
+const SettingsView = lazy(() => import('./views/SettingsView').then((m) => ({ default: m.SettingsView })));
+const WhatIfSimulatorView = lazy(() => import('./views/WhatIfSimulatorView').then((m) => ({ default: m.WhatIfSimulatorView })));
+const WorkloadSyllabusView = lazy(() => import('./views/WorkloadSyllabusView').then((m) => ({ default: m.WorkloadSyllabusView })));
+const RequestsView = lazy(() => import('./views/RequestsView').then((m) => ({ default: m.RequestsView })));
+const HodPortalView = lazy(() => import('./views/HodPortalView').then((m) => ({ default: m.HodPortalView })));
 
 import {
   Menu,
@@ -321,6 +321,7 @@ export function DashboardLayout({
               <span>Loading timetable data…</span>
             </div>
           ) : (
+          <Suspense fallback={<div role="status" className="flex justify-center py-16 text-xs text-stone-500">Loading workspace…</div>}>
           <>
           {currentWorkspace === 'Student' && <StudentPortalView />}
           {currentWorkspace === 'CR' && <CRPortalView />}
@@ -362,6 +363,7 @@ export function DashboardLayout({
             </>
           )}
           </>
+          </Suspense>
           )}
 
           <footer className="mt-8 pt-4 border-t border-[#E5E2D9] dark:border-zinc-800/80 text-center text-[11px] text-stone-500 dark:text-zinc-500">

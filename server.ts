@@ -1389,11 +1389,12 @@ app.get('/api/me', (req: Request, res: Response) => {
 
   if (user.roleCode === 'STUDENT' || user.roleCode === 'CLASS_REPRESENTATIVE') {
     const students = bootstrap.students || [];
-    studentRecord = students.find((s: any) => s.email.toLowerCase() === user.email.toLowerCase()) || students[0];
+    studentRecord = students.find((s: any) => s.email?.toLowerCase() === user.email.toLowerCase());
   } else if (user.roleCode === 'FACULTY' || user.roleCode === 'COORDINATOR' || user.roleCode === 'HOD') {
     const faculty = bootstrap.facultyMembers || [];
-    facultyRecord = faculty.find((f: any) => f.email.toLowerCase() === user.email.toLowerCase()) || faculty[0];
+    facultyRecord = faculty.find((f: any) => f.email?.toLowerCase() === user.email.toLowerCase() || f.id === user.profile?.facultyId);
   }
+  const profile = user.profile || {};
 
   return res.json({
     success: true,
@@ -1407,12 +1408,12 @@ app.get('/api/me', (req: Request, res: Response) => {
       roleName: user.roleName,
       roleKey,
       authorizedWorkspaces,
-      program: studentRecord?.programCode || 'B.Tech in Computer Science & Engineering',
-      semester: studentRecord?.semester || 5,
-      section: studentRecord?.sectionName || studentRecord?.sectionId || 'CSE-A',
-      rollNumber: studentRecord?.studentId || studentRecord?.id || '102303999',
-      employeeId: facultyRecord?.employeeId,
-      designation: facultyRecord?.designation,
+      program: studentRecord?.programCode || profile.programCode || profile.program,
+      semester: studentRecord?.semester ?? profile.semester,
+      section: studentRecord?.sectionName || studentRecord?.sectionId || profile.sectionName || profile.sectionId,
+      rollNumber: studentRecord?.studentId || profile.rollNumber,
+      employeeId: facultyRecord?.employeeId || profile.employeeId,
+      designation: facultyRecord?.designation || profile.designation,
     },
   });
 });
@@ -1425,29 +1426,23 @@ app.get('/api/me/timetable', (req: Request, res: Response) => {
   }
 
   const bootstrap = supabaseStore.getBootstrapState();
-  const sessions = bootstrap.sessions || [];
-  let userSection = 'CSE-A';
-  let filteredSessions = sessions;
-
+  const scoped = sanitizeAcademicState(bootstrap, user.roleCode, user);
+  let filteredSessions: any[] = scoped.sessions || [];
+  let userSection = '';
   if (user.roleCode === 'STUDENT' || user.roleCode === 'CLASS_REPRESENTATIVE') {
-    const students = bootstrap.students || [];
-    const studentRecord = students.find((s: any) => s.email.toLowerCase() === user.email.toLowerCase()) || students[0];
-    if (studentRecord) {
-      userSection = studentRecord.sectionName || studentRecord.sectionId;
-      filteredSessions = sessions.filter((s: any) => s.sectionId === studentRecord.sectionId || s.sectionId === userSection);
-    }
+    filteredSessions = scoped.publishedSessions || [];
+    userSection = scoped.sections?.[0]?.name || '';
   } else if (user.roleCode === 'FACULTY') {
-    const faculty = bootstrap.facultyMembers || [];
-    const facultyRecord = faculty.find((f: any) => f.email.toLowerCase() === user.email.toLowerCase());
-    if (facultyRecord) {
-      filteredSessions = sessions.filter((s: any) => s.facultyId === facultyRecord.id);
-    }
+    const facultyRecord = (bootstrap.facultyMembers || []).find((f: any) => f.email?.toLowerCase() === user.email.toLowerCase() || f.id === user.profile?.facultyId);
+    filteredSessions = (scoped.publishedSessions?.length ? scoped.publishedSessions : scoped.sessions || []).filter((s: any) => s.facultyId === facultyRecord?.id);
+  } else if (user.roleCode === 'HOD') {
+    filteredSessions = scoped.publishedSessions || [];
   }
 
   const schedule = filteredSessions.slice(0, 50).map((s: any) => {
-    const course = bootstrap.courses.find((c: any) => c.id === s.courseId);
-    const room = bootstrap.rooms.find((r: any) => r.id === s.roomId);
-    const facultyMember = bootstrap.facultyMembers.find((f: any) => f.id === s.facultyId);
+    const course = scoped.courses.find((c: any) => c.id === s.courseId);
+    const room = scoped.rooms.find((r: any) => r.id === s.roomId);
+    const facultyMember = scoped.facultyMembers.find((f: any) => f.id === s.facultyId);
     return {
       day: s.day,
       timeSlot: s.timeSlotId,
@@ -2505,15 +2500,24 @@ function sanitizeAcademicState(state: any, roleCode?: string, user?: StoredUser)
       programs: (state.programs || []).filter((item: any) => item.departmentId === departmentId),
       courses: (state.courses || []).filter((item: any) => courseIds.has(item.id)),
       facultyMembers: (state.facultyMembers || []).filter((item: any) => facultyIds.has(item.id)),
+      rooms: (state.rooms || []).filter((item: any) => (state.sessions || []).some((session: any) => session.roomId === item.id && (sectionIds.has(session.sectionId) || facultyIds.has(session.facultyId)))),
       sections: (state.sections || []).filter((item: any) => sectionIds.has(item.id)),
       students: (state.students || []).filter((item: any) => sectionIds.has(item.sectionId)),
+      studentsCount: (state.sections || []).filter((item: any) => sectionIds.has(item.id)).reduce((total: number, item: any) => total + (Number(item.studentCount) || 0), 0),
       allocations: (state.allocations || []).filter((item: any) => sectionIds.has(item.sectionId) && courseIds.has(item.courseId)),
       sessions: scoped(state.sessions), publishedSessions: scoped(state.publishedSessions),
       versions: (state.versions || []).map((version: any) => ({ ...version, sessions: scoped(version.sessions || []) })),
       polls: (state.polls || []).filter((item: any) => sectionIds.has(item.sectionId)),
       makeupTasks: (state.makeupTasks || []).filter((item: any) => sectionIds.has(item.sectionId)),
       recoveryOpportunities: (state.recoveryOpportunities || []).filter((item: any) => sectionIds.has(item.sectionId)),
-      notifications: (state.notifications || []).filter((item: any) => !item.actionPayload?.sectionId || sectionIds.has(item.actionPayload.sectionId)),
+      notifications: (state.notifications || []).filter((item: any) => {
+        if (item.userId && item.userId !== user?.id) return false;
+        if (item.actionPayload?.sectionId) return sectionIds.has(item.actionPayload.sectionId);
+        const sessionId = item.actionPayload?.sessionId;
+        if (sessionId) return scoped(state.sessions).some((session: any) => session.id === sessionId) || scoped(state.publishedSessions).some((session: any) => session.id === sessionId);
+        const facultyId = item.actionPayload?.facultyId;
+        return !facultyId || facultyIds.has(facultyId);
+      }),
       auditLogs: (state.auditLogs || []).filter((log: any) =>
         (log.entityType === 'DepartmentTimetable' && String(log.entityId).startsWith(`${departmentId}:`)) ||
         (log.entityType === 'ClassSession' && (state.sessions || []).some((session: any) => session.id === log.entityId && (sectionIds.has(session.sectionId) || facultyIds.has(session.facultyId)))) ||
@@ -2523,32 +2527,88 @@ function sanitizeAcademicState(state: any, roleCode?: string, user?: StoredUser)
       ),
     };
   }
+  if (roleCode === 'FACULTY') {
+    const faculty = (state.facultyMembers || []).find((item: any) => item.id === user?.profile?.facultyId || item.email?.toLowerCase() === user?.email?.toLowerCase());
+    return {
+      ...state,
+      students: [],
+      studentsCount: 0,
+      facultyMembers: (state.facultyMembers || []).map((item: any) => ({
+        id: item.id, name: item.name, departmentId: item.departmentId, designation: item.designation,
+        subjectsQualified: item.subjectsQualified, status: item.status,
+        ...(item.id === faculty?.id ? { email: item.email, preferences: item.preferences } : {}),
+      })),
+      auditLogs: [],
+      notifications: (state.notifications || []).filter((item: any) =>
+        (!item.userId || item.userId === user?.id) &&
+        (!item.actionPayload?.facultyId || item.actionPayload.facultyId === faculty?.id)),
+    };
+  }
   if (roleCode !== 'STUDENT' && roleCode !== 'CLASS_REPRESENTATIVE') return state;
+
+  const email = user?.email?.toLowerCase();
+  const student = (state.students || []).find((item: any) => item.email?.toLowerCase() === email);
+  const sectionId = user?.profile?.sectionId || user?.profile?.crSectionId || student?.sectionId;
+  if (!sectionId) return {
+    ...state, departments: [], programs: [], courses: [], facultyMembers: [], rooms: [], sections: [], students: [],
+    studentsCount: 0,
+    allocations: [], constraints: [], sessions: [], publishedSessions: [], versions: [], notifications: [], polls: [],
+    makeupTasks: [], recoveryOpportunities: [], auditLogs: [],
+  };
+
+  const sections = (state.sections || []).filter((item: any) => item.id === sectionId);
+  const sessionsForSection = (sessions: any[]) => (sessions || []).filter((item: any) => item.sectionId === sectionId);
+  const sectionSessions = sessionsForSection(state.sessions);
+  const publishedSessions = sessionsForSection(state.publishedSessions);
+  const visibleSessions = [...sectionSessions, ...publishedSessions];
+  const courseIds = new Set(visibleSessions.map((item: any) => item.courseId));
+  const facultyIds = new Set(visibleSessions.map((item: any) => item.facultyId));
+  const roomIds = new Set(visibleSessions.map((item: any) => item.roomId));
+  const courseAllocations = (state.allocations || []).filter((item: any) => item.sectionId === sectionId);
+  courseAllocations.forEach((item: any) => { courseIds.add(item.courseId); facultyIds.add(item.facultyId); });
+  const visibleSessionIds = new Set(visibleSessions.map((item: any) => item.id));
+  const notificationVisible = (item: any) => {
+    if (item.type === 'system_alert' || ['internal', 'admin_audit', 'system'].includes(item.type) || /master academic dataset persisted|internal system event|administrative event/i.test(`${item.title || ''} ${item.message || ''}`)) return false;
+    if (item.userId && item.userId !== user?.id) return false;
+    const linkedSection = item.actionPayload?.sectionId;
+    const linkedSession = item.actionPayload?.sessionId;
+    if (linkedSection) return linkedSection === sectionId;
+    if (linkedSession && /cancel|class_disrupted|poll|makeup|recovery/i.test(`${item.type || ''} ${item.title || ''} ${item.action || ''}`)) return visibleSessionIds.has(linkedSession);
+    if (['cancellation', 'poll_created', 'makeup_request', 'recovery'].includes(item.type)) return false;
+    return true;
+  };
+  const scopeVersions = (versions: any[]) => (versions || []).map((version: any) => ({ ...version, sessions: sessionsForSection(version.sessions) }));
   return {
     ...state,
-    facultyMembers: (state.facultyMembers || []).map((f: any) => ({
-      id: f.id,
-      name: f.name,
-      departmentId: f.departmentId,
-      designation: f.designation,
-      subjectsQualified: f.subjectsQualified,
-      status: f.status,
+    departments: (state.departments || []).filter((item: any) => item.id === sections[0]?.departmentId),
+    programs: (state.programs || []).filter((item: any) => item.id === sections[0]?.programId || item.departmentId === sections[0]?.departmentId),
+    courses: (state.courses || []).filter((item: any) => courseIds.has(item.id)),
+    facultyMembers: (state.facultyMembers || []).filter((item: any) => facultyIds.has(item.id)).map((item: any) => ({
+      id: item.id, name: item.name, departmentId: item.departmentId, designation: item.designation, status: item.status,
     })),
+    rooms: (state.rooms || []).filter((item: any) => roomIds.has(item.id) || item.id === sections[0]?.homeRoomId),
+    sections,
+    students: student ? [student] : [],
+    studentsCount: sections[0]?.studentCount || 0,
+    allocations: courseAllocations,
+    constraints: [],
+    sessions: sectionSessions,
+    publishedSessions,
+    versions: scopeVersions(state.versions),
+    notifications: (state.notifications || []).filter(notificationVisible),
+    polls: (state.polls || []).filter((item: any) => item.sectionId === sectionId),
+    makeupTasks: (state.makeupTasks || []).filter((item: any) => item.sectionId === sectionId),
+    recoveryOpportunities: (state.recoveryOpportunities || []).filter((item: any) => {
+      const task = (state.makeupTasks || []).find((candidate: any) => candidate.id === item.makeupTaskId);
+      return task?.sectionId === sectionId;
+    }),
+    auditLogs: [],
   };
 }
 
 // Master Bootstrap State (Database-backed read for complete academic workspace)
 app.get('/api/academic/bootstrap', requireAuth, (req: AuthenticatedRequest, res: Response) => {
   const state = supabaseStore.getBootstrapState(req.authenticatedUser?.id);
-  if (['STUDENT', 'CLASS_REPRESENTATIVE'].includes(req.authenticatedUser?.roleCode || '')) {
-    const student = (state.students || []).find((item: any) => item.email?.toLowerCase() === req.authenticatedUser?.email.toLowerCase());
-    const sectionId = req.authenticatedUser?.profile?.sectionId || student?.sectionId;
-    state.polls = state.polls.filter((poll: any) => poll.sectionId === sectionId);
-    state.notifications = state.notifications.filter((item: any) =>
-      !/master academic dataset persisted/i.test(`${item.title || ''} ${item.message || ''}`) &&
-      (!['cancellation', 'poll_created'].includes(item.type) || item.actionPayload?.sectionId === sectionId),
-    );
-  }
   const sanitized = sanitizeAcademicState(state, req.authenticatedUser?.roleCode, req.authenticatedUser);
   return res.json({
     success: true,
@@ -2579,8 +2639,8 @@ app.get('/api/students', requireAuth, requireRole(['SUPER_ADMIN', 'COLLEGE_ADMIN
 });
 
 // 1. Departments CRUD
-app.get('/api/academic/departments', requireAuth, (_req: Request, res: Response) => {
-  const state = supabaseStore.getBootstrapState();
+app.get('/api/academic/departments', requireAuth, requireRole(['SUPER_ADMIN', 'COLLEGE_ADMIN', 'COORDINATOR', 'HOD']), (req: AuthenticatedRequest, res: Response) => {
+  const state = sanitizeAcademicState(supabaseStore.getBootstrapState(), req.authenticatedUser?.roleCode, req.authenticatedUser);
   return res.json({ success: true, departments: state.departments });
 });
 
@@ -2627,8 +2687,8 @@ app.delete('/api/academic/departments/:id', requireAuth, requireRole(['COORDINAT
 });
 
 // 2. Programs CRUD
-app.get('/api/academic/programs', requireAuth, (_req: Request, res: Response) => {
-  const state = supabaseStore.getBootstrapState();
+app.get('/api/academic/programs', requireAuth, requireRole(['SUPER_ADMIN', 'COLLEGE_ADMIN', 'COORDINATOR', 'HOD']), (req: AuthenticatedRequest, res: Response) => {
+  const state = sanitizeAcademicState(supabaseStore.getBootstrapState(), req.authenticatedUser?.roleCode, req.authenticatedUser);
   return res.json({ success: true, programs: state.programs });
 });
 
@@ -2676,8 +2736,8 @@ app.delete('/api/academic/programs/:id', requireAuth, requireRole(['COORDINATOR'
 });
 
 // 3. Courses CRUD
-app.get('/api/academic/courses', requireAuth, (_req: Request, res: Response) => {
-  const state = supabaseStore.getBootstrapState();
+app.get('/api/academic/courses', requireAuth, requireRole(['SUPER_ADMIN', 'COLLEGE_ADMIN', 'COORDINATOR', 'HOD']), (req: AuthenticatedRequest, res: Response) => {
+  const state = sanitizeAcademicState(supabaseStore.getBootstrapState(), req.authenticatedUser?.roleCode, req.authenticatedUser);
   return res.json({ success: true, courses: state.courses });
 });
 
@@ -2754,8 +2814,8 @@ app.delete('/api/academic/courses/:id', requireAuth, requireRole(['COORDINATOR',
 });
 
 // 4. Faculty CRUD
-app.get('/api/academic/faculty', requireAuth, (_req: Request, res: Response) => {
-  const state = supabaseStore.getBootstrapState();
+app.get('/api/academic/faculty', requireAuth, requireRole(['SUPER_ADMIN', 'COLLEGE_ADMIN', 'COORDINATOR', 'HOD']), (req: AuthenticatedRequest, res: Response) => {
+  const state = sanitizeAcademicState(supabaseStore.getBootstrapState(), req.authenticatedUser?.roleCode, req.authenticatedUser);
   return res.json({ success: true, facultyMembers: state.facultyMembers });
 });
 
@@ -2813,8 +2873,8 @@ app.delete('/api/academic/faculty/:id', requireAuth, requireRole(['COORDINATOR',
 });
 
 // 5. Rooms CRUD
-app.get('/api/academic/rooms', requireAuth, (_req: Request, res: Response) => {
-  const state = supabaseStore.getBootstrapState();
+app.get('/api/academic/rooms', requireAuth, requireRole(['SUPER_ADMIN', 'COLLEGE_ADMIN', 'COORDINATOR', 'HOD']), (req: AuthenticatedRequest, res: Response) => {
+  const state = sanitizeAcademicState(supabaseStore.getBootstrapState(), req.authenticatedUser?.roleCode, req.authenticatedUser);
   return res.json({ success: true, rooms: state.rooms });
 });
 
@@ -2868,8 +2928,8 @@ app.delete('/api/academic/rooms/:id', requireAuth, requireRole(['COORDINATOR', '
 });
 
 // 6. Groups & Subgroups (Cohorts) CRUD
-app.get('/api/academic/groups', requireAuth, (_req: Request, res: Response) => {
-  const state = supabaseStore.getBootstrapState();
+app.get('/api/academic/groups', requireAuth, requireRole(['SUPER_ADMIN', 'COLLEGE_ADMIN', 'COORDINATOR', 'HOD']), (req: AuthenticatedRequest, res: Response) => {
+  const state = sanitizeAcademicState(supabaseStore.getBootstrapState(), req.authenticatedUser?.roleCode, req.authenticatedUser);
   return res.json({ success: true, sections: state.sections });
 });
 
@@ -2976,8 +3036,8 @@ app.delete('/api/academic/subgroups/:groupId/:subgroupId', requireAuth, requireR
 });
 
 // 7. Course Allocations CRUD
-app.get('/api/academic/allocations', requireAuth, (_req: Request, res: Response) => {
-  const state = supabaseStore.getBootstrapState();
+app.get('/api/academic/allocations', requireAuth, requireRole(['SUPER_ADMIN', 'COLLEGE_ADMIN', 'COORDINATOR', 'HOD']), (req: AuthenticatedRequest, res: Response) => {
+  const state = sanitizeAcademicState(supabaseStore.getBootstrapState(), req.authenticatedUser?.roleCode, req.authenticatedUser);
   return res.json({ success: true, allocations: state.allocations });
 });
 
@@ -3301,8 +3361,8 @@ app.post('/api/timetable/publish', requireAuth, requireRole(['COORDINATOR', 'COL
 app.post('/api/timetables/publish', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN', 'SUPER_ADMIN']), handlePublishTimetable);
 
 // Timetable Versions List & Restore
-app.get('/api/timetable/versions', requireAuth, (_req: Request, res: Response) => {
-  const state = supabaseStore.getBootstrapState();
+app.get('/api/timetable/versions', requireAuth, requireRole(['SUPER_ADMIN', 'COLLEGE_ADMIN', 'COORDINATOR', 'HOD']), (req: AuthenticatedRequest, res: Response) => {
+  const state = sanitizeAcademicState(supabaseStore.getBootstrapState(), req.authenticatedUser?.roleCode, req.authenticatedUser);
   return res.json({ success: true, versions: state.versions });
 });
 
@@ -3638,7 +3698,9 @@ app.get('/api/notifications', requireAuth, (req: AuthenticatedRequest, res: Resp
   const userDashboardRole = mapRoleCodeToDashboard(user.roleCode);
   const userId = user.id;
 
+  const scopedNotificationIds = new Set(sanitizeAcademicState(state, userRole, user).notifications.map((n: any) => n.id));
   const filtered = state.notifications.filter((n: any) => {
+    if (!scopedNotificationIds.has(n.id)) return false;
     if (['STUDENT', 'CLASS_REPRESENTATIVE'].includes(userRole) && /master academic dataset persisted/i.test(`${n.title || ''} ${n.message || ''}`)) return false;
     if (n.userId && n.userId === userId) return true;
     if (!n.recipientRole || n.recipientRole === 'ALL' || n.recipientRole === '*') return true;

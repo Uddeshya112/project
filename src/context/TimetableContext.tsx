@@ -414,12 +414,19 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     };
   };
 
-  // Synchronize initial state from Supabase / Backend API on mount
+  // Load shared academic state only after authentication. Polling while signed
+  // out generates repeated 401s and can keep the login page busy in Lighthouse.
   useEffect(() => {
+    if (authStatus !== 'AUTHENTICATED') return;
     let isMounted = true;
+    const controller = new AbortController();
     const loadBootstrapData = async () => {
       try {
-        const res = await fetch('/api/academic/bootstrap');
+        const res = await fetch('/api/academic/bootstrap', {
+          credentials: 'same-origin',
+          signal: controller.signal,
+          headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        });
         if (res.ok) {
           const data = await res.json();
           if (data.success && isMounted) {
@@ -444,6 +451,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
           }
         }
       } catch (err) {
+        if (controller.signal.aborted) return;
         console.warn('[SUPABASE_SYNC] Initial bootstrap load completed with local state active:', err);
       }
     };
@@ -452,8 +460,9 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     return () => {
       isMounted = false;
       window.clearInterval(syncTimer);
+      controller.abort();
     };
-  }, []);
+  }, [authStatus]);
 
   // Dynamic Computed Validation Report
   const validationReport = useMemo(() => {

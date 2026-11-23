@@ -596,7 +596,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
   };
 
   return (
-    <div className="study-login min-h-screen w-full bg-[#F7F6F2] dark:bg-[#0c0c0e] text-stone-900 dark:text-zinc-100 flex flex-col justify-center items-center p-3 sm:p-4 font-sans relative overflow-x-hidden selection:bg-[#8C1B2E]/20 selection:text-[#8C1B2E]">
+    <main className="study-login min-h-screen w-full bg-[#F7F6F2] dark:bg-[#0c0c0e] text-stone-900 dark:text-zinc-100 flex flex-col justify-center items-center p-3 sm:p-4 font-sans relative overflow-x-hidden selection:bg-[#8C1B2E]/20 selection:text-[#8C1B2E]">
       <div className="study-login-story" aria-hidden="true">
         <div className="study-story-kicker"><span className="study-live-dot" /> TIET · ACADEMIC LIFE, IN RHYTHM</div>
         <h1>Make room<br />for <em>what’s next.</em></h1>
@@ -716,7 +716,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
                   <button
                     type="button"
                     onClick={() => setShowLoginPassword(!showLoginPassword)}
-                    className="absolute right-3.5 top-2.5 text-stone-400 hover:text-stone-600 dark:text-zinc-500 dark:hover:text-zinc-300 transition-colors p-0.5 focus:outline-none"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 min-h-8 min-w-8 inline-flex items-center justify-center rounded-md text-stone-400 hover:text-stone-600 dark:text-zinc-500 dark:hover:text-zinc-300 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8C1B2E]"
                     aria-label={showLoginPassword ? 'Hide password' : 'Show password'}
                     aria-pressed={showLoginPassword}
                   >
@@ -1562,6 +1562,6 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
           </div>
         </div>
       )}
-    </div>
+    </main>
   );
 }
