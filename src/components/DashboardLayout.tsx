@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useState, useEffect } from 'react';
+import React, { Suspense, lazy, useState, useEffect, useRef } from 'react';
 import { useTimetable } from '../context/TimetableContext';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
@@ -76,7 +76,9 @@ export function DashboardLayout({
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
-  const [showWorkspaceMenu, setShowWorkspaceMenu] = useState(false);
+  const [openTopbarMenu, setOpenTopbarMenu] = useState<'presentation' | 'workspace' | null>(null);
+  const topbarMenusRef = useRef<HTMLDivElement>(null);
+  const [pathname, setPathname] = useState(() => window.location.pathname);
   const [resettingDemo, setResettingDemo] = useState(false);
   const [resetToast, setResetToast] = useState<{ success: boolean; message: string } | null>(null);
 
@@ -132,17 +134,39 @@ export function DashboardLayout({
     return () => clearTimeout(t);
   }, [notice, dismissNotice]);
 
-  // Close menus on Escape
+  // Keep the top-bar menus mutually exclusive and dismiss them on outside clicks.
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setIsMobileNavOpen(false);
-        setShowWorkspaceMenu(false);
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && !topbarMenusRef.current?.contains(event.target)) {
+        setOpenTopbarMenu(null);
       }
     };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsMobileNavOpen(false);
+        setOpenTopbarMenu(null);
+      }
+    };
+    window.addEventListener('pointerdown', handlePointerDown);
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
   }, []);
+
+  useEffect(() => {
+    const syncPathname = () => setPathname(window.location.pathname);
+    window.addEventListener('popstate', syncPathname);
+    window.addEventListener('hashchange', syncPathname);
+    return () => {
+      window.removeEventListener('popstate', syncPathname);
+      window.removeEventListener('hashchange', syncPathname);
+    };
+  }, []);
+
+  // activeView is the in-portal route state; pathname catches direct/browser routes.
+  useEffect(() => setOpenTopbarMenu(null), [activeView, currentWorkspace, pathname]);
 
   const handleSignOut = () => {
     onSignOutToLogin();
@@ -178,9 +202,11 @@ export function DashboardLayout({
 
         {/* Right: Multi-Role Switcher + Theme Toggle + Notifications + User Profile */}
         <div className="flex items-center gap-2">
+          <div ref={topbarMenusRef} className="flex items-center gap-2">
           {currentUser?.isDemoUser && (
-            <details className="relative">
-              <summary className="list-none cursor-pointer inline-flex items-center gap-1 rounded-md border border-[#E5E2D9] bg-white px-2 py-1 text-[10px] font-semibold text-stone-600 hover:text-[#8C1B2E] dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">Presentation controls <ChevronDown className="h-3 w-3" /></summary>
+            <div className="relative">
+              <button type="button" aria-haspopup="menu" aria-expanded={openTopbarMenu === 'presentation'} onClick={() => setOpenTopbarMenu(openTopbarMenu === 'presentation' ? null : 'presentation')} className="inline-flex items-center gap-1 rounded-md border border-[#E5E2D9] bg-white px-2 py-1 text-[10px] font-semibold text-stone-600 hover:text-[#8C1B2E] dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">Presentation controls <ChevronDown className="h-3 w-3" /></button>
+              {openTopbarMenu === 'presentation' && (
               <div className="absolute right-0 mt-1 z-40 rounded-lg border border-[#E5E2D9] bg-white p-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
             <button
               type="button"
@@ -203,15 +229,16 @@ export function DashboardLayout({
               <RotateCcw className={`h-3 w-3 ${resettingDemo ? 'animate-spin' : ''}`} />{resettingDemo ? 'Resetting…' : 'Reset Demo'}
             </button>
               </div>
-            </details>
+              )}
+            </div>
           )}
           {/* Quick Workspace Switcher */}
           {authorizedWorkspaces.length > 1 && (
             <div className="relative">
               <button
-                onClick={() => setShowWorkspaceMenu(!showWorkspaceMenu)}
+                onClick={() => setOpenTopbarMenu(openTopbarMenu === 'workspace' ? null : 'workspace')}
                 aria-haspopup="menu"
-                aria-expanded={showWorkspaceMenu}
+                aria-expanded={openTopbarMenu === 'workspace'}
                 aria-label="Switch workspace"
                 className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-white dark:bg-zinc-800 border border-[#E5E2D9] dark:border-zinc-700 text-[11px] font-medium text-stone-700 dark:text-zinc-300 hover:text-stone-900 dark:hover:text-white transition-colors shadow-2xs"
               >
@@ -220,7 +247,7 @@ export function DashboardLayout({
                 <ChevronDown className="h-3 w-3 text-stone-400" />
               </button>
 
-              {showWorkspaceMenu && (
+              {openTopbarMenu === 'workspace' && (
                 <div className="absolute right-0 mt-1 w-44 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg shadow-lg p-1 z-40 space-y-0.5">
                   <div className="px-2 py-0.5 text-[10px] font-mono text-stone-400 dark:text-zinc-500 uppercase tracking-wider">
                     Switch Workspace
@@ -230,7 +257,7 @@ export function DashboardLayout({
                       key={ws}
                       onClick={() => {
                         switchWorkspace(ws);
-                        setShowWorkspaceMenu(false);
+                        setOpenTopbarMenu(null);
                       }}
                       className={`w-full text-left px-2 py-1 rounded-md text-xs font-medium transition-colors flex items-center justify-between ${
                         currentWorkspace === ws
@@ -246,6 +273,7 @@ export function DashboardLayout({
               )}
             </div>
           )}
+          </div>
 
           {/* Theme Toggle Button */}
           <button
@@ -259,7 +287,7 @@ export function DashboardLayout({
 
           {/* Notifications Button */}
           <button
-            onClick={() => setInboxOpen(true)}
+            onClick={() => { setOpenTopbarMenu(null); setInboxOpen(true); }}
             aria-label={`Open notifications (${unreadCount} unread)`}
             className="relative p-1.5 rounded-md text-stone-600 dark:text-zinc-400 hover:text-stone-900 dark:hover:text-white hover:bg-stone-100 dark:hover:bg-zinc-800 transition-colors"
             title="Notifications & Alerts"
@@ -273,7 +301,7 @@ export function DashboardLayout({
           {/* User Profile & Sign Out */}
           <div className="flex items-center gap-1 pl-2 border-l border-[#E5E2D9] dark:border-zinc-800">
             <button
-              onClick={() => setProfileModalOpen(true)}
+              onClick={() => { setOpenTopbarMenu(null); setProfileModalOpen(true); }}
               aria-label="Open your profile"
               className="flex items-center gap-1.5 p-1 rounded-md hover:bg-stone-100 dark:hover:bg-zinc-800 transition-colors text-left"
             >

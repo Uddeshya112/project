@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useTimetable } from '../../context/TimetableContext';
 import { useAuth } from '../../context/AuthContext';
 import { PollComposer } from './PollComposer';
+import { formatLocalizedTimestamp } from '../../lib/userUtils';
 import { supabaseClient, getSupabaseAccessToken } from '../../lib/supabaseClient';
 import { getResolvedApiBaseUrl, apiUrl } from '../../lib/apiConfig';
 import {
@@ -25,6 +26,9 @@ export function CoordinatorView() {
     sections,
     sessions,
     notifications,
+    academicYear,
+    versions,
+    activeVersionNumber,
     allocations,
     publishStatus,
     validationReport,
@@ -174,13 +178,10 @@ export function CoordinatorView() {
   const isValidated = hasDraft && noHardConflicts;
 
   // Real Timestamps
-  const timestampStr = new Date().toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  const activeVersion = versions.find((version) => version.versionNumber === activeVersionNumber);
+  const timestampStr = formatLocalizedTimestamp(isPublished
+    ? academicYear.publishedAt || activeVersion?.createdAt
+    : activeVersion?.createdAt);
 
   // Generation Handler
   const handleGenerate = async () => {
@@ -586,7 +587,7 @@ export function CoordinatorView() {
                 }`}>
                   {req.status}
                 </span>
-                <div className="text-[10px] text-stone-400 mt-0.5">{req.time}</div>
+                <time className="text-[10px] text-stone-500 dark:text-zinc-400 mt-0.5 block">{formatLocalizedTimestamp(req.time)}</time>
               </div>
             </div>
           ))}

@@ -561,13 +561,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAuthorizedWorkspaces(['Student']);
     setCurrentWorkspace('Student');
     const request = (async () => {
+      try {
+        await fetch(apiUrl('/api/auth/logout'), { method: 'POST', credentials: 'same-origin' });
+      } catch { /* the server cookie expires on the next request if offline */ }
       if (supabaseClient) {
         try { await supabaseClient.auth.signOut(); }
         catch (err) { console.warn('[AUTH TRACE] Supabase signOut notice:', err); }
       }
-      try {
-        await fetch(apiUrl('/api/auth/logout'), { method: 'POST', credentials: 'same-origin' });
-      } catch { /* the server cookie expires on the next request if offline */ }
     })().finally(() => {
       if (logoutRequestRef.current === request) logoutRequestRef.current = null;
     });

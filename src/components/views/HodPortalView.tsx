@@ -84,7 +84,7 @@ export function HodPortalView() {
                 return <tr key={faculty.id}>
                   <td className="p-3 font-medium text-stone-900 dark:text-zinc-100">{faculty.name}</td>
                   <td className="p-3 text-stone-600 dark:text-zinc-400">{[...coursesTaught].map((id) => courses.find((c) => c.id === id)?.code || id).join(', ') || 'No classes assigned'}</td>
-                  <td className={`p-3 font-mono ${over ? 'text-rose-700 dark:text-rose-400' : 'text-stone-700 dark:text-zinc-300'}`}>{hours} h</td>
+                  <td className={`p-3 font-mono whitespace-nowrap ${over ? 'text-rose-700 dark:text-rose-400' : 'text-stone-700 dark:text-zinc-300'}`}>{Number(hours.toFixed(1))}&nbsp;h</td>
                   <td className="p-3 text-stone-600 dark:text-zinc-400">{cap} h</td>
                 </tr>;
               })}

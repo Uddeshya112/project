@@ -210,15 +210,16 @@ export function AuthGovernanceView() {
               </div>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[780px] table-fixed text-left text-xs border-collapse">
+            <div className="overflow-x-auto overscroll-x-contain" role="region" aria-label="User accounts table; scroll horizontally to view actions" tabIndex={0}>
+              <p className="px-3 py-2 text-[10px] text-stone-500 dark:text-zinc-400 sm:hidden">Swipe sideways to reach all account actions.</p>
+              <table className="w-full min-w-[980px] table-fixed text-left text-xs border-collapse">
                 <thead>
                   <tr className="border-b border-[#E5E2D9] dark:border-zinc-800 bg-[#F4F2EC] dark:bg-zinc-950/80 text-stone-600 dark:text-zinc-400 font-mono">
                     <th className="p-3 font-semibold">User</th>
                     <th className="p-3 font-semibold">Role</th>
                     <th className="p-3 font-semibold">Sign-in</th>
                     <th className="p-3 font-semibold">Status</th>
-                    <th className="w-32 p-3 font-semibold text-right">Actions</th>
+                    <th className="w-44 min-w-44 p-3 font-semibold text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#E5E2D9] dark:divide-zinc-800">
@@ -231,7 +232,7 @@ export function AuthGovernanceView() {
                       const self = u.id === currentUser?.id;
                       return (
                         <tr key={u.id} className="bg-white dark:bg-zinc-900 hover:bg-stone-50 dark:hover:bg-zinc-800/40">
-                          <td className="p-3">
+                          <td className="min-w-44 p-3">
                             <div className="font-bold text-stone-900 dark:text-zinc-100 flex items-center gap-1.5">
                               {u.name}
                               {(u.isDemoUser || SAMPLE_EMAILS.test(u.email)) && (

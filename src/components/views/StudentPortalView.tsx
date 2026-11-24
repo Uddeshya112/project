@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useTimetable } from '../../context/TimetableContext';
+import { getGridCellRowSpan, isGridCellCoveredByLab } from '../../lib/timetableGridLayout';
 import { useAuth } from '../../context/AuthContext';
 import { DayOfWeek, ClassSession, Course, TimeSlot } from '../../types';
 import {
@@ -631,6 +632,7 @@ export function StudentPortalView() {
           {timetableMode === 'grid' && (
             <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl overflow-hidden shadow-xs">
               <div className="overflow-x-auto">
+                <p className="px-3 py-2 text-[10px] text-stone-500 dark:text-zinc-400 sm:hidden">Swipe sideways to view all weekdays, including Friday.</p>
                 <table className="w-full border-collapse text-left text-xs min-w-[780px]">
                   <thead>
                     <tr className="bg-[#F4F2EC] dark:bg-zinc-950/70 border-b border-[#E5E2D9] dark:border-zinc-800 text-stone-800 dark:text-zinc-300">
@@ -678,12 +680,15 @@ export function StudentPortalView() {
 
                           {/* Working days */}
                           {days.map(d => {
+                            if (isGridCellCoveredByLab(sectionSessions, d, slot.id, timeSlots)) return null;
                             const cellSessions = sessionsAt(d, slot.id);
                             const isNow = isNowSlot(d, slot);
+                            const rowSpan = getGridCellRowSpan(sectionSessions, d, slot.id, timeSlots);
 
                             return (
                               <td
                                 key={d}
+                                rowSpan={rowSpan}
                                 className={`p-1.5 border-r border-[#E5E2D9] dark:border-zinc-800 last:border-r-0 align-top space-y-1 ${
                                   d === todayName ? 'bg-[#8C1B2E]/3 dark:bg-red-950/10' : ''
                                 }`}

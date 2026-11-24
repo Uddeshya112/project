@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useTimetable } from '../../context/TimetableContext';
+import { useAuth } from '../../context/AuthContext';
+import { formatLocalizedTimestamp } from '../../lib/userUtils';
 import {
   History,
   Lock,
@@ -15,10 +17,30 @@ import {
 
 export function GovernanceView() {
   const { versions, auditLogs, sessions, restoreVersion } = useTimetable();
+  const { allUsers } = useAuth();
   const [restoreState, setRestoreState] = useState<{ message: string; error: boolean } | null>(null);
   const [restoring, setRestoring] = useState<number | null>(null);
 
   const lockedSessions = sessions.filter(s => s.isLocked);
+  const auditRows = useMemo(() => {
+    const seenPublished = new Set<string>();
+    return auditLogs.filter((log) => {
+      if (log.action !== 'TIMETABLE_PUBLISHED') return true;
+      const signature = `${log.entityType}|${log.entityId}|${log.userId}|${log.details}`;
+      if (seenPublished.has(signature)) return false;
+      seenPublished.add(signature);
+      return true;
+    });
+  }, [auditLogs]);
+  const displayActor = (userId?: string, userName?: string) => {
+    const user = allUsers.find((candidate) => candidate.id === userId || candidate.id === userName);
+    if (user) return user.name;
+    const rawId = `${userId || ''} ${userName || ''}`.toLowerCase();
+    if (/\bcoordinator\b/.test(rawId)) return allUsers.find((candidate) => candidate.roleCode === 'COORDINATOR')?.name || 'Timetable Coordinator';
+    if (/\b(admin|dean)\b/.test(rawId)) return allUsers.find((candidate) => candidate.roleCode && ['COLLEGE_ADMIN', 'SUPER_ADMIN'].includes(candidate.roleCode))?.name || 'Administrator';
+    if (/^\s*usr[-_]/i.test(userName || '')) return 'System user';
+    return userName || 'System';
+  };
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -63,11 +85,11 @@ export function GovernanceView() {
                       : 'bg-white dark:bg-zinc-950/60 border-[#E5E2D9] dark:border-zinc-800'
                   }`}
                 >
-                  <div className="flex items-center justify-between mb-1.5">
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-stone-900 dark:text-zinc-100 text-xs">{ver.versionLabel}</span>
+                  <div className="flex flex-wrap items-start justify-between gap-2 mb-1.5">
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <span className="break-words font-bold text-stone-900 dark:text-zinc-100 text-xs">{ver.versionLabel}</span>
                       {ver.isPublished || ver.status === 'Published' ? (
-                        <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-300 dark:border-emerald-500/30">
+                        <span className="shrink-0 whitespace-nowrap text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-300 dark:border-emerald-500/30">
                           Active In Production
                         </span>
                       ) : null}
@@ -82,10 +104,10 @@ export function GovernanceView() {
                   </p>
 
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px] text-stone-500 dark:text-zinc-400 pt-2 border-t border-[#E5E2D9] dark:border-zinc-800/80">
-                    <div>
-                      <span>Author: {ver.createdBy}</span>
+                    <div className="min-w-0 break-words">
+                      <span>Author: {displayActor(ver.createdById || ver.createdBy, ver.createdBy)}</span>
                       <span className="mx-1.5">·</span>
-                      <span className="font-mono">{new Date(ver.createdAt).toLocaleDateString()}</span>
+                      <time className="font-mono">{formatLocalizedTimestamp(ver.createdAt)}</time>
                     </div>
 
                     {!isCurrent && (
@@ -185,13 +207,13 @@ export function GovernanceView() {
               </tr>
             </thead>
             <tbody className="divide-y divide-[#E5E2D9] dark:divide-zinc-800">
-              {auditLogs.map(log => (
+              {auditRows.map(log => (
                 <tr key={log.id} className="hover:bg-white dark:hover:bg-zinc-800/40 transition-colors bg-white dark:bg-zinc-900">
                   <td className="p-3.5 font-mono text-stone-500 dark:text-zinc-400 text-[11px] whitespace-nowrap">
-                    {log.timestamp}
+                    {formatLocalizedTimestamp(log.timestamp)}
                   </td>
                   <td className="p-3.5 font-medium text-stone-900 dark:text-zinc-200 whitespace-nowrap">
-                    {log.userName}
+                    {displayActor(log.userId, log.userName)}
                   </td>
                   <td className="p-3.5 font-mono">
                     <span className="px-2 py-0.5 rounded text-[10px] bg-stone-100 dark:bg-zinc-800 text-stone-700 dark:text-zinc-300 font-semibold border border-[#E5E2D9] dark:border-zinc-700">

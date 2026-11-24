@@ -161,6 +161,7 @@ class SupabaseRelationalStore {
     };
     ensureDemoFaculty('fac-demo-neha', 'faculty.demo@demo.thapar.local', 'Dr. Neha Agarwal', 'fac-0005');
     ensureDemoFaculty('fac-demo-hod', 'hod.demo@demo.thapar.local', 'Dr. Sunita Rao', 'fac-0003');
+    ensureDemoFaculty('fac-demo-rajesh', 'coordinator.demo@demo.thapar.local', 'Prof. Rajesh Khanna', 'fac-0005');
     const repairDemoFacultyId = (facultyId: string) => facultyId === 'fac-0005' ? 'fac-demo-neha' : facultyId === 'fac-0003' ? 'fac-demo-hod' : facultyId;
     this.activeSessions = this.activeSessions.map((session) => ({ ...session, facultyId: repairDemoFacultyId(session.facultyId) }));
     const publishedIndex = this.versions.findIndex((version) => version.isPublished || version.status === 'Published');
@@ -220,6 +221,13 @@ class SupabaseRelationalStore {
       id: 'fac-demo-hod',
       name: 'Dr. Sunita Rao',
       email: 'hod.demo@demo.thapar.local',
+      departmentId: 'dept-cse',
+    });
+    this.facultyMembers.set('fac-demo-rajesh', {
+      ...demoNehaTemplate,
+      id: 'fac-demo-rajesh',
+      name: 'Prof. Rajesh Khanna',
+      email: 'coordinator.demo@demo.thapar.local',
       departmentId: 'dept-cse',
     });
 

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useTimetable } from '../../context/TimetableContext';
 import { useAuth } from '../../context/AuthContext';
 import { TIME_SLOTS } from '../../lib/initialData';
+import { getGridCellRowSpan, isGridCellCoveredByLab } from '../../lib/timetableGridLayout';
 import { DayOfWeek, ClassSession } from '../../types';
 
 const downloadFile = (filename: string, mimeType: string, content: string) => {
@@ -434,14 +435,16 @@ export function TimetableGridView() {
                       {slot.startTime}–{slot.endTime}
                     </td>
                     {days.map(day => {
+                      if (isGridCellCoveredByLab(filteredSessions, day, slot.id, TIME_SLOTS)) return null;
                       const slotSessions = filteredSessions.filter(
                         s => s.day === day && s.timeSlotId === slot.id
                       );
                       const session = slotSessions[0];
+                      const rowSpan = getGridCellRowSpan(filteredSessions, day, slot.id, TIME_SLOTS);
 
                       if (!session) {
                         return (
-                          <td key={day} className="p-1.5 border-r border-[#E5E2D9] dark:border-zinc-800 last:border-r-0 align-top">
+                          <td key={day} rowSpan={rowSpan} className="p-1.5 border-r border-[#E5E2D9] dark:border-zinc-800 last:border-r-0 align-top">
                             {!canManageSessions ? <div className="h-16" aria-label="No scheduled class" /> :
                             <button
                               onClick={() => {
@@ -458,12 +461,12 @@ export function TimetableGridView() {
                       }
 
                       if (slotSessions.length > 1) {
-                        return <td key={day} className="p-1.5 border-r border-[#E5E2D9] dark:border-zinc-800 last:border-r-0 align-top"><div className="space-y-1.5">{slotSessions.map((parallelSession) => {
+                        return <td key={day} rowSpan={rowSpan} className="p-1.5 border-r border-[#E5E2D9] dark:border-zinc-800 last:border-r-0 align-top"><div className="space-y-1.5">{slotSessions.map((parallelSession) => {
                           const parallelCourse = courses.find(course => course.id === parallelSession.courseId);
                           const parallelSection = sections.find(item => item.id === parallelSession.sectionId);
                           const parallelFaculty = facultyMembers.find(item => item.id === parallelSession.facultyId);
                           const cancelled = parallelSession.status === 'Cancelled';
-                          return <button key={parallelSession.id} type="button" onClick={() => handleCellClick(parallelSession)} className={`w-full rounded-lg border p-2 text-left ${cancelled ? 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300' : 'border-blue-200 bg-blue-50/60 text-stone-900 dark:border-blue-900 dark:bg-blue-950/30 dark:text-zinc-100'}`}><div className="flex items-center justify-between gap-1"><span className="font-mono text-xs font-bold">{parallelCourse?.code || parallelSession.courseId}</span><span className="text-[9px]">{cancelled ? 'Cancelled' : parallelSession.type}</span></div><div className="truncate text-[10px]">{filterMode === 'faculty' ? parallelSection?.name : parallelFaculty?.name?.split(' ').pop()} · {parallelSection?.name || parallelSession.sectionId}</div></button>;
+                          return <button key={parallelSession.id} type="button" onClick={() => handleCellClick(parallelSession)} className={`w-full rounded-lg border p-2 text-left ${cancelled ? 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300' : 'border-blue-200 bg-blue-50/60 text-stone-900 dark:border-blue-900 dark:bg-blue-950/30 dark:text-zinc-100'}`}><div className="flex items-center justify-between gap-1"><span className="font-mono text-xs font-bold">{parallelCourse?.code || parallelSession.courseId}</span><span className="text-[9px]">{cancelled ? 'Cancelled' : parallelSession.durationPeriods && parallelSession.durationPeriods > 1 ? `${parallelSession.type} (${parallelSession.durationPeriods}h)` : parallelSession.type}</span></div><div className="truncate text-[10px]">{filterMode === 'faculty' ? parallelSection?.name : parallelFaculty?.name?.split(' ').pop()} · {parallelSection?.name || parallelSession.sectionId}</div></button>;
                         })}</div></td>;
                       }
 
@@ -476,7 +479,7 @@ export function TimetableGridView() {
                       const isRescheduled = session.status === 'Rescheduled' || session.type === 'Makeup';
 
                       return (
-                        <td key={day} className="p-1.5 border-r border-[#E5E2D9] dark:border-zinc-800 last:border-r-0 align-top">
+                        <td key={day} rowSpan={rowSpan} className="p-1.5 border-r border-[#E5E2D9] dark:border-zinc-800 last:border-r-0 align-top">
                           <button
                             onClick={() => handleCellClick(session)}
                             className={`w-full text-left p-2.5 rounded-lg border transition-all relative ${

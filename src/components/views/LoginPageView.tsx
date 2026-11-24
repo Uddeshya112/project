@@ -811,90 +811,90 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
                   Account details
                 </button>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-6">
                 <button
                   type="button"
                   onClick={() => handleDemoLoginClick('Coordinator')}
                   disabled={Boolean(demoRoleLoading) || isLoading || isGoogleLoading}
-                  className="p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-850 active:bg-stone-100 disabled:opacity-50 text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs"
+                  className="p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-800 active:bg-stone-100 disabled:bg-stone-200 dark:disabled:bg-zinc-700 disabled:opacity-100 disabled:cursor-wait text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs lg:col-span-2"
                 >
                   <div className="flex items-center justify-between w-full">
-                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white transition-colors">Continue as Coordinator</span>
+                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white group-disabled:text-stone-800 dark:group-disabled:text-zinc-100 transition-colors">Continue as Coordinator</span>
                     {demoRoleLoading === 'Coordinator' ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-400" />
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-600 dark:text-zinc-200" />
                     ) : (
                       <ArrowRight className="h-3 w-3 text-stone-400 group-hover:text-[#8C1B2E] transition-colors" />
                     )}
                   </div>
-                  <span className="text-[10px] text-stone-500 dark:text-zinc-400">Full solver, rules & publishing</span>
+                  <span className="text-[10px] text-stone-600 dark:text-zinc-300 group-disabled:text-stone-700 dark:group-disabled:text-zinc-200">Full solver, rules & publishing</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => handleDemoLoginClick('Faculty')}
                   disabled={Boolean(demoRoleLoading) || isLoading || isGoogleLoading}
-                  className="p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-850 active:bg-stone-100 disabled:opacity-50 text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs"
+                  className="p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-800 active:bg-stone-100 disabled:bg-stone-200 dark:disabled:bg-zinc-700 disabled:opacity-100 disabled:cursor-wait text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs lg:col-span-2"
                 >
                   <div className="flex items-center justify-between w-full">
-                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white transition-colors">Continue as Faculty</span>
+                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white group-disabled:text-stone-800 dark:group-disabled:text-zinc-100 transition-colors">Continue as Faculty</span>
                     {demoRoleLoading === 'Faculty' ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-400" />
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-600 dark:text-zinc-200" />
                     ) : (
                       <ArrowRight className="h-3 w-3 text-stone-400 group-hover:text-[#8C1B2E] transition-colors" />
                     )}
                   </div>
-                  <span className="text-[10px] text-stone-500 dark:text-zinc-400">Teaching routine & room schedule</span>
+                  <span className="text-[10px] text-stone-600 dark:text-zinc-300 group-disabled:text-stone-700 dark:group-disabled:text-zinc-200">Teaching routine & room schedule</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => handleDemoLoginClick('Student')}
                   disabled={Boolean(demoRoleLoading) || isLoading || isGoogleLoading}
-                  className="p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-850 active:bg-stone-100 disabled:opacity-50 text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs"
+                  className="p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-800 active:bg-stone-100 disabled:bg-stone-200 dark:disabled:bg-zinc-700 disabled:opacity-100 disabled:cursor-wait text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs lg:col-span-2"
                 >
                   <div className="flex items-center justify-between w-full">
-                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white transition-colors">Continue as Student</span>
+                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white group-disabled:text-stone-800 dark:group-disabled:text-zinc-100 transition-colors">Continue as Student</span>
                     {demoRoleLoading === 'Student' ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-400" />
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-600 dark:text-zinc-200" />
                     ) : (
                       <ArrowRight className="h-3 w-3 text-stone-400 group-hover:text-[#8C1B2E] transition-colors" />
                     )}
                   </div>
-                  <span className="text-[10px] text-stone-500 dark:text-zinc-400">Weekly classes & course details</span>
+                  <span className="text-[10px] text-stone-600 dark:text-zinc-300 group-disabled:text-stone-700 dark:group-disabled:text-zinc-200">Weekly classes & course details</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => handleDemoLoginClick('Admin')}
                   disabled={Boolean(demoRoleLoading) || isLoading || isGoogleLoading}
-                  className="p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-850 active:bg-stone-100 disabled:opacity-50 text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs"
+                  className="p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-800 active:bg-stone-100 disabled:bg-stone-200 dark:disabled:bg-zinc-700 disabled:opacity-100 disabled:cursor-wait text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs lg:col-span-2 lg:col-start-2"
                 >
                   <div className="flex items-center justify-between w-full">
-                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white transition-colors">Continue as Admin</span>
+                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white group-disabled:text-stone-800 dark:group-disabled:text-zinc-100 transition-colors">Continue as Admin</span>
                     {demoRoleLoading === 'Admin' ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-400" />
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-600 dark:text-zinc-200" />
                     ) : (
                       <ArrowRight className="h-3 w-3 text-stone-400 group-hover:text-[#8C1B2E] transition-colors" />
                     )}
                   </div>
-                  <span className="text-[10px] text-stone-500 dark:text-zinc-400">Dean office & master approvals</span>
+                  <span className="text-[10px] text-stone-600 dark:text-zinc-300 group-disabled:text-stone-700 dark:group-disabled:text-zinc-200">Dean office & master approvals</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => handleDemoLoginClick('HOD')}
                   disabled={Boolean(demoRoleLoading) || isLoading || isGoogleLoading}
-                  className="p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-850 active:bg-stone-100 disabled:opacity-50 text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs"
+                  className="p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-800 active:bg-stone-100 disabled:bg-stone-200 dark:disabled:bg-zinc-700 disabled:opacity-100 disabled:cursor-wait text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs lg:col-span-2 lg:col-start-4"
                 >
                   <div className="flex items-center justify-between w-full">
-                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white transition-colors">Continue as HOD</span>
+                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white group-disabled:text-stone-800 dark:group-disabled:text-zinc-100 transition-colors">Continue as HOD</span>
                     {demoRoleLoading === 'HOD' ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-400" />
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-600 dark:text-zinc-200" />
                     ) : (
                       <ArrowRight className="h-3 w-3 text-stone-400 group-hover:text-[#8C1B2E] transition-colors" />
                     )}
                   </div>
-                  <span className="text-[10px] text-stone-500 dark:text-zinc-400">Department load balance & syllabus tracking</span>
+                  <span className="text-[10px] text-stone-600 dark:text-zinc-300 group-disabled:text-stone-700 dark:group-disabled:text-zinc-200">Department load balance & syllabus tracking</span>
                 </button>
               </div>
             </div>

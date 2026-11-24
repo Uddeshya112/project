@@ -454,3 +454,28 @@
 - **REQUIRES HUMAN ACTION:** Enable Supabase leaked-password protection in the project Auth settings.
 - **UNVERIFIED:** Supabase production migration history currently lists only `20261004000000_init_supabase_schema`; application startup logs show the server separately executes its checked-in SQL files. The new application ledger is local code and has not yet been deployed.
 - **UNVERIFIED:** Render production startup/shutdown behavior, real account CRUD persistence, pool count, and production migration-ledger rollout have not been exercised against a deployed service.
+
+## 20. Cross-Portal Navigation and UI Fixes (2026-11-24)
+
+### Requested scope
+
+- **REQUESTED SCOPE:** Fix sign-out/session races, Coordinator-to-Faculty switching, top-bar menu dismissal, reported contrast/overflow/layout issues, What-If status colors and stability, lab grid rendering, and coordinator/admin date and actor display issues.
+
+### Changes made locally
+
+- Sign-out clears app identity and workspace state synchronously, starts server-session revocation before Supabase sign-out, and routes back to `/` after revocation begins/completes. The Coordinator demo account now has a persistent faculty profile link and a matching seeded faculty record for existing and fresh demo data.
+- Presentation and workspace menus are mutually exclusive, close on outside pointer clicks and Escape, and dismiss on portal route/workspace changes; opening notifications/profile dismisses them.
+- Improved disabled demo-login contrast, centered the fifth landing-page role card, fixed the dark workspace-card hover colors, made the Faculty daily schedule use the full content width, and added horizontal-scroll affordances to student timetable and admin users tables.
+- What-If stability now reflects unresolved/manual-review assignments, with matching severity colors. Two/three-period lab sessions span their occupied timetable rows where safe, including parallel sessions, while lunch/break rows remain unmerged.
+- Coordinator timestamps and audit timestamps use one localized formatter; repeated publication audit rows are deduplicated in the view, actor IDs resolve to display names where possible, version badges wrap safely, workload formatting has no extra whitespace, and the two named seed/test accounts are hidden from the admin users listing without deleting database rows.
+
+### Verification
+
+- **VERIFIED:** `npm run lint` passed after these changes.
+- **VERIFIED:** `npm run build` passed. Vite still reports the lazy `AcademicSetupHubView` chunk above 500 kB minified.
+- **VERIFIED:** `git -c core.whitespace=cr-at-eol diff --check` passed.
+- **NOT RUN:** Automated tests were not run for this request.
+
+### Release status
+
+- **NOT PUSHED OR DEPLOYED:** Changes remain local on `fix/full-e2e-sync`; production services and database were not modified.

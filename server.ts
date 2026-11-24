@@ -530,6 +530,7 @@ const usersDatabase: Map<string, StoredUser> = new Map(
       createdAt: '2026-08-01T09:00:00Z',
       authorizedWorkspaces: ['Coordinator', 'Faculty'],
       isDemoUser: true,
+      profile: { facultyId: 'fac-demo-rajesh' },
     },
   ],
   [
@@ -755,6 +756,7 @@ function validateOneTimeToken(rawToken: string, expectedPurpose: OneTimeTokenPur
 }
 
 function resolveWorkspacesForUser(user: StoredUser): WorkspaceType[] {
+  withDemoFacultyLink(user);
   if (user.authorizedWorkspaces && user.authorizedWorkspaces.length > 0) {
     return user.authorizedWorkspaces;
   }
@@ -1354,9 +1356,16 @@ function getAuthenticatedUser(req: Request): StoredUser | null {
   if (!session) return null;
 
   for (const user of usersDatabase.values()) {
-    if (user.id === session.userId) return user;
+    if (user.id === session.userId) return withDemoFacultyLink(user);
   }
   return null;
+}
+
+function withDemoFacultyLink(user: StoredUser): StoredUser {
+  if (user.isDemoUser && user.roleCode === 'COORDINATOR' && user.email.toLowerCase() === 'coordinator.demo@demo.thapar.local' && !user.profile?.facultyId) {
+    user.profile = { ...(user.profile || {}), facultyId: 'fac-demo-rajesh' };
+  }
+  return user;
 }
 
 app.put('/api/auth/profile', async (req: Request, res: Response) => {
@@ -2368,7 +2377,7 @@ export async function authenticateRequestAsync(req: Request): Promise<{ user: St
   if (session) {
     for (const user of usersDatabase.values()) {
       if (user.id === session.userId && user.status === 'ACTIVE') {
-        return { user, session };
+        return { user: withDemoFacultyLink(user), session };
       }
     }
   }
@@ -2438,6 +2447,7 @@ export async function authenticateRequestAsync(req: Request): Promise<{ user: St
           profile: profile?.profile || authUser.user_metadata?.profile || {},
         };
 
+        withDemoFacultyLink(user);
         if (normalizedEmail) {
           usersDatabase.set(normalizedEmail, user);
         }
@@ -3983,6 +3993,7 @@ app.get('/api/admin/users', requireAuth, requireRole(ADMIN_ROLES), async (req: A
   }
 
   const matches = [...byEmail.values()]
+    .filter((user) => !/^(Adversary User|Audit Faculty)$/i.test(user.name.trim()))
     .filter((user) => !search || user.email.toLowerCase().includes(search) || user.name.toLowerCase().includes(search))
     .sort((a, b) => Number(a.isDemoUser) - Number(b.isDemoUser) || a.roleCode.localeCompare(b.roleCode) || a.name.localeCompare(b.name));
   return res.json({ success: true, total: matches.length, page, limit, users: matches.slice((page - 1) * limit, page * limit) });

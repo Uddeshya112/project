@@ -296,9 +296,9 @@ export function FacultyPortalView() {
       </div>
 
       {/* Main Grid: Class Schedule & Replacement Actions */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left 2 Columns: Daily Class Schedule */}
-        <div className="lg:col-span-2 space-y-4">
+      <div className="grid grid-cols-1 gap-6">
+        {/* Daily Class Schedule spans the full content width for readable course titles. */}
+        <div className="min-w-0 space-y-4">
           <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl overflow-hidden shadow-xs">
             {/* Day Selector */}
             <div className="p-3.5 border-b border-[#E5E2D9] dark:border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-[#F4F2EC] dark:bg-zinc-950/50">

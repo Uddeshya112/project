@@ -35,11 +35,12 @@ function MainLayout() {
     setShowWorkspacePicker(false);
   };
 
-  const handleSignOut = () => {
-    logout();
-    window.history.replaceState(null, '', '/');
+  const handleSignOut = async () => {
+    const revocation = logout();
     setShowWorkspacePicker(false);
     setShowLoginPage(true);
+    await revocation;
+    window.history.replaceState(null, '', '/');
   };
 
   const returnToLogin = () => {
