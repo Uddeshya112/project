@@ -324,7 +324,10 @@ export function generateTimetableFromConfiguration(
     sections,
     courses,
     constraints,
-    { budgetMode: 'FAST', timeBudgetMs: 100, seed: 1337 }
+    // Allow normal runtime variance while retaining a bounded sub-second cap.
+    // A 100ms wall-clock budget intermittently returned an empty candidate on
+    // slower or busy hosts despite the same 736-session fixture being feasible.
+    { budgetMode: 'FAST', timeBudgetMs: 500, seed: 1337 }
   );
 
   if (engineResult.isFeasible && engineResult.bestCandidate) {

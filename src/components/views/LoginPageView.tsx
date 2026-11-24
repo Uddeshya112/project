@@ -33,6 +33,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
     register,
     loginAsDemoRole,
     requestPasswordReset,
+    validateResetToken,
     resetPassword
   } = useAuth();
 
@@ -57,6 +58,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
 
   // Forgot Password & OTP States
   const [forgotEmail, setForgotEmail] = useState('');
+  const [resetToken, setResetToken] = useState('');
   const [otpDigits, setOtpDigits] = useState<string[]>(['', '', '', '', '', '']);
   const [resendCooldown, setResendCooldown] = useState<number>(0);
   const otpInputRefs = useRef<(HTMLInputElement | null)[]>([]);
@@ -194,6 +196,14 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
     const checkSupabaseRecovery = async () => {
       const hash = window.location.hash;
       const search = window.location.search;
+      const suppliedResetToken = new URLSearchParams(search).get('resetToken');
+      if (suppliedResetToken) {
+        setResetToken(suppliedResetToken);
+        const result = await validateResetToken(suppliedResetToken);
+        if (result.valid) setScreenMode('reset_password');
+        else setScreenMode('recovery_invalid');
+        return;
+      }
       const isRecoveryUrl =
         hash.includes('type=recovery') ||
         hash.includes('access_token=') ||
@@ -205,7 +215,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
         setScreenMode('reset_password');
       }
 
-      if (supabaseClient) {
+      if (supabaseClient && isRecoveryUrl) {
         const { data: { session } } = await supabaseClient.auth.getSession();
         if (session && isRecoveryUrl) {
           setScreenMode('reset_password');
@@ -423,38 +433,12 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
     setIsLoading(true);
 
     try {
-      if (supabaseClient) {
-        console.info('[AUTH RECOVERY] request started');
-        const productionFrontendUrl = 'https://tiet-timetable-six.vercel.app';
-        const redirectToUrl = window.location.origin.includes('localhost') || window.location.origin.includes('run.app')
-          ? window.location.origin
-          : productionFrontendUrl;
-
-        const { data, error } = await supabaseClient.auth.resetPasswordForEmail(emailTrim, {
-          redirectTo: redirectToUrl,
-        });
-
-        if (error) {
-          console.warn('[AUTH RECOVERY] Supabase request failed:', error.message || error);
-        } else {
-          console.info('[AUTH RECOVERY] Supabase request succeeded');
-        }
-      } else {
-        console.info('[AUTH RECOVERY] request started (backend fallback)');
-        await apiFetch('/api/auth/forgot-password', {
-          method: 'POST',
-          body: JSON.stringify({ email: emailTrim }),
-        }).catch(() => {});
-        console.info('[AUTH RECOVERY] backend request succeeded');
-      }
-
-      setSuccessMessage("If an account exists for this email, we've sent password-reset instructions.");
+      const result = await requestPasswordReset(emailTrim);
+      if (!result.success) throw new Error(result.message || 'Password reset email could not be sent.');
+      setSuccessMessage(result.message);
       setScreenMode('forgot_success');
     } catch (err: any) {
-      console.warn('[AUTH RECOVERY] Supabase request exception:', err?.message || err);
-      // Never reveal account existence
-      setSuccessMessage("If an account exists for this email, we've sent password-reset instructions.");
-      setScreenMode('forgot_success');
+      setErrorMessage(err?.message || 'Password reset could not be started. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -548,7 +532,10 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
     setIsLoading(true);
 
     try {
-      if (supabaseClient) {
+      if (resetToken) {
+        const result = await resetPassword(resetToken, newPassword);
+        if (!result.success) throw new Error(result.message || 'Password reset failed.');
+      } else if (supabaseClient) {
         const { data: { session } } = await supabaseClient.auth.getSession();
         if (!session) {
           setScreenMode('recovery_invalid');
@@ -572,6 +559,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
       setLoginEmail('');
       setLoginPassword('');
       window.history.replaceState({}, document.title, window.location.pathname);
+      setResetToken('');
     } catch (err: any) {
       const msg = err?.message || 'Failed to update password. Please try again.';
       if (msg.toLowerCase().includes('expired') || msg.toLowerCase().includes('invalid') || msg.toLowerCase().includes('session') || msg.toLowerCase().includes('auth')) {

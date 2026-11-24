@@ -2199,20 +2199,17 @@ app.get('/api/auth/google/callback', async (req: Request, res: Response) => {
 // POST /api/auth/forgot-password (Rate limited, anti-enumeration, secure token hash)
 // -------------------------------------------------------------
 async function sendResetEmail(email: string, token: string): Promise<void> {
-  if (process.env.SMTP_URL || process.env.MAILER_SERVICE) {
-    // Custom mailer hook behind environment variable
-    return;
-  }
-  const authClient = supabaseAnon || supabaseAdmin;
-  if (authClient) {
-    try {
-      await authClient.auth.resetPasswordForEmail(email, {
-        redirectTo: `${process.env.APP_URL || 'http://localhost:3000'}/reset-password?token=${token}`,
-      });
-    } catch (err: any) {
-      console.warn('[RESET EMAIL] Supabase resetPasswordForEmail notice:', err?.message || err);
-    }
-  }
+  const appUrl = process.env.APP_URL || (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:3000');
+  if (!appUrl) throw new Error('APP_URL is required to send password reset email in production.');
+  const resetUrl = new URL('/', appUrl);
+  resetUrl.searchParams.set('resetToken', token);
+  const delivered = await sendEmail({
+    to: email,
+    subject: 'Reset your IntelliSchedule password',
+    text: `Use this link to reset your IntelliSchedule password. It expires in 15 minutes:\n\n${resetUrl.toString()}\n\nIf you did not request a reset, you can ignore this email.`,
+    html: `<p>Use the link below to reset your IntelliSchedule password. It expires in 15 minutes.</p><p><a href="${resetUrl.toString()}">Reset password</a></p><p>If you did not request a reset, you can ignore this email.</p>`,
+  });
+  if (!delivered) throw new Error('Password reset email provider did not accept the message.');
 }
 
 const AUTH_TIMING_FLOOR_MS = 20;
@@ -2238,6 +2235,11 @@ const handleForgotPassword = async (req: Request, res: Response) => {
   }
 
   const normalizedEmail = String(email).trim().toLowerCase();
+  // Fail consistently for every address when mail delivery is unavailable. This
+  // avoids both misleading success messages and leaking whether an account exists.
+  if (process.env.NODE_ENV === 'production' && !hasMailerConfiguration()) {
+    return res.status(503).json({ success: false, message: 'Password reset email is temporarily unavailable. Please contact the app administrator.' });
+  }
   const user = usersDatabase.get(normalizedEmail);
 
   let rawToken: string | undefined = undefined;
@@ -2255,8 +2257,17 @@ const handleForgotPassword = async (req: Request, res: Response) => {
       rawToken = undefined;
     }
 
-    // Send token by email
-    if (rawToken) setImmediate(() => { sendResetEmail(normalizedEmail, tokenToSend).catch(() => {}); });
+    // Deliver synchronously so the API can report a real provider failure. The
+    // public message remains the same regardless of whether the address exists.
+    if (rawToken) {
+      try {
+        await sendResetEmail(normalizedEmail, tokenToSend);
+      } catch (err) {
+        try { await persistentStore.consumeOneTimeTokenDurably(rawToken, 'password_reset'); } catch {}
+        console.error('[AUTH] Password reset email could not be delivered:', err instanceof Error ? err.message : 'unknown error');
+        return res.status(503).json({ success: false, message: 'Password reset email is temporarily unavailable. Please try again later or contact the app administrator.' });
+      }
+    }
   } else {
     oneTimeTokensDatabase.delete(dummyToken.record.tokenHash);
   }
@@ -2342,6 +2353,7 @@ app.post('/api/auth/reset-password', async (req: Request, res: Response) => {
   }
 
   // Update password in database with modern Bcrypt KDF
+  const isSupabaseAuthManaged = user.passwordHash === 'SUPABASE_AUTH_MANAGED';
   const previousPasswordHash = user.passwordHash;
   user.passwordHash = hashPasswordBcryptSync(String(newPassword));
   usersDatabase.set(record.email, user);
@@ -2354,8 +2366,9 @@ app.post('/api/auth/reset-password', async (req: Request, res: Response) => {
     return res.status(503).json({ success: false, message: 'Password reset could not be saved. Please try again.' });
   }
 
-  // Sync password with Supabase Auth
-  if (supabaseAdmin) {
+  // Supabase is authoritative only for accounts explicitly marked as managed by
+  // Supabase. App-native password accounts are stored and verified in our users table.
+  if (supabaseAdmin && isSupabaseAuthManaged) {
     try {
       const { error } = await supabaseAdmin.auth.admin.updateUserById(user.id, {
         password: String(newPassword),
@@ -2382,12 +2395,6 @@ app.post('/api/auth/reset-password', async (req: Request, res: Response) => {
   } catch (err) {
     console.error('[AUTH] Could not durably invalidate reset tokens and sessions:', err instanceof Error ? err.message : 'unknown error');
     return res.status(503).json({ success: false, message: 'Password was saved, but existing sessions could not be fully revoked. Please contact the administrator.' });
-  }
-
-  if (supabaseAdmin) {
-    try {
-      await supabaseAdmin.auth.admin.signOut(user.id);
-    } catch {}
   }
 
   return res.json({

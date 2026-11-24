@@ -495,14 +495,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       const data = await resp.json();
       return {
-        success: true,
+        success: resp.ok && data.success !== false,
         message: data.message || 'If an account exists for this email, a password reset link has been sent.',
         resetToken: data.resetToken,
       };
     } catch {
       return {
-        success: true,
-        message: 'If an account exists for this email, a password reset link has been sent.',
+        success: false,
+        message: 'Could not reach the password reset service. Please try again.',
       };
     }
   };
