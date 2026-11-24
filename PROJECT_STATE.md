@@ -417,3 +417,40 @@
 - **VERIFIED:** TypeScript lint, production build, and all 17 focused solver/password/persistence tests passed after these changes.
 - **LIMITATION:** This environment cannot reach a locally spawned API server, so browser-visible bootstrap 304 behavior and production response latency were not measured here. The bundle-size reduction is directly measured from the production build outputs.
 - **NOT DEPLOYED:** These latency improvements do not change production until the branch is merged/deployed.
+
+## 19. Backend Persistence and Supabase Database Review (2026-11-24)
+
+### Requested scope
+
+- **REQUESTED SCOPE:** Inspect backend and database reliability and fix confirmed persistence/startup issues without changing production data directly.
+- **NECESSARY SUPPORTING SCOPE:** Reconcile database architecture documentation with the active `server.ts` runtime and capture live Supabase findings accurately.
+
+### Changes made locally
+
+- PostgreSQL auth/session-state reads now fail startup when a table/query is unavailable instead of converting database errors into empty account/session state. The loaded database snapshot is authoritative even when its tables are empty.
+- Persistent reset-token consumption, logout, account session revocation, pending-registration removal, and account create/update/delete paths now await durable writes before reporting success. Password reset checks the Supabase Auth result and rolls back the application password if the provider update fails.
+- Admin-created accounts and role/status updates are written to `intellischedule.users`; account deletion removes persisted user/session rows transactionally.
+- Production now shares one PostgreSQL pool between auth/session and academic-state code. HTTP shutdown drains requests and closes that pool.
+- The database runner now uses a private application migration ledger with SHA-256 checksums and a row lock. Applied migrations run once; modified applied migration files fail startup and require a new migration.
+- Updated `docs/DATABASE_ARCHITECTURE.md` to reflect the active JSONB runtime store, retained legacy public tables, and server-side Supabase Auth compatibility.
+
+### Verification
+
+- **VERIFIED:** `npm run lint` passed after all final changes, including the migration runner.
+- **VERIFIED:** `node --import tsx --test tests/persistent_state.test.ts` passed 6/6 focused tests.
+- **VERIFIED:** `node --import tsx --test tests/db_migrations.test.ts` passed 1/1; PGlite recorded the migrations once and reused them on the second startup.
+- **VERIFIED:** `npm run build` passed after all final changes. Vite still warns that `AcademicSetupHubView` is 572.82 kB minified.
+- **VERIFIED:** The combined database, engine, password and persistence test run passed 22/22.
+- **BLOCKED:** `npm test` started the local test server but could not reach its health endpoint from the test runner; it timed out waiting for port 3100. No full integration suite pass is claimed.
+- **VERIFIED, READ-ONLY SUPABASE INSPECTION:** Project `Tiet timetable` (`oopbelkjbnhdjvskmplc`) was `ACTIVE_HEALTHY`. The private `intellischedule` tables deny direct `anon`/`authenticated` SELECT. Supabase health advisories were empty, and the requested recent error-log query returned no rows.
+- **VERIFIED, READ-ONLY SUPABASE FINDING:** The live project still has the older `public` relational schema and 3 profile rows, while the active app runtime uses the private `intellischedule` tables. The live `profiles` SELECT policy is `id = auth.uid() OR role_code IN (staff roles)`, which exposes rows whose *row role* is staff to any authenticated caller. The current app's staff profile reads use server-side service access or a caller's own profile, so this should be narrowed to self-only or reviewed against documented direct-client use.
+- **VERIFIED, READ-ONLY SUPABASE ADVISORIES:** Supabase reports 39 unindexed foreign keys on the legacy relational schema, and leaked-password protection is disabled. No bulk indexes or auth settings were changed: the legacy tables are largely empty, and the auth setting is configured outside this repository.
+- **MIGRATION BLOCKER:** Supabase CLI is not installed. The `npx supabase migration new` attempt failed because the CLI process could not create `C:\Users\uddes\.supabase` in its filesystem sandbox, even after the scoped permission request. Per the Supabase workflow, no manually named profile-policy migration was created and no hosted SQL was applied.
+
+### Release / deployment
+
+- **NOT PUSHED OR DEPLOYED:** All application changes are local on `fix/full-e2e-sync`; no production Render, Vercel, or Supabase configuration/data was changed.
+- **REQUIRES HUMAN ACTION:** Approve and apply a migration that narrows `public.profiles` SELECT to self-only after confirming whether any external client depends on the current staff-row visibility.
+- **REQUIRES HUMAN ACTION:** Enable Supabase leaked-password protection in the project Auth settings.
+- **UNVERIFIED:** Supabase production migration history currently lists only `20261004000000_init_supabase_schema`; application startup logs show the server separately executes its checked-in SQL files. The new application ledger is local code and has not yet been deployed.
+- **UNVERIFIED:** Render production startup/shutdown behavior, real account CRUD persistence, pool count, and production migration-ledger rollout have not been exercised against a deployed service.

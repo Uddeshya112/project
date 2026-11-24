@@ -9,7 +9,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { OAuth2Client } from 'google-auth-library';
-import { persistentStore, StoredSession } from './src/server/persistentStore';
+import { persistentStore, persistentDatabase, StoredSession } from './src/server/persistentStore';
 import { isTestTokenAllowed } from './src/server/testMode';
 export { isTestTokenAllowed };
 import {
@@ -106,7 +106,8 @@ async function initializeAcademicPersistence() {
     if (process.env.NODE_ENV === 'production') throw new Error('DATABASE_URL is required for durable timetable storage.');
     return;
   }
-  academicDb = await connectDb(process.env.DATABASE_URL);
+  // Production auth and timetable persistence share one bounded PostgreSQL pool.
+  academicDb = persistentDatabase || await connectDb(process.env.DATABASE_URL);
   await loadAcademicState();
   await loadPersistedUsers();
 }
@@ -631,7 +632,11 @@ async function createDurableSession(rawToken: string, user: StoredUser): Promise
     await persistentStore.persistSession(rawToken);
     return true;
   } catch (err) {
-    persistentStore.revokeSession(rawToken);
+    try {
+      await persistentStore.revokeSessionDurably(rawToken);
+    } catch (revokeErr) {
+      console.error('[AUTH] Could not persist failed-session revocation:', revokeErr instanceof Error ? revokeErr.message : 'unknown error');
+    }
     console.error('[AUTH] Could not persist login session:', err instanceof Error ? err.message : 'unknown error');
     return false;
   }
@@ -682,7 +687,7 @@ async function persistUserRecord(user: StoredUser) {
      on conflict (email) do update set
        id = excluded.id, name = excluded.name, role_code = excluded.role_code,
        department = excluded.department,
-       password_hash = coalesce(excluded.password_hash, intellischedule.users.password_hash),
+       password_hash = excluded.password_hash,
        status = excluded.status, is_demo = excluded.is_demo, profile = excluded.profile,
        last_login_at = coalesce(excluded.last_login_at, intellischedule.users.last_login_at)`,
     [
@@ -726,16 +731,23 @@ async function persistNewUserRecord(user: StoredUser) {
   );
 }
 
+async function deletePersistedUser(userId: string) {
+  if (!academicDb) {
+    if (process.env.NODE_ENV === 'production') throw new Error('Database is not initialized; account changes cannot be saved.');
+    return;
+  }
+  await academicDb.tx(async (query) => {
+    await query('delete from intellischedule.sessions where user_id = $1', [userId]);
+    await query('delete from intellischedule.users where id = $1', [userId]);
+  });
+}
+
 function issueOneTimeToken(
   email: string,
   purpose: OneTimeTokenPurpose,
   ttlMs: number
 ): { rawToken: string; record: StoredOneTimeToken } {
   return persistentStore.issueOneTimeToken(email, purpose, ttlMs);
-}
-
-function consumeOneTimeToken(rawToken: string, expectedPurpose: OneTimeTokenPurpose): StoredOneTimeToken | null {
-  return persistentStore.consumeOneTimeToken(rawToken, expectedPurpose);
 }
 
 function validateOneTimeToken(rawToken: string, expectedPurpose: OneTimeTokenPurpose): StoredOneTimeToken | null {
@@ -1310,7 +1322,13 @@ app.post('/api/auth/logout', async (req: Request, res: Response) => {
     (req.headers.cookie?.match(/intellischedule_session=([^;]+)/)?.[1]);
 
   if (token) {
-    persistentStore.revokeSession(token);
+    try {
+      await persistentStore.revokeSessionDurably(token);
+    } catch (err) {
+      console.error('[AUTH] Could not persist logout revocation:', err instanceof Error ? err.message : 'unknown error');
+      res.clearCookie('intellischedule_session', { path: '/' });
+      return res.status(503).json({ success: false, message: 'Sign-out could not be confirmed. Please try again.' });
+    }
   }
 
   if (supabaseAnon) {
@@ -1823,7 +1841,11 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
       roleCode: requestedRoleCode,
     });
   } catch (err) {
-    persistentStore.deletePendingRegistration(normalizedEmail);
+    try {
+      await persistentStore.deletePendingRegistrationDurably(normalizedEmail);
+    } catch (cleanupErr) {
+      console.error('[REGISTRATION] Could not clean up failed approval request:', cleanupErr instanceof Error ? cleanupErr.message : 'unknown error');
+    }
     console.error('[REGISTRATION] Could not persist approval request:', err instanceof Error ? err.message : 'unknown error');
     return res.status(503).json({ success: false, message: 'Registration request could not be saved. Please try again.' });
   }
@@ -2249,20 +2271,19 @@ app.post('/api/auth/reset-password', async (req: Request, res: Response) => {
     });
   }
 
-  const record = consumeOneTimeToken(token, 'password_reset');
+  let record: StoredOneTimeToken | null;
+  try {
+    record = await persistentStore.consumeOneTimeTokenDurably(token, 'password_reset');
+  } catch (err) {
+    console.error('[AUTH] Could not persist consumed password token:', err instanceof Error ? err.message : 'unknown error');
+    return res.status(503).json({ success: false, message: 'Password reset could not be completed. Please request a new link.' });
+  }
   if (!record) {
     return res.status(400).json({
       success: false,
       message: 'Invalid or expired password reset token. Please request a new one.',
     });
   }
-  try {
-    await persistentStore.persistOneTimeToken(token);
-  } catch (err) {
-    console.error('[AUTH] Could not persist consumed password token:', err instanceof Error ? err.message : 'unknown error');
-    return res.status(503).json({ success: false, message: 'Password reset could not be completed. Please request a new link.' });
-  }
-
   const user = usersDatabase.get(record.email);
   if (!user) {
     return res.status(404).json({
@@ -2287,19 +2308,32 @@ app.post('/api/auth/reset-password', async (req: Request, res: Response) => {
   // Sync password with Supabase Auth
   if (supabaseAdmin) {
     try {
-      await supabaseAdmin.auth.admin.updateUserById(user.id, {
+      const { error } = await supabaseAdmin.auth.admin.updateUserById(user.id, {
         password: String(newPassword),
       });
+      if (error) throw error;
     } catch (err: any) {
-      console.warn('[SUPABASE AUTH] Password update notice:', err?.message || err);
+      user.passwordHash = previousPasswordHash;
+      usersDatabase.set(record.email, user);
+      try {
+        await persistUserRecord(user);
+      } catch (rollbackErr) {
+        console.error('[AUTH] Could not restore application password after Supabase update failure:', rollbackErr instanceof Error ? rollbackErr.message : 'unknown error');
+      }
+      console.error('[SUPABASE AUTH] Password update failed:', err?.message || 'unknown error');
+      return res.status(503).json({ success: false, message: 'Password reset could not be synchronized with the authentication provider. Please request a new reset link.' });
     }
   }
 
-  // Invalidate all of the user's tokens
-  persistentStore.invalidateUserTokens(user.email);
-
-  // Revoke all of their sessions
-  persistentStore.revokeUserSessions(user.id);
+  try {
+    await Promise.all([
+      persistentStore.invalidateUserTokensDurably(user.email),
+      persistentStore.revokeUserSessionsDurably(user.id),
+    ]);
+  } catch (err) {
+    console.error('[AUTH] Could not durably invalidate reset tokens and sessions:', err instanceof Error ? err.message : 'unknown error');
+    return res.status(503).json({ success: false, message: 'Password was saved, but existing sessions could not be fully revoked. Please contact the administrator.' });
+  }
 
   if (supabaseAdmin) {
     try {
@@ -3867,16 +3901,30 @@ app.post('/api/admin/pending-registrations/:email/approve', requireAuth, require
   }
 
   usersDatabase.set(email, user);
-  persistentStore.deletePendingRegistration(email);
-  persistentStore.invalidateUserTokens(email);
+  try {
+    await Promise.all([
+      persistentStore.deletePendingRegistrationDurably(email),
+      persistentStore.invalidateUserTokensDurably(email),
+    ]);
+  } catch (err) {
+    console.error('[ADMIN] Account approved but registration cleanup failed:', err instanceof Error ? err.message : 'unknown error');
+    return res.status(503).json({ success: false, message: 'Account was approved, but pending registration cleanup could not be saved. Please retry.' });
+  }
   return res.json({ success: true, user: adminUserView(user), message: `${email} approved as ${roleName}.` });
 });
 
-app.post('/api/admin/pending-registrations/:email/reject', requireAuth, requireRole(ADMIN_ROLES), (req: AuthenticatedRequest, res: Response) => {
+app.post('/api/admin/pending-registrations/:email/reject', requireAuth, requireRole(ADMIN_ROLES), async (req: AuthenticatedRequest, res: Response) => {
   const email = decodeURIComponent(String(req.params.email)).trim().toLowerCase();
   if (!pendingRegistrationsDatabase.has(email)) return res.status(404).json({ success: false, message: 'Pending registration not found.' });
-  persistentStore.deletePendingRegistration(email);
-  persistentStore.invalidateUserTokens(email);
+  try {
+    await Promise.all([
+      persistentStore.deletePendingRegistrationDurably(email),
+      persistentStore.invalidateUserTokensDurably(email),
+    ]);
+  } catch (err) {
+    console.error('[ADMIN] Could not persist registration rejection:', err instanceof Error ? err.message : 'unknown error');
+    return res.status(503).json({ success: false, message: 'Registration rejection could not be saved. Please retry.' });
+  }
   return res.json({ success: true, message: 'Registration request rejected.' });
 });
 
@@ -3980,9 +4028,24 @@ app.post('/api/admin/users', requireAuth, requireRole(ADMIN_ROLES), async (req: 
   const user: StoredUser = {
     id, email, name, department, roleCode, roleId: `role-${roleCode.toLowerCase()}`, roleName: ROLE_LABELS[roleCode],
     institutionId: 'inst-thapar', institutionName: 'Thapar Institute of Engineering and Technology',
-    status: 'ACTIVE', createdAt: new Date().toISOString(), passwordHash: 'SUPABASE_AUTH_MANAGED',
+    status: 'ACTIVE', createdAt: new Date().toISOString(),
+    passwordHash: supabaseAdmin ? 'SUPABASE_AUTH_MANAGED' : password ? hashPasswordBcryptSync(password) : 'SUPABASE_AUTH_MANAGED',
     isDemoUser: email.endsWith('@demo.thapar.local'), authorizedWorkspaces: undefined,
   };
+  try {
+    await persistNewUserRecord(user);
+  } catch (err) {
+    if (supabaseAdmin) {
+      try {
+        await supabaseAdmin.from('profiles').delete().eq('id', id);
+        await supabaseAdmin.auth.admin.deleteUser(id);
+      } catch (cleanupErr) {
+        console.error('[ADMIN] Supabase account cleanup failed after database write error:', cleanupErr instanceof Error ? cleanupErr.message : 'unknown error');
+      }
+    }
+    console.error('[ADMIN] Could not persist created user:', err instanceof Error ? err.message : 'unknown error');
+    return res.status(503).json({ success: false, message: 'Account could not be saved. Please retry.' });
+  }
   usersDatabase.set(email, user);
   return res.status(201).json({ success: true, user: adminUserView(user) });
 });
@@ -4041,8 +4104,21 @@ app.patch('/api/admin/users/:id', requireAuth, requireRole(ADMIN_ROLES), async (
     passwordHash: req.body?.password ? 'SUPABASE_AUTH_MANAGED' : target.passwordHash,
     authorizedWorkspaces: undefined, profile,
   };
+  try {
+    await persistUserRecord(updated);
+  } catch (err) {
+    console.error('[ADMIN] Could not persist updated user:', err instanceof Error ? err.message : 'unknown error');
+    return res.status(503).json({ success: false, message: 'Account changes could not be saved. Please retry.' });
+  }
   usersDatabase.set(updated.email.toLowerCase(), updated);
-  if (req.body?.roleCode || req.body?.status === 'LOCKED' || req.body?.password) persistentStore.revokeUserSessions(targetId);
+  if (req.body?.roleCode || req.body?.status === 'LOCKED' || req.body?.password) {
+    try {
+      await persistentStore.revokeUserSessionsDurably(targetId);
+    } catch (err) {
+      console.error('[ADMIN] Could not persist session revocation:', err instanceof Error ? err.message : 'unknown error');
+      return res.status(503).json({ success: false, message: 'Account was updated, but existing sessions could not be fully revoked.' });
+    }
+  }
   return res.json({ success: true, user: adminUserView(updated) });
 });
 
@@ -4055,13 +4131,24 @@ app.delete('/api/admin/users/:id', requireAuth, requireRole(ADMIN_ROLES), async 
     const { error } = await supabaseAdmin.auth.admin.deleteUser(targetId);
     if (error) return res.status(404).json({ success: false, message: 'User could not be deleted.' });
   }
+  try {
+    await deletePersistedUser(targetId);
+  } catch (err) {
+    console.error('[ADMIN] Could not persist account deletion:', err instanceof Error ? err.message : 'unknown error');
+    return res.status(503).json({ success: false, message: 'Account deletion could not be fully saved. Please retry.' });
+  }
+  persistentStore.forgetUserSessions(targetId);
   if (entry) usersDatabase.delete(entry[0]);
-  persistentStore.revokeUserSessions(targetId);
   return res.json({ success: true });
 });
 
-app.post('/api/admin/users/:id/revoke-sessions', requireAuth, requireRole(ADMIN_ROLES), (req: AuthenticatedRequest, res: Response) => {
-  persistentStore.revokeUserSessions(String(req.params.id));
+app.post('/api/admin/users/:id/revoke-sessions', requireAuth, requireRole(ADMIN_ROLES), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    await persistentStore.revokeUserSessionsDurably(String(req.params.id));
+  } catch (err) {
+    console.error('[ADMIN] Could not persist session revocation:', err instanceof Error ? err.message : 'unknown error');
+    return res.status(503).json({ success: false, message: 'Sessions could not be revoked. Please retry.' });
+  }
   return res.json({ success: true });
 });
 
@@ -4136,9 +4223,36 @@ if (!process.env.VERCEL && isDirectEntrypoint) {
   void (async () => {
     await initializeAcademicPersistence();
     await setupApp();
-    app.listen(effectivePort, "0.0.0.0", () => {
+    const httpServer = app.listen(effectivePort, "0.0.0.0", () => {
       console.log("[STARTUP] HTTP SERVER LISTENING", { port: effectivePort, address: "0.0.0.0" });
     });
+    let shuttingDown = false;
+    const shutdown = (signal: NodeJS.Signals) => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      console.info(`[SHUTDOWN] ${signal} received; draining HTTP requests.`);
+      const forceExit = setTimeout(() => {
+        console.error('[SHUTDOWN] Grace period expired; closing remaining connections.');
+        httpServer.closeAllConnections();
+        process.exit(1);
+      }, 10_000);
+      forceExit.unref();
+      httpServer.close(async (err) => {
+        if (err) console.error('[SHUTDOWN] HTTP server close failed:', err.message);
+        try {
+          await academicDb?.close();
+          console.info('[SHUTDOWN] Database pool closed.');
+          process.exitCode = err ? 1 : 0;
+        } catch (closeErr) {
+          console.error('[SHUTDOWN] Database pool close failed:', closeErr instanceof Error ? closeErr.message : 'unknown error');
+          process.exitCode = 1;
+        } finally {
+          clearTimeout(forceExit);
+        }
+      });
+    };
+    process.once('SIGTERM', shutdown);
+    process.once('SIGINT', shutdown);
     if (process.env.NODE_ENV !== 'production') {
       ensureSupabaseAuthUsers().catch(err => console.error('[SUPABASE AUTH SETUP ERROR]:', err));
     }

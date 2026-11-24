@@ -163,18 +163,22 @@ export class PostgresBackend implements StateBackend {
   constructor(private db: Db) {}
 
   async load(): Promise<LoadedState> {
-    const tokens = await this.db.query<any>(
-      'select token_hash, email, purpose, expires_at, is_used, created_at from intellischedule.one_time_tokens'
-    ).catch(() => []);
-    const sessions = await this.db.query<any>(
-      'select token_hash, user_id, role_code, created_at, expires_at, is_revoked from intellischedule.sessions'
-    ).catch(() => []);
-    const pendings = await this.db.query<any>(
-      'select email, name, password_hash, role_code, role_name, department, created_at from intellischedule.pending_registrations'
-    ).catch(() => []);
-    const buckets = await this.db.query<any>(
-      'select key, count, resets_at from intellischedule.rate_limit_buckets'
-    ).catch(() => []);
+    // A missing table, permissions issue, or network failure is not an empty store.
+    // Let startup fail so the API never accepts requests with a partial auth state.
+    const [tokens, sessions, pendings, buckets] = await Promise.all([
+      this.db.query<any>(
+        'select token_hash, email, purpose, expires_at, is_used, created_at from intellischedule.one_time_tokens'
+      ),
+      this.db.query<any>(
+        'select token_hash, user_id, role_code, created_at, expires_at, is_revoked from intellischedule.sessions'
+      ),
+      this.db.query<any>(
+        'select email, name, password_hash, role_code, role_name, department, created_at from intellischedule.pending_registrations'
+      ),
+      this.db.query<any>(
+        'select key, count, resets_at from intellischedule.rate_limit_buckets'
+      ),
+    ]);
 
     return {
       oneTimeTokens: tokens.map(r => [r.token_hash, {
@@ -222,7 +226,7 @@ export class PostgresBackend implements StateBackend {
   }
 
   async deleteOneTimeToken(tokenHash: string): Promise<void> {
-    await this.db.query('delete from intellischedule.one_time_tokens where token_hash = $1', [tokenHash]).catch(() => {});
+    await this.db.query('delete from intellischedule.one_time_tokens where token_hash = $1', [tokenHash]);
   }
 
   async saveSession(session: StoredSession): Promise<void> {
@@ -235,7 +239,7 @@ export class PostgresBackend implements StateBackend {
   }
 
   async deleteSession(tokenHash: string): Promise<void> {
-    await this.db.query('delete from intellischedule.sessions where token_hash = $1', [tokenHash]).catch(() => {});
+    await this.db.query('delete from intellischedule.sessions where token_hash = $1', [tokenHash]);
   }
 
   async savePendingRegistration(pending: PendingRegistration): Promise<void> {
@@ -248,11 +252,11 @@ export class PostgresBackend implements StateBackend {
   }
 
   async deletePendingRegistration(email: string): Promise<void> {
-    await this.db.query('delete from intellischedule.pending_registrations where email = $1', [email]).catch(() => {});
+    await this.db.query('delete from intellischedule.pending_registrations where email = $1', [email]);
   }
 
   async getRateLimitBucket(key: string): Promise<RateLimitRecord | null> {
-    const rows = await this.db.query<any>('select count, resets_at from intellischedule.rate_limit_buckets where key = $1', [key]).catch(() => []);
+    const rows = await this.db.query<any>('select count, resets_at from intellischedule.rate_limit_buckets where key = $1', [key]);
     if (!rows.length) return null;
     return { count: rows[0].count, resetsAt: new Date(rows[0].resets_at).getTime() };
   }
@@ -263,13 +267,15 @@ export class PostgresBackend implements StateBackend {
        values ($1, $2, $3, now())
        on conflict (key) do update set count = $2, resets_at = $3, updated_at = now()`,
       [key, record.count, new Date(record.resetsAt).toISOString()]
-    ).catch(err => console.error('[POSTGRES STORE] saveRateLimitBucket error:', err));
+    );
   }
 
   async cleanupExpired(nowIso: string, nowMs: number): Promise<void> {
-    await this.db.query('delete from intellischedule.one_time_tokens where is_used = true or expires_at < $1', [nowIso]).catch(() => {});
-    await this.db.query('delete from intellischedule.sessions where is_revoked = true or expires_at < $1', [nowIso]).catch(() => {});
-    await this.db.query('delete from intellischedule.rate_limit_buckets where resets_at < $1', [new Date(nowMs).toISOString()]).catch(() => {});
+    await this.db.tx(async (query) => {
+      await query('delete from intellischedule.one_time_tokens where is_used = true or expires_at < $1', [nowIso]);
+      await query('delete from intellischedule.sessions where is_revoked = true or expires_at < $1', [nowIso]);
+      await query('delete from intellischedule.rate_limit_buckets where resets_at < $1', [new Date(nowMs).toISOString()]);
+    });
   }
 }
 
@@ -282,6 +288,10 @@ export class PersistentStore {
   public backend: StateBackend;
   private fileBackend: FileBackend | null = null;
   private isLoaded = false;
+
+  private reportBackgroundFailure(operation: string, err: unknown): void {
+    console.error(`[PERSISTENT STORE] ${operation} failed:`, err instanceof Error ? err.message : 'unknown error');
+  }
 
   constructor(backend?: StateBackend) {
     if (backend) {
@@ -338,16 +348,13 @@ export class PersistentStore {
 
   public async initAsync(): Promise<void> {
     if (this.isLoaded) return;
-    try {
-      const state = await this.backend.load();
-      if (state.oneTimeTokens.length) this.oneTimeTokens = new Map(state.oneTimeTokens);
-      if (state.sessions.length) this.sessions = new Map(state.sessions);
-      if (state.pendingRegistrations.length) this.pendingRegistrations = new Map(state.pendingRegistrations);
-      if (state.rateLimitBuckets.length) this.rateLimitBuckets = new Map(state.rateLimitBuckets);
-      this.isLoaded = true;
-    } catch (err) {
-      console.warn('[PERSISTENT STORE] Async init failed:', err);
-    }
+    const state = await this.backend.load();
+    // The backend is authoritative, including when a table is intentionally empty.
+    this.oneTimeTokens = new Map(state.oneTimeTokens);
+    this.sessions = new Map(state.sessions);
+    this.pendingRegistrations = new Map(state.pendingRegistrations);
+    this.rateLimitBuckets = new Map(state.rateLimitBuckets);
+    this.isLoaded = true;
   }
 
   public serializeState(): any {
@@ -385,7 +392,6 @@ export class PersistentStore {
     for (const record of this.oneTimeTokens.values()) {
       if (record.email === normalizedEmail && record.purpose === purpose && !record.isUsed) {
         record.isUsed = true;
-        this.backend.saveOneTimeToken(record).catch(() => {});
       }
     }
 
@@ -403,14 +409,16 @@ export class PersistentStore {
 
     this.oneTimeTokens.set(tokenHash, record);
     this.saveToDisk();
-    this.backend.saveOneTimeToken(record).catch(() => {});
     return { rawToken, record };
   }
 
   public async persistOneTimeToken(rawToken: string): Promise<void> {
     const token = this.oneTimeTokens.get(this.hashToken(rawToken));
     if (!token) throw new Error('One-time token was not created.');
-    await this.backend.saveOneTimeToken(token);
+    const relatedTokens = [...this.oneTimeTokens.values()].filter(
+      (candidate) => candidate.email === token.email && candidate.purpose === token.purpose,
+    );
+    await Promise.all(relatedTokens.map((candidate) => this.backend.saveOneTimeToken(candidate)));
   }
 
   public consumeOneTimeToken(rawToken: string, expectedPurpose: OneTimeTokenPurpose): StoredOneTimeToken | null {
@@ -424,7 +432,7 @@ export class PersistentStore {
 
     record.isUsed = true;
     this.saveToDisk();
-    this.backend.saveOneTimeToken(record).catch(() => {});
+    this.backend.saveOneTimeToken(record).catch((err) => this.reportBackgroundFailure('Consume one-time token', err));
     return record;
   }
 
@@ -440,15 +448,38 @@ export class PersistentStore {
     return record;
   }
 
+  public async consumeOneTimeTokenDurably(rawToken: string, expectedPurpose: OneTimeTokenPurpose): Promise<StoredOneTimeToken | null> {
+    const record = this.validateOneTimeToken(rawToken, expectedPurpose);
+    if (!record) return null;
+    record.isUsed = true;
+    try {
+      await this.backend.saveOneTimeToken(record);
+    } catch (err) {
+      record.isUsed = false;
+      this.saveToDisk();
+      throw err;
+    }
+    this.saveToDisk();
+    return record;
+  }
+
   public invalidateUserTokens(email: string): void {
     const normalized = email.trim().toLowerCase();
     for (const tok of this.oneTimeTokens.values()) {
       if (tok.email === normalized) {
         tok.isUsed = true;
-        this.backend.saveOneTimeToken(tok).catch(() => {});
+        this.backend.saveOneTimeToken(tok).catch((err) => this.reportBackgroundFailure('Invalidate user token', err));
       }
     }
     this.saveToDisk();
+  }
+
+  public async invalidateUserTokensDurably(email: string): Promise<void> {
+    const normalized = email.trim().toLowerCase();
+    const tokens = [...this.oneTimeTokens.values()].filter((token) => token.email === normalized);
+    for (const token of tokens) token.isUsed = true;
+    this.saveToDisk();
+    await Promise.all(tokens.map((token) => this.backend.saveOneTimeToken(token)));
   }
 
   // --- Sessions ---
@@ -490,7 +521,7 @@ export class PersistentStore {
     const session = this.sessions.get(tokenHash);
     if (session) {
       session.isRevoked = true;
-      this.backend.saveSession(session).catch(() => {});
+      this.backend.saveSession(session).catch((err) => this.reportBackgroundFailure('Revoke session', err));
     } else {
       const revokedSession: StoredSession = {
         id: 'sess_revoked_' + crypto.randomUUID(),
@@ -502,17 +533,53 @@ export class PersistentStore {
         isRevoked: true,
       };
       this.sessions.set(tokenHash, revokedSession);
-      this.backend.saveSession(revokedSession).catch(() => {});
+      this.backend.saveSession(revokedSession).catch((err) => this.reportBackgroundFailure('Persist revoked session', err));
     }
     this.saveToDisk();
+  }
+
+  public async revokeSessionDurably(rawToken: string): Promise<void> {
+    if (!rawToken) return;
+    const tokenHash = this.hashToken(rawToken);
+    let session = this.sessions.get(tokenHash);
+    if (!session) {
+      session = {
+        id: 'sess_revoked_' + crypto.randomUUID(),
+        userId: 'revoked_token',
+        tokenHash,
+        roleCode: 'STUDENT',
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        isRevoked: true,
+      };
+      this.sessions.set(tokenHash, session);
+    } else {
+      session.isRevoked = true;
+    }
+    this.saveToDisk();
+    await this.backend.saveSession(session);
   }
 
   public revokeUserSessions(userId: string): void {
     for (const session of this.sessions.values()) {
       if (session.userId === userId) {
         session.isRevoked = true;
-        this.backend.saveSession(session).catch(() => {});
+        this.backend.saveSession(session).catch((err) => this.reportBackgroundFailure('Revoke user session', err));
       }
+    }
+    this.saveToDisk();
+  }
+
+  public async revokeUserSessionsDurably(userId: string): Promise<void> {
+    const sessions = [...this.sessions.values()].filter((session) => session.userId === userId);
+    for (const session of sessions) session.isRevoked = true;
+    this.saveToDisk();
+    await Promise.all(sessions.map((session) => this.backend.saveSession(session)));
+  }
+
+  public forgetUserSessions(userId: string): void {
+    for (const [tokenHash, session] of this.sessions) {
+      if (session.userId === userId) this.sessions.delete(tokenHash);
     }
     this.saveToDisk();
   }
@@ -522,7 +589,6 @@ export class PersistentStore {
     const normalized = email.trim().toLowerCase();
     this.pendingRegistrations.set(normalized, pending);
     this.saveToDisk();
-    this.backend.savePendingRegistration(pending).catch(() => {});
   }
 
   public async persistPendingRegistration(email: string): Promise<void> {
@@ -539,7 +605,21 @@ export class PersistentStore {
     const normalized = email.trim().toLowerCase();
     this.pendingRegistrations.delete(normalized);
     this.saveToDisk();
-    this.backend.deletePendingRegistration(normalized).catch(() => {});
+    this.backend.deletePendingRegistration(normalized).catch((err) => this.reportBackgroundFailure('Delete pending registration', err));
+  }
+
+  public async deletePendingRegistrationDurably(email: string): Promise<void> {
+    const normalized = email.trim().toLowerCase();
+    const previous = this.pendingRegistrations.get(normalized);
+    this.pendingRegistrations.delete(normalized);
+    this.saveToDisk();
+    try {
+      await this.backend.deletePendingRegistration(normalized);
+    } catch (err) {
+      if (previous) this.pendingRegistrations.set(normalized, previous);
+      this.saveToDisk();
+      throw err;
+    }
   }
 
   // --- Rate Limit Buckets ---
@@ -551,7 +631,7 @@ export class PersistentStore {
       const newRecord = { count: 1, resetsAt: now + windowMs };
       this.rateLimitBuckets.set(key, newRecord);
       this.saveToDisk();
-      this.backend.saveRateLimitBucket(key, newRecord).catch(() => {});
+      this.backend.saveRateLimitBucket(key, newRecord).catch((err) => this.reportBackgroundFailure('Save rate-limit bucket', err));
       return { limited: false, retryAfterSec: 0 };
     }
 
@@ -562,7 +642,7 @@ export class PersistentStore {
 
     record.count++;
     this.saveToDisk();
-    this.backend.saveRateLimitBucket(key, record).catch(() => {});
+    this.backend.saveRateLimitBucket(key, record).catch((err) => this.reportBackgroundFailure('Update rate-limit bucket', err));
     return { limited: false, retryAfterSec: 0 };
   }
 
@@ -590,9 +670,14 @@ export class PersistentStore {
     }
 
     this.saveToDisk();
-    this.backend.cleanupExpired(nowIso, now).catch(() => {});
+    this.backend.cleanupExpired(nowIso, now).catch((err) => {
+      console.error('[PERSISTENT STORE] Expired-record cleanup failed:', err instanceof Error ? err.message : 'unknown error');
+    });
   }
 }
+
+/** Shared PostgreSQL pool used by auth persistence and the academic runtime. */
+export let persistentDatabase: Db | null = null;
 
 async function createPersistentStore(): Promise<PersistentStore> {
   if (process.env.NODE_ENV !== 'production') return new PersistentStore();
@@ -604,6 +689,7 @@ async function createPersistentStore(): Promise<PersistentStore> {
 
   const { connectDb } = await import('./db');
   const db = await connectDb(databaseUrl);
+  persistentDatabase = db;
   const store = new PersistentStore(new PostgresBackend(db));
   await store.initAsync();
   return store;

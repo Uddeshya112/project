@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 
 export type Row = Record<string, any>;
 export type Query = <T = Row>(sql: string, params?: unknown[]) => Promise<T[]>;
@@ -19,12 +20,48 @@ const MIGRATIONS_DIR = path.join(process.cwd(), 'supabase', 'migrations');
  */
 export async function connectDb(url: string): Promise<Db> {
   const db = url.startsWith('pglite:') ? await connectPglite(url.slice('pglite:'.length)) : await connectPg(url);
+  await db.tx(async (query) => {
+    await query('create schema if not exists intellischedule');
+    await query(`create table if not exists intellischedule.application_migrations (
+      name text primary key,
+      checksum text not null,
+      applied_at timestamptz not null default now()
+    )`);
+    await query(`create table if not exists intellischedule.application_migration_lock (
+      id integer primary key check (id = 1)
+    )`);
+    await query('alter table intellischedule.application_migrations enable row level security');
+    await query('alter table intellischedule.application_migration_lock enable row level security');
+    await query('insert into intellischedule.application_migration_lock (id) values (1) on conflict (id) do nothing');
+  });
   const migrations = fs.readdirSync(MIGRATIONS_DIR)
     .filter((file) => file.endsWith('.sql'))
     .sort();
   for (const migration of migrations) {
     const schema = fs.readFileSync(path.join(MIGRATIONS_DIR, migration), 'utf8');
-    await db.tx((q) => q(schema));
+    const checksum = crypto.createHash('sha256').update(schema).digest('hex');
+    await db.tx(async (query) => {
+      // Serialize concurrent app starts and record a migration in the same
+      // transaction as its DDL, so a failed migration can be retried safely.
+      await query('insert into intellischedule.application_migration_lock (id) values (1) on conflict (id) do nothing');
+      await query('select id from intellischedule.application_migration_lock where id = 1 for update');
+      const applied = await query<{ checksum: string }>(
+        'select checksum from intellischedule.application_migrations where name = $1',
+        [migration],
+      );
+      if (applied[0]) {
+        if (applied[0].checksum !== checksum) {
+          throw new Error(`Applied database migration ${migration} has changed. Add a new migration instead of editing it.`);
+        }
+        return;
+      }
+
+      await query(schema);
+      await query(
+        'insert into intellischedule.application_migrations (name, checksum) values ($1, $2)',
+        [migration, checksum],
+      );
+    });
   }
   return db;
 }
