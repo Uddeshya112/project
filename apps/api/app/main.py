@@ -5,6 +5,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
+from app.academic import router as academic_router
 from app.auth import Principal, current_principal
 from app.database import engine
 from app.observability import RequestContextMiddleware
@@ -22,6 +23,7 @@ async def lifespan(_: FastAPI):
 
 logging.basicConfig(level=settings.log_level.upper(), format="%(message)s")
 app = FastAPI(title="IntelliSchedule API", version="0.1.0", lifespan=lifespan)
+app.include_router(academic_router)
 app.add_middleware(RequestContextMiddleware)
 app.add_middleware(CORSMiddleware, allow_origins=[x.strip() for x in settings.cors_allowed_origins.split(",") if x.strip()], allow_credentials=True, allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"], allow_headers=["Authorization", "Content-Type", "X-Request-ID"])
 

@@ -1,6 +1,6 @@
 # Deploy
 
-Production runs the Docker image from `Dockerfile` (Node 22, port 8080, `NODE_ENV=production`) against Supabase Postgres. The example uses Google Cloud Run in `asia-south1`; any container host works if it runs **exactly one** container behind HTTPS.
+> **Superseded for the current application:** This runbook describes an older Cloud Run/Docker deployment path. The root `Dockerfile` and `render.yaml` are not a verified release path for the current Vite/Express application. For an isolated real-data deployment, follow [production-isolation.md](production-isolation.md). Do not use the commands below to deploy the current app.
 
 ## 1. Check the build
 
@@ -84,16 +84,9 @@ docker run -p 8080:8080 --env-file .env.production intellischedule
 
 Run one container, terminate HTTPS in front of it, and set `TRUST_PROXY` to the number of proxies in between (1 for a single reverse proxy). Without it, rate limiting sees the proxy's IP and session cookies are not marked Secure.
 
-## Password registration
+## Registration status
 
-Password registration now creates an active app account and signs the user in
-immediately; it does not send or require an email-confirmation link. When
-Supabase Auth is configured, the Render API creates the Auth user with email
-confirmation enabled through its server-only Admin client. Keep
-`SUPABASE_SERVICE_ROLE_KEY` (or `SUPABASE_SECRET_KEY`) on the Render API service;
-never expose it in Vercel or the browser. The application account is also saved
-to `intellischedule.users` before signup succeeds.
-
-**Release risk:** without mailbox verification, anyone can claim an unused
-`@thapar.edu` address. Keep this relaxed signup only for the current testing
-period and restore email verification before opening the app for general use.
+New password registrations create a `PENDING` account request and do not grant
+portal access or an authenticated session until an Admin approves the request.
+Admin approval is not proof of mailbox ownership; verify institutional identity
+before approval or configure a verified email delivery and confirmation flow.

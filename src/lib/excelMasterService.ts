@@ -1,4 +1,3 @@
-import * as XLSX from 'xlsx';
 import {
   Department,
   Program,
@@ -63,7 +62,7 @@ export interface ExcelImportPreview {
  * Builds the master workbook. Without `currentData` it is the blank template with sample rows;
  * with `currentData` it is an export of exactly that data (an empty list exports a header-only sheet).
  */
-export function generateMasterExcelTemplate(currentData?: {
+export async function generateMasterExcelTemplate(currentData?: {
   departments?: Department[];
   programs?: Program[];
   courses?: Course[];
@@ -72,7 +71,8 @@ export function generateMasterExcelTemplate(currentData?: {
   sections?: StudentSection[];
   allocations?: CourseAllocation[];
   students?: StudentRecord[];
-}): Blob {
+}): Promise<Blob> {
+  const XLSX = await import('xlsx');
   const wb = XLSX.utils.book_new();
   const addSheet = (name: string, rows: (string | undefined)[][]) =>
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), name);
@@ -291,6 +291,7 @@ export async function parseAndValidateMasterWorkbook(
     sections: StudentSection[];
   }
 ): Promise<ExcelImportPreview> {
+  const XLSX = await import('xlsx');
   const buffer = await file.arrayBuffer();
   const wb = XLSX.read(buffer, { type: 'array' });
 

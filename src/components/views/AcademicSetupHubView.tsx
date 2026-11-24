@@ -249,8 +249,8 @@ export function AcademicSetupHubView() {
     if (res.isSuccess && res.conflicts.length === 0) setActiveTab('review');
   };
 
-  const handleDownloadMasterTemplate = () => {
-    const blob = generateMasterExcelTemplate({
+  const handleDownloadMasterTemplate = async () => {
+    const blob = await generateMasterExcelTemplate({
       departments,
       programs,
       courses,

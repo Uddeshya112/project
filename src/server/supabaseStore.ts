@@ -68,6 +68,12 @@ if (supabase) {
   console.info('[SUPABASE] Running in autonomous authoritative PostgreSQL emulation mode (configured schema ready for live cutover)');
 }
 
+export function shouldSeedDemoData(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (env.SEED_DEMO_DATA === 'true') return true;
+  if (env.SEED_DEMO_DATA === 'false') return false;
+  return env.NODE_ENV !== 'production';
+}
+
 /**
  * Authoritative Supabase Relational Database Store
  * Implements transaction safety, relational foreign-key validation,
@@ -95,7 +101,42 @@ class SupabaseRelationalStore {
   private replacementVotes: Map<string, string> = new Map(); // "pollId:studentId" -> optionId
 
   constructor() {
-    this.seedInitialDatabase();
+    if (shouldSeedDemoData()) {
+      this.seedInitialDatabase();
+    } else {
+      this.initializeEmptyDatabase();
+    }
+  }
+
+  private initializeEmptyDatabase() {
+    this.academicYear = {
+      id: 'academic-year-unconfigured',
+      yearLabel: 'Not configured',
+      semesterType: 'Odd (Autumn)',
+      semesterNumber: 1,
+      workingDays: [],
+      timeSlots: [],
+      lunchPeriodId: '',
+      publishStatus: 'Draft',
+    };
+    this.departments.clear();
+    this.programs.clear();
+    this.courses.clear();
+    this.facultyMembers.clear();
+    this.rooms.clear();
+    this.groups.clear();
+    this.students.clear();
+    this.allocations.clear();
+    this.constraints.clear();
+    this.versions = [];
+    this.activeSessions = [];
+    this.notifications = [];
+    this.auditEvents = [];
+    this.makeupTasks = [];
+    this.recoveryOpportunities = [];
+    this.replacementPolls = [];
+    this.replacementVotes.clear();
+    console.info('[SUPABASE STORE] Empty production academic state initialized; no sample records loaded.');
   }
 
   /** Snapshot the live store so production writes can be committed to Postgres. */

@@ -59,6 +59,18 @@ Roles per endpoint: [permissions.md](permissions.md).
 
 **Administrative / review**: `GET /api/admin/users`; `POST /api/admin/users`; `PATCH /api/admin/users/:id`; `DELETE /api/admin/users/:id`; `POST /api/admin/users/:id/revoke-sessions`; `GET /api/admin/sessions`; `POST /api/timetable/department-approval` (HOD department sign-off; does not replace final Admin approval).
 
+## Target platform API (migration in progress)
+
+The parallel FastAPI service lives under `apps/api`; it does not replace `/api` in the current Express app. It uses bearer access tokens from Supabase Auth, resolves role and tenant membership from `intellischedule_v2.users`, and returns 503 when its database is unavailable. All data writes commit before reporting success.
+
+- `GET /v1/me`: verified active app identity.
+- `GET /v1/academic/courses?search=&limit=&offset=`: tenant-scoped course catalog for Super Admin, College Admin, and Coordinator.
+- `POST /v1/academic/courses`: create a course; the institution comes from the authenticated principal, never request data.
+- `PATCH /v1/academic/courses/{id}`: update a tenant-owned active course.
+- `DELETE /v1/academic/courses/{id}`: archive a tenant-owned course; it is retained for historical timetable references.
+
+Course creation, updates, and archival append an `event_outbox` record in the same database transaction. Database RLS remains a second tenant boundary. HOD reads are not enabled in this API until department ownership is represented and enforced in the schema.
+
 ## Rate limits
 
 In process memory, per instance, reset on restart.

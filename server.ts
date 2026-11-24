@@ -3,6 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
+import { existsSync } from 'node:fs';
 import type { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import path from 'path';
@@ -10,6 +11,7 @@ import { fileURLToPath } from 'url';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { OAuth2Client } from 'google-auth-library';
 import { persistentStore, persistentDatabase, StoredSession } from './src/server/persistentStore';
+import { ensureBootstrapAdmin } from './src/server/bootstrapAdmin';
 import { isTestTokenAllowed } from './src/server/testMode';
 export { isTestTokenAllowed };
 import {
@@ -110,6 +112,34 @@ async function initializeAcademicPersistence() {
   academicDb = persistentDatabase || await connectDb(process.env.DATABASE_URL);
   await loadAcademicState();
   await loadPersistedUsers();
+  if (process.env.NODE_ENV === 'production') {
+    await ensureBootstrapAdmin({
+      users: usersDatabase,
+      email: process.env.BOOTSTRAP_ADMIN_EMAIL,
+      password: process.env.BOOTSTRAP_ADMIN_PASSWORD,
+      allowedDomains: (process.env.ALLOWED_EMAIL_DOMAINS || '').split(','),
+      allowDemoOnly: process.env.PUBLIC_DEMO_ENABLED === 'true' && process.env.ALLOW_DEMO_IN_PRODUCTION === 'true',
+      createUser: (email, password): StoredUser => ({
+        id: crypto.randomUUID(),
+        name: process.env.BOOTSTRAP_ADMIN_NAME?.trim() || email.split('@')[0],
+        email,
+        passwordHash: hashPasswordBcryptSync(password),
+        roleId: 'role-college_admin',
+        roleCode: 'COLLEGE_ADMIN',
+        roleName: 'College Admin / Dean',
+        institutionId: 'inst-thapar',
+        institutionName: 'Thapar Institute of Engineering and Technology',
+        department: 'Office of the Dean',
+        status: 'ACTIVE',
+        createdAt: new Date().toISOString(),
+        authorizedWorkspaces: ['Admin', 'Coordinator'],
+        isDemoUser: false,
+        emailVerified: true,
+        profile: {},
+      }),
+      persistUser: persistNewUserRecord,
+    });
+  }
 }
 
 // Initialize Server-side Supabase Clients
@@ -808,16 +838,26 @@ app.get('/api/health/live', (_req: Request, res: Response) => {
   });
 });
 
-app.get('/api/health/ready', (_req: Request, res: Response) => {
+app.get('/api/health/ready', async (_req: Request, res: Response) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   const dbUsersCount = usersDatabase.size;
   const activeSessionsCount = persistentStore.sessions.size;
-  return res.status(academicDb || process.env.NODE_ENV !== 'production' ? 200 : 503).json({
-    status: academicDb || process.env.NODE_ENV !== 'production' ? 'READY' : 'DATABASE_UNAVAILABLE',
+  let academicDatabase: 'OK' | 'UNAVAILABLE' = 'UNAVAILABLE';
+  if (academicDb) {
+    try {
+      await academicDb.query('select 1');
+      academicDatabase = 'OK';
+    } catch {
+      academicDatabase = 'UNAVAILABLE';
+    }
+  }
+  const ready = academicDatabase === 'OK' || process.env.NODE_ENV !== 'production';
+  return res.status(ready ? 200 : 503).json({
+    status: ready ? 'READY' : 'DATABASE_UNAVAILABLE',
     timestamp: new Date().toISOString(),
     checks: {
       inMemoryDatabase: 'OK',
-      academicDatabase: academicDb ? 'OK' : 'UNAVAILABLE',
+      academicDatabase,
       userStoreCount: dbUsersCount,
       activeSessions: activeSessionsCount,
       rateLimiter: 'OK',
@@ -4197,15 +4237,26 @@ app.all(/^\/api\/.*/, (_req: Request, res: Response) => {
 // -------------------------------------------------------------
 async function setupApp() {
   if (process.env.NODE_ENV === 'production' || process.env.RENDER) {
-    app.use(express.static(path.join(__dirname, 'dist')));
-    // Express 5's path-to-regexp rejects the legacy `'*'` wildcard.
-    // Keep the SPA fallback out of API paths so API 404s remain JSON responses.
-    app.get(/^\/(?!api\/).*/, (_req, res, next) => {
-      if (_req.path.startsWith('/api/')) {
-        return next();
-      }
-      res.sendFile(path.join(__dirname, 'dist', 'index.html'));
-    });
+    const frontendDirectory = path.join(__dirname, 'dist');
+    const frontendIndex = path.join(frontendDirectory, 'index.html');
+    if (existsSync(frontendIndex)) {
+      app.use(express.static(frontendDirectory));
+      // Express 5's path-to-regexp rejects the legacy '*' wildcard.
+      // Keep the SPA fallback out of API paths so API 404s remain JSON responses.
+      app.get(/^\/(?!api\/).*/, (_req, res, next) => {
+        if (_req.path.startsWith('/api/')) {
+          return next();
+        }
+        res.sendFile(frontendIndex);
+      });
+    } else {
+      // Render serves the API behind Vercel, where the frontend is deployed separately.
+      // A platform request to `/` must not try to stat a missing frontend bundle.
+      app.get('/', (_req, res) => res.json({ status: 'API_ONLY', service: 'intellischedule-core' }));
+      app.get(/^\/(?!api\/).*/, (_req, res) =>
+        res.status(404).json({ success: false, error: 'NOT_FOUND', message: 'Frontend is served separately.' }),
+      );
+    }
   } else {
     try {
       const { createServer } = await import('vite');

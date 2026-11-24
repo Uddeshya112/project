@@ -168,10 +168,6 @@ async function runDemoAudit() {
   const facultyPublish = await request('POST', '/api/timetables/publish', {}, facultyToken);
   assert(facultyPublish.status === 403, 'Faculty blocked from timetable publishing with HTTP 403 (FORBIDDEN)');
 
-  // Admin publishing timetable -> PERMITTED
-  const adminPublish = await request('POST', '/api/timetables/publish', {}, adminToken);
-  assert(adminPublish.status === 200, 'Admin permitted to publish master timetable (HTTP 200)');
-
   // 6. Timetable Generator Execution on Demo Dataset
   console.log('\n--- 6. Testing Timetable Engine on Demo Dataset ---');
   // Re-login coordinator for generation test
@@ -183,6 +179,10 @@ async function runDemoAudit() {
   assert(generateRes.body?.success === true || generateRes.body?.isFeasible === true, 'Timetable generation returns success=true');
   const sessionCount = generateRes.body?.sessionsGenerated || generateRes.body?.bestCandidate?.sessions?.length || 0;
   assert(sessionCount > 0, `Engine generated ${sessionCount} valid class sessions`);
+
+  // The generated draft is now feasible, so an Admin publish should succeed.
+  const adminPublishValid = await request('POST', '/api/timetables/publish', {}, adminToken);
+  assert(adminPublishValid.status === 200, `Admin publishes the generated master timetable (HTTP ${adminPublishValid.status})`);
 
   // 7. Safe Demo Data Reset
   console.log('\n--- 7. Testing Safe Demo Data Reset ---');

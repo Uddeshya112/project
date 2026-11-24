@@ -64,7 +64,7 @@ export interface StateBackend {
 }
 
 const DATA_DIR = path.join(process.cwd(), 'data');
-const STATE_FILE = path.join(DATA_DIR, 'persistent_state.json');
+const STATE_FILE = process.env.PERSISTENT_STATE_PATH || path.join(DATA_DIR, 'persistent_state.json');
 
 export class FileBackend implements StateBackend {
   private saveTimeout: NodeJS.Timeout | null = null;

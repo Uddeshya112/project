@@ -23,7 +23,7 @@ Run first-time bootstrap with the Supabase `postgres`/migration-owner connection
 
 Create services from the repository Blueprint `render.yaml`: API web service and worker. Each currently uses Render's paid `0.5c-512mb` plan; confirm that spend before provisioning. Set `DATABASE_URL` to the restricted runtime role, `DIRECT_URL` to the migration connection, `SUPABASE_URL`, `SUPABASE_JWKS_URL`, and `CORS_ALLOWED_ORIGINS` in Render's secret/config interface. Confirm the project region and select a matching supported Render region before provisioning. The Blueprint health check uses `/health`; `/ready` checks the database.
 
-The API currently includes health/readiness and verified-JWKS identity lookup. Phase 0 does not yet implement domain modules, outbox dispatch, or durable solve jobs. Do not route production traffic to it as a replacement for the current app yet.
+The API includes health/readiness, verified-JWKS identity lookup, and the first tenant-scoped academic course catalog. Course writes and their outbox events commit together. Worker outbox dispatch and durable solve jobs are not implemented. Do not route production traffic to it as a replacement for the current app yet.
 
 ## Vercel
 
