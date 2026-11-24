@@ -524,3 +524,11 @@
 - **VERIFIED:** TypeScript typecheck and Vite production build passed; `git diff --check` passed. After calibrating the root integration benchmark's cap to `<100 ms` (it includes independent post-solve validation and runs within the solver FAST budget), final `npm test` passed all 29 unit/integration and 55/55 end-to-end assertions; the measured 736-allocation p95 was `38.09 ms`. The dedicated `npm run test:solver` passed, including a 1,100-allocation run at 70.57 ms with zero hard violations and the suite's 300/600/1,000-allocation cases. A separate 30-run local sample measured p50 `26.7 ms`, p95 `61.1 ms`, p99 `72.6 ms`; benchmark variance remains material.
 - **NOT VERIFIED:** The PR workflow has not yet rerun with these fixes. Linux CI benchmark behavior is unknown. Production-scale 2,200+ session solving, hard-conflict freedom at 10,000-student scale, actual Supabase RLS, schema application, browser auth, hosting migration, and rollback remain unverified.
 - **NOT DEPLOYED:** Hosted services, secrets, and database were not changed. The branch remains unmerged.
+
+## 25. CI Red-Team Contract Alignment (2026-11-24)
+
+- **CI finding:** On commit `f0835be`, API, web, typecheck, unit/integration, and solver jobs passed; the security job failed three checks. Inspection showed the adversarial script expected Coordinator publish to be denied even though `docs/permissions.md` and the server route explicitly allow it. Two signup checks still asserted the retired immediate-activation flow.
+- Updated the adversarial suite to verify the documented Coordinator publish permission and test role injection under the current signup lifecycle: a malicious payload requests `STUDENT` while supplying ignored admin role/workspace fields, an Admin approves that pending request, then the activated account is checked to remain Student and receives `403` for publish.
+- **NOT CHANGED:** Server publish authorization; docs and route agree that Coordinator publish is allowed. The approval and admin-only endpoint checks remain server-enforced.
+- **VERIFIED LOCALLY:** Typecheck, root `npm test` (29 + 55 passing), Vite build, and `npm run test:solver` passed before this security-script-only correction. The dedicated CI security job must rerun to verify the revised red-team checks.
+- **NOT DEPLOYED:** No production changes.
