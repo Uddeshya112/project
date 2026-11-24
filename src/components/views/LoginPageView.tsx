@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { useTimetable } from '../../context/TimetableContext';
 import { ThaparLogo } from '../ThaparLogo';
 import { evaluatePasswordPolicy } from '../../lib/passwordPolicy';
 import { supabaseClient, apiFetch } from '../../lib/supabaseClient';
@@ -26,7 +25,7 @@ interface LoginPageViewProps {
   onSuccessLogin: (workspaces?: any[]) => void;
 }
 
-type AuthScreenMode = 'login' | 'register' | 'forgot_password' | 'forgot_success' | 'reset_password' | 'reset_success' | 'recovery_invalid';
+type AuthScreenMode = 'login' | 'register' | 'pending_approval' | 'forgot_password' | 'forgot_success' | 'reset_password' | 'reset_success' | 'recovery_invalid';
 
 export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
   const {
@@ -36,8 +35,6 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
     requestPasswordReset,
     resetPassword
   } = useAuth();
-
-  const { setCurrentRole } = useTimetable();
 
   // Screen Mode: 'login' | 'register' | 'forgot_password' | 'reset_password'
   const [screenMode, setScreenMode] = useState<AuthScreenMode>('login');
@@ -53,6 +50,8 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
   const [regEmail, setRegEmail] = useState('');
   const [regPassword, setRegPassword] = useState('');
   const [regConfirmPassword, setRegConfirmPassword] = useState('');
+  const [regRoleCode, setRegRoleCode] = useState<'STUDENT' | 'FACULTY' | 'COORDINATOR'>('STUDENT');
+  const [pendingApprovalEmail, setPendingApprovalEmail] = useState('');
   const [showRegPassword, setShowRegPassword] = useState(false);
   const [showRegConfirmPassword, setShowRegConfirmPassword] = useState(false);
 
@@ -143,9 +142,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
         if (resp.ok) {
           const data = await resp.json();
           if (data.authenticated && data.user) {
-            const roleKey = data.role || data.user.roleKey;
             const workspaces = data.authorizedWorkspaces || data.user.authorizedWorkspaces;
-            if (roleKey) setCurrentRole(roleKey);
             onSuccessLogin(workspaces);
           }
         }
@@ -172,9 +169,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
           if (resp.ok) {
             const data = await resp.json();
             if (data.authenticated && data.user) {
-              const roleKey = data.role || data.user.roleKey;
               const workspaces = data.authorizedWorkspaces || data.user.authorizedWorkspaces;
-              if (roleKey) setCurrentRole(roleKey);
               setTimeout(() => {
                 onSuccessLogin(workspaces);
               }, 300);
@@ -237,7 +232,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
     checkSupabaseRecovery();
 
     return () => window.removeEventListener('message', handleAuthMessage);
-  }, [setCurrentRole, onSuccessLogin]);
+  }, [onSuccessLogin]);
 
   // Password Requirement Checks
   const reqLength = newPassword.length >= 8;
@@ -279,13 +274,15 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
       const res = await login(emailTrim, loginPassword);
       if (res.success) {
         setSuccessMessage(res.message);
-        if (res.roleKey) {
-          setCurrentRole(res.roleKey);
-        }
         setTimeout(() => {
           onSuccessLogin(res.authorizedWorkspaces);
         }, 350);
       } else {
+        if (res.pendingApproval) {
+          setPendingApprovalEmail(emailTrim);
+          setScreenMode('pending_approval');
+          return;
+        }
         // Remain on login page and display safe error. Never trigger Google OAuth!
         setErrorMessage(res.message);
       }
@@ -350,7 +347,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
   /**
    * Handle Register Submit (POST /api/auth/register)
    * Enforces 12+ chars, uppercase, lowercase, number, symbol policy
-   * Creates the account and signs in immediately; email confirmation is not part of this flow.
+   * Creates a pending account request; sign-in is enabled only after Admin approval.
    */
   const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -379,15 +376,21 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
     setIsLoading(true);
 
     try {
-      const res = await register(nameTrim, emailTrim, regPassword);
+      const res = await register(nameTrim, emailTrim, regPassword, regRoleCode);
       if (res.success) {
+        if (res.status === 'PENDING') {
+          setPendingApprovalEmail(res.email || emailTrim);
+          setRegPassword('');
+          setRegConfirmPassword('');
+          setScreenMode('pending_approval');
+          return;
+        }
         setLoginEmail(res.email || emailTrim);
         setLoginPassword('');
         setRegPassword('');
         setRegConfirmPassword('');
         const signIn = await login(emailTrim, regPassword);
         if (signIn.success) {
-          if (signIn.roleKey) setCurrentRole(signIn.roleKey);
           onSuccessLogin(signIn.authorizedWorkspaces);
         } else {
           setScreenMode('login');
@@ -582,9 +585,20 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
   };
 
   return (
-    <div className="min-h-screen w-full bg-[#F7F6F2] dark:bg-[#0c0c0e] text-stone-900 dark:text-zinc-100 flex flex-col justify-center items-center p-3 sm:p-4 font-sans relative overflow-x-hidden selection:bg-[#8C1B2E]/20 selection:text-[#8C1B2E]">
+    <main className="study-login min-h-screen w-full bg-[#F7F6F2] dark:bg-[#0c0c0e] text-stone-900 dark:text-zinc-100 flex flex-col justify-center items-center p-3 sm:p-4 font-sans relative overflow-x-hidden selection:bg-[#8C1B2E]/20 selection:text-[#8C1B2E]">
+      <div className="study-login-story" aria-hidden="true">
+        <div className="study-story-kicker"><span className="study-live-dot" /> TIET · ACADEMIC LIFE, IN RHYTHM</div>
+        <h1>Make room<br />for <em>what’s next.</em></h1>
+        <p className="study-story-copy">Your week, your classes, your campus — all moving together.</p>
+        <div className="study-course-stack">
+          <div className="study-course-card study-course-one"><span>MON · 09:00</span><strong>Data Structures</strong><small>CS 201 · LH 3</small></div>
+          <div className="study-course-card study-course-two"><span>TUE · 11:00</span><strong>Design Studio</strong><small>DES 104 · Studio B</small></div>
+          <div className="study-course-card study-course-three"><span>THU · 14:00</span><strong>Signals &amp; Systems</strong><small>EC 204 · Block C</small></div>
+        </div>
+        <div className="study-story-foot"><span>ONE CAMPUS, EVERY CLASS</span><span>01 / 05</span></div>
+      </div>
       {/* Main Centered Minimal Card */}
-      <div className="w-full max-w-[430px] max-h-[calc(100vh-1.5rem)] overflow-y-auto bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-2xl p-5 sm:p-6 shadow-xs relative z-10 transition-all">
+      <div className="study-login-card w-full max-w-[430px] max-h-[calc(100vh-1.5rem)] overflow-y-auto bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-2xl p-5 sm:p-6 shadow-xs relative z-10 transition-all">
         {/* Thapar Brand Header - Primary visual identity */}
         <div className="mb-6 text-center">
           <ThaparLogo size="md" variant="full" />
@@ -652,6 +666,16 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
                 </div>
               </div>
 
+              <div className="space-y-1.5">
+                <label htmlFor="reg-role" className="text-xs font-medium text-stone-700 dark:text-zinc-300 block">Request role</label>
+                <select id="reg-role" value={regRoleCode} onChange={event => setRegRoleCode(event.target.value as typeof regRoleCode)} disabled={isLoading} className="w-full rounded-xl border border-[#E5E2D9] bg-white px-3 py-2.5 text-xs text-stone-900 outline-none focus:border-[#8C1B2E] dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100">
+                  <option value="STUDENT">Student</option>
+                  <option value="FACULTY">Faculty</option>
+                  <option value="COORDINATOR">Coordinator</option>
+                </select>
+                <p className="text-[10px] text-stone-500 dark:text-zinc-400">An Admin must approve the requested role before you can sign in.</p>
+              </div>
+
               {/* Password */}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between text-xs">
@@ -681,7 +705,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
                   <button
                     type="button"
                     onClick={() => setShowLoginPassword(!showLoginPassword)}
-                    className="absolute right-3.5 top-2.5 text-stone-400 hover:text-stone-600 dark:text-zinc-500 dark:hover:text-zinc-300 transition-colors p-0.5 focus:outline-none"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 min-h-8 min-w-8 inline-flex items-center justify-center rounded-md text-stone-400 hover:text-stone-600 dark:text-zinc-500 dark:hover:text-zinc-300 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8C1B2E]"
                     aria-label={showLoginPassword ? 'Hide password' : 'Show password'}
                     aria-pressed={showLoginPassword}
                   >
@@ -787,90 +811,90 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
                   Account details
                 </button>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:auto-rows-fr lg:grid-cols-6">
                 <button
                   type="button"
                   onClick={() => handleDemoLoginClick('Coordinator')}
                   disabled={Boolean(demoRoleLoading) || isLoading || isGoogleLoading}
-                  className="p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-850 active:bg-stone-100 disabled:opacity-50 text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs"
+                  className="h-full min-h-[88px] p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-800 active:bg-stone-100 disabled:bg-stone-200 dark:disabled:bg-zinc-700 disabled:opacity-100 disabled:cursor-wait text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs lg:col-span-2"
                 >
                   <div className="flex items-center justify-between w-full">
-                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white transition-colors">Continue as Coordinator</span>
+                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white group-disabled:text-stone-800 dark:group-disabled:text-zinc-100 transition-colors">Continue as Coordinator</span>
                     {demoRoleLoading === 'Coordinator' ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-400" />
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-600 dark:text-zinc-200" />
                     ) : (
                       <ArrowRight className="h-3 w-3 text-stone-400 group-hover:text-[#8C1B2E] transition-colors" />
                     )}
                   </div>
-                  <span className="text-[10px] text-stone-500 dark:text-zinc-400">Full solver, rules & publishing</span>
+                  <span className="text-[10px] text-stone-600 dark:text-zinc-300 group-disabled:text-stone-700 dark:group-disabled:text-zinc-200">Full solver, rules & publishing</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => handleDemoLoginClick('Faculty')}
                   disabled={Boolean(demoRoleLoading) || isLoading || isGoogleLoading}
-                  className="p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-850 active:bg-stone-100 disabled:opacity-50 text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs"
+                  className="h-full min-h-[88px] p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-800 active:bg-stone-100 disabled:bg-stone-200 dark:disabled:bg-zinc-700 disabled:opacity-100 disabled:cursor-wait text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs lg:col-span-2"
                 >
                   <div className="flex items-center justify-between w-full">
-                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white transition-colors">Continue as Faculty</span>
+                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white group-disabled:text-stone-800 dark:group-disabled:text-zinc-100 transition-colors">Continue as Faculty</span>
                     {demoRoleLoading === 'Faculty' ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-400" />
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-600 dark:text-zinc-200" />
                     ) : (
                       <ArrowRight className="h-3 w-3 text-stone-400 group-hover:text-[#8C1B2E] transition-colors" />
                     )}
                   </div>
-                  <span className="text-[10px] text-stone-500 dark:text-zinc-400">Teaching routine & room schedule</span>
+                  <span className="text-[10px] text-stone-600 dark:text-zinc-300 group-disabled:text-stone-700 dark:group-disabled:text-zinc-200">Teaching routine & room schedule</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => handleDemoLoginClick('Student')}
                   disabled={Boolean(demoRoleLoading) || isLoading || isGoogleLoading}
-                  className="p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-850 active:bg-stone-100 disabled:opacity-50 text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs"
+                  className="h-full min-h-[88px] p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-800 active:bg-stone-100 disabled:bg-stone-200 dark:disabled:bg-zinc-700 disabled:opacity-100 disabled:cursor-wait text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs lg:col-span-2"
                 >
                   <div className="flex items-center justify-between w-full">
-                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white transition-colors">Continue as Student</span>
+                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white group-disabled:text-stone-800 dark:group-disabled:text-zinc-100 transition-colors">Continue as Student</span>
                     {demoRoleLoading === 'Student' ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-400" />
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-600 dark:text-zinc-200" />
                     ) : (
                       <ArrowRight className="h-3 w-3 text-stone-400 group-hover:text-[#8C1B2E] transition-colors" />
                     )}
                   </div>
-                  <span className="text-[10px] text-stone-500 dark:text-zinc-400">Weekly classes & course details</span>
+                  <span className="text-[10px] text-stone-600 dark:text-zinc-300 group-disabled:text-stone-700 dark:group-disabled:text-zinc-200">Weekly classes & course details</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => handleDemoLoginClick('Admin')}
                   disabled={Boolean(demoRoleLoading) || isLoading || isGoogleLoading}
-                  className="p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-850 active:bg-stone-100 disabled:opacity-50 text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs"
+                  className="h-full min-h-[88px] p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-800 active:bg-stone-100 disabled:bg-stone-200 dark:disabled:bg-zinc-700 disabled:opacity-100 disabled:cursor-wait text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs lg:col-span-2 lg:col-start-2"
                 >
                   <div className="flex items-center justify-between w-full">
-                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white transition-colors">Continue as Admin</span>
+                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white group-disabled:text-stone-800 dark:group-disabled:text-zinc-100 transition-colors">Continue as Admin</span>
                     {demoRoleLoading === 'Admin' ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-400" />
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-600 dark:text-zinc-200" />
                     ) : (
                       <ArrowRight className="h-3 w-3 text-stone-400 group-hover:text-[#8C1B2E] transition-colors" />
                     )}
                   </div>
-                  <span className="text-[10px] text-stone-500 dark:text-zinc-400">Dean office & master approvals</span>
+                  <span className="text-[10px] text-stone-600 dark:text-zinc-300 group-disabled:text-stone-700 dark:group-disabled:text-zinc-200">Dean office & master approvals</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => handleDemoLoginClick('HOD')}
                   disabled={Boolean(demoRoleLoading) || isLoading || isGoogleLoading}
-                  className="p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-850 active:bg-stone-100 disabled:opacity-50 text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs"
+                  className="h-full min-h-[88px] p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-800 active:bg-stone-100 disabled:bg-stone-200 dark:disabled:bg-zinc-700 disabled:opacity-100 disabled:cursor-wait text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs lg:col-span-2 lg:col-start-4"
                 >
                   <div className="flex items-center justify-between w-full">
-                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white transition-colors">Continue as HOD</span>
+                    <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white group-disabled:text-stone-800 dark:group-disabled:text-zinc-100 transition-colors">Continue as HOD</span>
                     {demoRoleLoading === 'HOD' ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-400" />
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-600 dark:text-zinc-200" />
                     ) : (
                       <ArrowRight className="h-3 w-3 text-stone-400 group-hover:text-[#8C1B2E] transition-colors" />
                     )}
                   </div>
-                  <span className="text-[10px] text-stone-500 dark:text-zinc-400">Department load balance & syllabus tracking</span>
+                  <span className="text-[10px] text-stone-600 dark:text-zinc-300 group-disabled:text-stone-700 dark:group-disabled:text-zinc-200">Department load balance & syllabus tracking</span>
                 </button>
               </div>
             </div>
@@ -1103,6 +1127,21 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
                 Login
               </button>
             </div>
+          </div>
+        )}
+
+        {screenMode === 'pending_approval' && (
+          <div className="space-y-5 py-3 text-center">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border border-amber-300 bg-amber-100 text-amber-800 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-300">
+              <ShieldAlert className="h-6 w-6" aria-hidden="true" />
+            </div>
+            <div className="space-y-2">
+              <h2 className="text-lg font-bold font-serif text-stone-900 dark:text-zinc-100">Waiting for Admin Approval</h2>
+              <p className="mx-auto max-w-sm text-xs leading-relaxed text-stone-600 dark:text-zinc-400">The account request for <span className="font-semibold">{pendingApprovalEmail}</span> is awaiting review. You can sign in after an Admin approves it.</p>
+            </div>
+            <button type="button" onClick={() => { setLoginEmail(pendingApprovalEmail); setScreenMode('login'); }} className="w-full rounded-lg bg-[#8C1B2E] py-2.5 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-[#721525]">
+              Return to sign in
+            </button>
           </div>
         )}
 
@@ -1512,6 +1551,6 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
           </div>
         </div>
       )}
-    </div>
+    </main>
   );
 }

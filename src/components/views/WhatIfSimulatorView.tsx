@@ -71,8 +71,10 @@ export function WhatIfSimulatorView() {
   }, [activeScenario, courses, facultyMembers, rooms, sections, sessions, targetFaculty?.id, targetRoom?.id]);
   const changedCount = simulationDiff.filter((diff) => diff.changed).length;
   const roomChangeCount = simulationDiff.filter((diff) => diff.changed && diff.roomId !== diff.original.roomId).length;
-  const stabilityScore = sessions.length ? Math.max(0, Math.round(100 - changedCount / sessions.length * 100)) : 100;
   const unresolvedCount = simulationDiff.length - changedCount;
+  const stabilityScore = simulationDiff.length
+    ? Math.max(0, Math.round(100 - unresolvedCount / simulationDiff.length * 100))
+    : 100;
   const projectedHealth = Math.max(0, health.overallScore - unresolvedCount * 2);
   const sessionLabel = (session: typeof sessions[number], roomId: string, facultyId: string) => {
     const course = courses.find((item) => item.id === session.courseId);
@@ -214,15 +216,15 @@ export function WhatIfSimulatorView() {
 
           <div className="p-3.5 bg-white dark:bg-zinc-950/60 rounded-xl border border-[#E5E2D9] dark:border-zinc-800 shadow-xs">
             <span className="text-[11px] text-stone-500 dark:text-zinc-400 block mb-1">Unresolved Assignments</span>
-            <span className="text-2xl font-bold font-mono text-emerald-700 dark:text-emerald-400 tabular-nums">
+            <span className={`text-2xl font-bold font-mono tabular-nums ${unresolvedCount === 0 ? 'text-emerald-700 dark:text-emerald-400' : unresolvedCount / Math.max(1, simulationDiff.length) > 0.5 ? 'text-rose-700 dark:text-rose-400' : 'text-amber-700 dark:text-amber-400'}`}>
               {unresolvedCount}
             </span>
-            <span className="text-[10px] text-emerald-700 dark:text-emerald-400 block mt-1">Classes needing manual review</span>
+            <span className={`text-[10px] block mt-1 ${unresolvedCount === 0 ? 'text-emerald-700 dark:text-emerald-400' : unresolvedCount / Math.max(1, simulationDiff.length) > 0.5 ? 'text-rose-700 dark:text-rose-400' : 'text-amber-700 dark:text-amber-400'}`}>Classes needing manual review</span>
           </div>
 
           <div className="p-3.5 bg-white dark:bg-zinc-950/60 rounded-xl border border-[#E5E2D9] dark:border-zinc-800 shadow-xs">
             <span className="text-[11px] text-stone-500 dark:text-zinc-400 block mb-1">Schedule Stability</span>
-            <span className="text-2xl font-bold font-mono text-[#8C1B2E] dark:text-red-400 tabular-nums">
+            <span className={`text-2xl font-bold font-mono tabular-nums ${stabilityScore >= 80 ? 'text-emerald-700 dark:text-emerald-400' : stabilityScore >= 50 ? 'text-amber-700 dark:text-amber-400' : 'text-rose-700 dark:text-rose-400'}`}>
               {stabilityScore}%
             </span>
             <span className="text-[10px] text-stone-400 dark:text-zinc-500 block mt-1">Based on feasible changes / schedule size</span>

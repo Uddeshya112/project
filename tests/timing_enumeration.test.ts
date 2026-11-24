@@ -6,6 +6,9 @@ const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:3000';
 async function measureRequests(url: string, body: Record<string, any>, count: number): Promise<number[]> {
   const times: number[] = [];
   for (let i = 0; i < count; i++) {
+    // Keep the endpoint's per-IP rate limiter from turning most samples into fast 429s.
+    // This helper is only mounted by the non-production test server.
+    await fetch(`${BASE_URL}/api/test/reset-rate-limits`, { method: 'POST' });
     const start = performance.now();
     await fetch(url, {
       method: 'POST',

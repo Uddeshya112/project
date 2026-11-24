@@ -3,6 +3,7 @@ import { useTimetable } from '../../context/TimetableContext';
 import { useAuth } from '../../context/AuthContext';
 import type { DayOfWeek, TimeSlot } from '../../types';
 import { api } from '../../lib/api';
+import { facultyTeachingCap, facultyTeachingPeriods } from '../../lib/facultyWorkload';
 import { PollComposer } from './PollComposer';
 import {
   Calendar,
@@ -47,6 +48,7 @@ export function FacultyPortalView() {
     claimMarketplaceSlot,
     setFacultyProtectedSlot,
     cancelSession,
+    undoCancellation,
   } = useTimetable();
 
   const roleCode = currentUser?.roleCode ?? '';
@@ -55,7 +57,12 @@ export function FacultyPortalView() {
   const isTeacher = roleCode === 'FACULTY' || roleCode === 'HOD';
   // The server assigns an extra class to the signed-in teacher, so only FACULTY accounts can claim one.
   const canClaim = roleCode === 'FACULTY';
-  const facultyId = isTeacher ? roster?.facultyId ?? '' : selectedFacultyId;
+  const linkedFacultyId = currentUser?.facultyId || '';
+  const facultyId = isTeacher
+    ? roster?.facultyId || linkedFacultyId
+    : roleCode === 'COORDINATOR' && linkedFacultyId
+      ? linkedFacultyId
+      : selectedFacultyId;
   const currentFaculty = facultyMembers.find(f => f.id === facultyId);
 
   const { workingDays, timeSlots, lunchPeriodId } = academicYear;
@@ -72,6 +79,7 @@ export function FacultyPortalView() {
   const [busy, setBusy] = useState<string | null>(null);
   const [sessionToCancel, setSessionToCancel] = useState<string | null>(null);
   const [cancellationReason, setCancellationReason] = useState<string>('');
+  const [scheduledClassesOnly, setScheduledClassesOnly] = useState(false);
   const [oppToDecline, setOppToDecline] = useState<string | null>(null);
   const [scheduleChangeFeedback, setScheduleChangeFeedback] = useState('');
 
@@ -161,12 +169,21 @@ export function FacultyPortalView() {
 
   const mySessions = sessions.filter(s => s.facultyId === currentFaculty.id);
   const dailySessions = mySessions.filter(s => s.day === selectedDay);
-  const activeHours = (match: (type: string) => boolean) =>
-    mySessions
-      .filter(s => s.status !== 'Cancelled' && match(s.type))
-      .reduce((n, s) => n + slotHours(slotById.get(s.timeSlotId)), 0);
-  const totalHours = activeHours(() => true);
-  const withinLimit = totalHours <= currentFaculty.maxDirectTeachingHours;
+  const activeHours = (match: (type: string) => boolean) => {
+    const selected = mySessions.filter((session) => session.status !== 'Cancelled' && match(session.type));
+    const countedLectures = new Set<string>();
+    return selected.reduce((total, session) => {
+      if (session.type === 'Lecture') {
+        const key = `${session.courseId}:${session.day}:${session.timeSlotId}`;
+        if (countedLectures.has(key)) return total;
+        countedLectures.add(key);
+      }
+      return total + slotHours(slotById.get(session.timeSlotId)) * Math.max(1, Number(session.durationPeriods) || 1);
+    }, 0);
+  };
+  const totalHours = facultyTeachingPeriods(mySessions, currentFaculty.id);
+  const teachingCap = facultyTeachingCap(currentFaculty);
+  const withinLimit = totalHours <= teachingCap;
   const workloadCards = [
     { label: 'Lectures', value: fmtHrs(activeHours(t => t === 'Lecture')), note: 'Scheduled' },
     { label: 'Tutorials', value: fmtHrs(activeHours(t => t === 'Tutorial')), note: 'Scheduled' },
@@ -255,7 +272,7 @@ export function FacultyPortalView() {
             </span>
           </div>
           <span className="text-xs text-stone-500 dark:text-zinc-400 font-medium">
-            Maximum Limit: {currentFaculty.maxDirectTeachingHours} hours per week
+            Maximum Limit: {teachingCap} hours per week
           </span>
         </div>
         <p className="text-[11px] text-stone-500 dark:text-zinc-400 leading-relaxed">
@@ -284,9 +301,9 @@ export function FacultyPortalView() {
       </div>
 
       {/* Main Grid: Class Schedule & Replacement Actions */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left 2 Columns: Daily Class Schedule */}
-        <div className="lg:col-span-2 space-y-4">
+      <div className="grid grid-cols-1 gap-6">
+        {/* Daily Class Schedule spans the full content width for readable course titles. */}
+        <div className="min-w-0 space-y-4">
           <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl overflow-hidden shadow-xs">
             {/* Day Selector */}
             <div className="p-3.5 border-b border-[#E5E2D9] dark:border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-[#F4F2EC] dark:bg-zinc-950/50">
@@ -319,9 +336,11 @@ export function FacultyPortalView() {
               </div>
             )}
 
+            {isTeacher && <label className="flex items-center gap-2 border-b border-[#E5E2D9] px-3.5 py-2 text-xs font-medium text-stone-700 dark:border-zinc-800 dark:text-zinc-300"><input type="checkbox" checked={scheduledClassesOnly} onChange={(event) => setScheduledClassesOnly(event.target.checked)} className="accent-[#8C1B2E]" />Show scheduled classes only</label>}
+
             {/* List of Periods */}
             <div className="divide-y divide-[#E5E2D9] dark:divide-zinc-800/80">
-              {selectedDay && timeSlots.map(slot => {
+              {selectedDay && timeSlots.filter((slot) => !scheduledClassesOnly || dailySessions.some((session) => session.timeSlotId === slot.id)).map(slot => {
                 const session = dailySessions.find(s => s.timeSlotId === slot.id);
                 const protectedBlock = currentFaculty.preferences.protectedSlots.find(
                   ps => ps.day === selectedDay && ps.periodId === slot.id
@@ -383,6 +402,9 @@ export function FacultyPortalView() {
                               <button type="button" onClick={() => void handleRequestChange(session.id)} disabled={busy !== null} className="px-2.5 py-1.5 bg-white dark:bg-zinc-800 hover:bg-amber-50 dark:hover:bg-amber-950/40 text-stone-700 dark:text-zinc-300 border border-[#E5E2D9] dark:border-zinc-700 rounded-lg text-[11px] font-semibold disabled:opacity-50">Request reschedule / swap</button>
                               <button type="button" onClick={() => setSessionToCancel(session.id)} disabled={busy !== null} className="px-2.5 py-1.5 bg-white dark:bg-zinc-800 hover:bg-rose-50 hover:text-rose-800 dark:hover:bg-rose-950/60 dark:hover:text-rose-300 text-stone-700 dark:text-zinc-300 border border-[#E5E2D9] dark:border-zinc-700 rounded-lg text-[11px] font-semibold disabled:opacity-50">Cancel class</button>
                             </div>
+                          )}
+                          {session.status === 'Cancelled' && (
+                            <button type="button" onClick={() => void runBusy(`undo:${session.id}`, () => undoCancellation(session.id))} disabled={busy !== null} className="mt-2 rounded-lg border border-emerald-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-emerald-800 hover:bg-emerald-50 disabled:opacity-50 dark:border-emerald-900 dark:bg-zinc-900 dark:text-emerald-300">{busy === `undo:${session.id}` ? 'Restoring…' : 'Undo cancellation'}</button>
                           )}
                         </div>
                       ) : protectedBlock ? (

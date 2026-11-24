@@ -1,11 +1,13 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { spawn, type ChildProcess } from 'child_process';
 
 const ROOT = process.cwd();
 const TEST_PORT = process.env.TEST_PORT || '3100';
 const BASE_URL = process.env.BASE_URL || `http://127.0.0.1:${TEST_PORT}`;
+const TEST_STATE_PATH = path.join(os.tmpdir(), `intellischedule-test-${process.pid}.json`);
 let ownedServer: ChildProcess | null = null;
 
 const randomTestPassword = () => crypto.randomBytes(24).toString('base64url') + 'A1!';
@@ -33,7 +35,7 @@ function startServer(testPassword: string): ChildProcess {
   // Launch the server in this process tree so it can be stopped cleanly.
   const child = spawn(process.execPath, ['--import', 'tsx', 'server.ts'], {
     cwd: ROOT,
-    env: { ...process.env, NODE_ENV: 'test', PORT: TEST_PORT, BASE_URL, ALLOW_TEST_RESET_TOKEN: 'true', PUBLIC_DEMO_ENABLED: 'true', SEED_USER_PASSWORD: testPassword, DEMO_ACCOUNT_PASSWORD: testPassword },
+    env: { ...process.env, NODE_ENV: 'test', PORT: TEST_PORT, BASE_URL, PERSISTENT_STATE_PATH: TEST_STATE_PATH, ALLOW_TEST_RESET_TOKEN: 'true', PUBLIC_DEMO_ENABLED: 'true', SEED_USER_PASSWORD: testPassword, DEMO_ACCOUNT_PASSWORD: testPassword },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   child.stdout?.on('data', chunk => process.stdout.write('[test-server] ' + chunk));
@@ -80,7 +82,7 @@ async function main(): Promise<void> {
       await waitForServer();
     }
 
-    const testEnv = { NODE_ENV: 'test', PORT: TEST_PORT, BASE_URL, ALLOW_TEST_RESET_TOKEN: 'true', PUBLIC_DEMO_ENABLED: 'true', SEED_USER_PASSWORD: testPassword, DEMO_ACCOUNT_PASSWORD: testPassword };
+    const testEnv = { NODE_ENV: 'test', PORT: TEST_PORT, BASE_URL, PERSISTENT_STATE_PATH: TEST_STATE_PATH, ALLOW_TEST_RESET_TOKEN: 'true', PUBLIC_DEMO_ENABLED: 'true', SEED_USER_PASSWORD: testPassword, DEMO_ACCOUNT_PASSWORD: testPassword };
     const unitExit = await runCommand(['--test', '--test-concurrency=1', ...testFiles], testEnv);
     if (unitExit !== 0) {
       process.exitCode = unitExit;
@@ -91,6 +93,7 @@ async function main(): Promise<void> {
   } finally {
     await stopServer();
     ownedServer = null;
+    try { fs.rmSync(TEST_STATE_PATH, { force: true }); } catch {}
   }
 }
 

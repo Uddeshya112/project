@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useTimetable } from '../../context/TimetableContext';
 import type { TimeSlot } from '../../types';
+import { facultyTeachingCap, facultyTeachingPeriods } from '../../lib/facultyWorkload';
 import {
   BarChart3,
   BookOpen,
@@ -32,12 +33,8 @@ export function WorkloadSyllabusView() {
 
   const slotById = new Map(academicYear.timeSlots.map(t => [t.id, t]));
   // Weekly direct-teaching hours per faculty member, from the (non-cancelled) timetable sessions.
-  const loadByFaculty = new Map<string, number>();
-  for (const s of sessions) {
-    if (s.status === 'Cancelled') continue;
-    loadByFaculty.set(s.facultyId, (loadByFaculty.get(s.facultyId) ?? 0) + slotHours(slotById.get(s.timeSlotId)));
-  }
-  const overloadedCount = facultyMembers.filter(f => (loadByFaculty.get(f.id) ?? 0) > f.maxDirectTeachingHours).length;
+  const loadByFaculty = new Map(facultyMembers.map((faculty) => [faculty.id, facultyTeachingPeriods(sessions, faculty.id)]));
+  const overloadedCount = facultyMembers.filter(f => (loadByFaculty.get(f.id) ?? 0) > facultyTeachingCap(f)).length;
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -214,7 +211,7 @@ export function WorkloadSyllabusView() {
         <div className="divide-y divide-[#E5E2D9] dark:divide-zinc-800">
           {visibleFaculty.map(faculty => {
             const activeHours = loadByFaculty.get(faculty.id) ?? 0;
-            const cap = faculty.maxDirectTeachingHours;
+            const cap = facultyTeachingCap(faculty);
             const isOverloaded = activeHours > cap;
             const researchHours = (faculty.preferences?.protectedSlots ?? [])
               .filter(p => p.reason === 'Research')

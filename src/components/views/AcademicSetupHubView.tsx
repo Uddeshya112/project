@@ -30,6 +30,7 @@ import { AcademicYearConfig, Course, DayOfWeek, Faculty, Room } from '../../type
 import { MasterExcelHub } from './academic-setup/MasterExcelHub';
 import { GroupsAndSubgroupsTab } from './academic-setup/GroupsAndSubgroupsTab';
 import { CourseAllocationsTab } from './academic-setup/CourseAllocationsTab';
+import { facultyTeachingCap, facultyTeachingPeriods } from '../../lib/facultyWorkload';
 import { AcademicSetupOverview } from './academic-setup/AcademicSetupOverview';
 import { StudentsTab } from './academic-setup/StudentsTab';
 import { generateMasterExcelTemplate } from '../../lib/excelMasterService';
@@ -248,8 +249,8 @@ export function AcademicSetupHubView() {
     if (res.isSuccess && res.conflicts.length === 0) setActiveTab('review');
   };
 
-  const handleDownloadMasterTemplate = () => {
-    const blob = generateMasterExcelTemplate({
+  const handleDownloadMasterTemplate = async () => {
+    const blob = await generateMasterExcelTemplate({
       departments,
       programs,
       courses,
@@ -890,9 +891,8 @@ export function AcademicSetupHubView() {
           <div className="border border-[#E5E2D9] dark:border-zinc-800 rounded-xl overflow-hidden divide-y divide-[#E5E2D9] dark:divide-zinc-800 shadow-2xs">
             {facultyMembers.length === 0 && <div className="p-6 text-center text-xs text-stone-400 italic">No faculty yet.</div>}
             {visibleFaculty.map(fac => {
-                const assignedHours = allocations
-                  .filter(a => a.facultyId === fac.id)
-                  .reduce((acc, a) => acc + a.hoursPerWeek, 0);
+                const assignedHours = facultyTeachingPeriods(sessions, fac.id);
+                const teachingCap = facultyTeachingCap(fac);
 
                 return (
                   <div key={fac.id} className="p-3.5 bg-white dark:bg-zinc-950/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
@@ -903,11 +903,11 @@ export function AcademicSetupHubView() {
                           {fac.designation}
                         </span>
                         <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${
-                          assignedHours > fac.maxDirectTeachingHours
+                          assignedHours > teachingCap
                             ? 'bg-rose-50 text-rose-800 dark:bg-red-500/10 dark:text-red-300 border-rose-200 dark:border-red-500/20'
                             : 'bg-emerald-50 text-emerald-800 dark:bg-emerald-500/10 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/20'
                         }`}>
-                          Load: {assignedHours}/{fac.maxDirectTeachingHours} hrs/wk
+                          Load: {assignedHours}/{teachingCap} hrs/wk
                         </span>
                         {fac.status && fac.status !== 'Active' && (
                           <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-stone-100 text-stone-600 dark:bg-zinc-800 dark:text-zinc-400">{fac.status}</span>

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useTimetable } from '../../context/TimetableContext';
 import { useAuth } from '../../context/AuthContext';
 import { TIME_SLOTS } from '../../lib/initialData';
+import { getGridCellRowSpan, isGridCellCoveredByLab } from '../../lib/timetableGridLayout';
 import { DayOfWeek, ClassSession } from '../../types';
 
 const downloadFile = (filename: string, mimeType: string, content: string) => {
@@ -305,7 +306,7 @@ export function TimetableGridView() {
           )}
 
           {/* Publish Action Button */}
-          <button
+          {canManageSessions && <button
             onClick={handlePublish}
             disabled={!canPublish}
             className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all shadow-xs ${
@@ -316,7 +317,7 @@ export function TimetableGridView() {
             title={canPublish ? 'Publish master timetable' : `Resolve ${hardViolationsCount} conflicts before publishing.`}
           >
             Publish
-          </button>
+          </button>}
 
           {/* More Menu Dropdown */}
           <div className="relative">
@@ -328,13 +329,13 @@ export function TimetableGridView() {
             </button>
 
             {showMoreMenu && (
-              <div className="absolute right-0 mt-1 w-52 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg shadow-lg p-1 z-40 space-y-0.5 text-xs">
+              <div className="absolute right-0 mt-1 w-52 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg shadow-lg p-1 z-40 space-y-0.5 text-xs text-stone-800 dark:text-zinc-100">
                 <button
                   onClick={() => {
                     setActiveView('whatif');
                     setShowMoreMenu(false);
                   }}
-                  className="w-full text-left px-3 py-2 rounded-md hover:bg-stone-100 dark:hover:bg-zinc-800 font-medium"
+                  className="w-full text-left px-3 py-2 rounded-md text-stone-800 dark:text-zinc-100 hover:bg-stone-100 dark:hover:bg-zinc-800 font-medium"
                 >
                   What-If Simulator
                 </button>
@@ -343,14 +344,14 @@ export function TimetableGridView() {
                     setActiveView('syllabus');
                     setShowMoreMenu(false);
                   }}
-                  className="w-full text-left px-3 py-2 rounded-md hover:bg-stone-100 dark:hover:bg-zinc-800 font-medium"
+                  className="w-full text-left px-3 py-2 rounded-md text-stone-800 dark:text-zinc-100 hover:bg-stone-100 dark:hover:bg-zinc-800 font-medium"
                 >
                   Syllabus Progress
                 </button>
                 <div className="my-1 border-t border-[#E5E2D9] dark:border-zinc-800" />
-                <button onClick={() => { window.print(); setShowMoreMenu(false); }} className="w-full text-left px-3 py-2 rounded-md hover:bg-stone-100 dark:hover:bg-zinc-800 font-medium">Export PDF (print)</button>
-                <button onClick={() => { exportCsv(); setShowMoreMenu(false); }} className="w-full text-left px-3 py-2 rounded-md hover:bg-stone-100 dark:hover:bg-zinc-800 font-medium">Export CSV</button>
-                <button onClick={() => { exportIcs(); setShowMoreMenu(false); }} className="w-full text-left px-3 py-2 rounded-md hover:bg-stone-100 dark:hover:bg-zinc-800 font-medium">Export .ics</button>
+                <button onClick={() => { window.print(); setShowMoreMenu(false); }} className="w-full text-left px-3 py-2 rounded-md text-stone-800 dark:text-zinc-100 hover:bg-stone-100 dark:hover:bg-zinc-800 font-medium">Export PDF (print)</button>
+                <button onClick={() => { exportCsv(); setShowMoreMenu(false); }} className="w-full text-left px-3 py-2 rounded-md text-stone-800 dark:text-zinc-100 hover:bg-stone-100 dark:hover:bg-zinc-800 font-medium">Export CSV</button>
+                <button onClick={() => { exportIcs(); setShowMoreMenu(false); }} className="w-full text-left px-3 py-2 rounded-md text-stone-800 dark:text-zinc-100 hover:bg-stone-100 dark:hover:bg-zinc-800 font-medium">Export .ics</button>
               </div>
             )}
           </div>
@@ -434,13 +435,17 @@ export function TimetableGridView() {
                       {slot.startTime}–{slot.endTime}
                     </td>
                     {days.map(day => {
-                      const session = filteredSessions.find(
+                      if (isGridCellCoveredByLab(filteredSessions, day, slot.id, TIME_SLOTS)) return null;
+                      const slotSessions = filteredSessions.filter(
                         s => s.day === day && s.timeSlotId === slot.id
                       );
+                      const session = slotSessions[0];
+                      const rowSpan = getGridCellRowSpan(filteredSessions, day, slot.id, TIME_SLOTS);
 
                       if (!session) {
                         return (
-                          <td key={day} className="p-1.5 border-r border-[#E5E2D9] dark:border-zinc-800 last:border-r-0 align-top">
+                          <td key={day} rowSpan={rowSpan} className="p-1.5 border-r border-[#E5E2D9] dark:border-zinc-800 last:border-r-0 align-top">
+                            {!canManageSessions ? <div className="h-16" aria-label="No scheduled class" /> :
                             <button
                               onClick={() => {
                                 setScheduleSlotTarget({ day, timeSlotId: slot.id });
@@ -450,9 +455,19 @@ export function TimetableGridView() {
                             >
                               <span className="font-medium">+ Assign</span>
                               <span className="text-[9px] text-stone-400 group-hover:text-[#8C1B2E]">Free Slot</span>
-                            </button>
+                            </button>}
                           </td>
                         );
+                      }
+
+                      if (slotSessions.length > 1) {
+                        return <td key={day} rowSpan={rowSpan} className="p-1.5 border-r border-[#E5E2D9] dark:border-zinc-800 last:border-r-0 align-top"><div className="space-y-1.5">{slotSessions.map((parallelSession) => {
+                          const parallelCourse = courses.find(course => course.id === parallelSession.courseId);
+                          const parallelSection = sections.find(item => item.id === parallelSession.sectionId);
+                          const parallelFaculty = facultyMembers.find(item => item.id === parallelSession.facultyId);
+                          const cancelled = parallelSession.status === 'Cancelled';
+                          return <button key={parallelSession.id} type="button" onClick={() => handleCellClick(parallelSession)} className={`w-full rounded-lg border p-2 text-left ${cancelled ? 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300' : 'border-blue-200 bg-blue-50/60 text-stone-900 dark:border-blue-900 dark:bg-blue-950/30 dark:text-zinc-100'}`}><div className="flex items-center justify-between gap-1"><span className="font-mono text-xs font-bold">{parallelCourse?.code || parallelSession.courseId}</span><span className="text-[9px]">{cancelled ? 'Cancelled' : parallelSession.durationPeriods && parallelSession.durationPeriods > 1 ? `${parallelSession.type} (${parallelSession.durationPeriods}h)` : parallelSession.type}</span></div><div className="truncate text-[10px]">{filterMode === 'faculty' ? parallelSection?.name : parallelFaculty?.name?.split(' ').pop()} · {parallelSection?.name || parallelSession.sectionId}</div></button>;
+                        })}</div></td>;
                       }
 
                       const course = courses.find(c => c.id === session.courseId);
@@ -464,7 +479,7 @@ export function TimetableGridView() {
                       const isRescheduled = session.status === 'Rescheduled' || session.type === 'Makeup';
 
                       return (
-                        <td key={day} className="p-1.5 border-r border-[#E5E2D9] dark:border-zinc-800 last:border-r-0 align-top">
+                        <td key={day} rowSpan={rowSpan} className="p-1.5 border-r border-[#E5E2D9] dark:border-zinc-800 last:border-r-0 align-top">
                           <button
                             onClick={() => handleCellClick(session)}
                             className={`w-full text-left p-2.5 rounded-lg border transition-all relative ${
@@ -708,7 +723,7 @@ export function TimetableGridView() {
       )}
 
       {/* Free Slot Direct Scheduling Modal */}
-      {scheduleSlotTarget && (
+      {canManageSessions && scheduleSlotTarget && (
         <div className="fixed inset-0 bg-stone-900/60 backdrop-blur-xs z-[70] flex items-center justify-center p-4 animate-in fade-in duration-150" onClick={() => setScheduleSlotTarget(null)}>
           <div onClick={event => event.stopPropagation()} className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl max-w-md w-full p-6 space-y-4 shadow-xl text-stone-900 dark:text-zinc-100">
             <div className="flex items-center justify-between border-b border-[#E5E2D9] dark:border-zinc-800 pb-3">

@@ -124,7 +124,7 @@ export function WorkspaceSelectionView({
               <button
                 key={ws}
                 onClick={() => onSelectWorkspace(ws)}
-                className="group w-full p-4 sm:p-5 bg-[#FAF9F5] dark:bg-zinc-900 hover:bg-white dark:hover:bg-zinc-850 border border-[#E5E2D9] dark:border-zinc-800 hover:border-[#8C1B2E]/40 dark:hover:border-red-600/50 rounded-xl text-left transition-all duration-150 flex items-start justify-between gap-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8C1B2E] shadow-xs active:scale-[0.99]"
+                className="group w-full p-4 sm:p-5 bg-[#FAF9F5] dark:bg-zinc-900 hover:bg-white dark:hover:bg-zinc-800 border border-[#E5E2D9] dark:border-zinc-800 hover:border-[#8C1B2E]/40 dark:hover:border-red-600/50 rounded-xl text-left transition-all duration-150 flex items-start justify-between gap-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8C1B2E] shadow-xs active:scale-[0.99]"
               >
                 <div className="flex items-start gap-4">
                   <div className="w-10 h-10 rounded-xl bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 group-hover:border-[#8C1B2E]/60 dark:group-hover:border-red-600/60 group-hover:bg-[#8C1B2E]/5 dark:group-hover:bg-red-950/30 text-stone-700 dark:text-zinc-300 group-hover:text-[#8C1B2E] dark:group-hover:text-red-400 flex items-center justify-center shrink-0 transition-colors">
@@ -133,7 +133,7 @@ export function WorkspaceSelectionView({
 
                   <div className="space-y-1">
                     <div className="flex items-center gap-2">
-                      <span className="font-semibold text-stone-900 dark:text-zinc-100 text-sm group-hover:text-[#8C1B2E] dark:group-hover:text-white transition-colors">
+                      <span className="font-semibold text-stone-900 dark:text-zinc-100 text-sm group-hover:text-[#8C1B2E] dark:group-hover:text-zinc-100 transition-colors">
                         {details.title}
                       </span>
                       <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white dark:bg-zinc-950 text-stone-600 dark:text-zinc-400 border border-[#E5E2D9] dark:border-zinc-800">

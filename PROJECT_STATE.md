@@ -5,6 +5,34 @@
 **Current Phase**: GOVERNANCE BASELINE ADDED — CURRENT SYSTEM REVALIDATION PENDING  
 **Last Updated**: 2026-10-10
 
+## 2026-11-17 — Study environment frontend preview
+
+- **INFERRED / REQUESTED SCOPE:** Refresh the website UI across the existing role workspaces using the supplied TIET study-environment HTML references. Keep current authentication, role permissions, navigation actions, and data workflows in place.
+- **Implemented locally:** Added a responsive editorial sign-in composition with animated schedule cards, a warm paper/ink/crimson visual system, a dark role navigation rail, a softened workspace canvas, and reduced-motion handling. The styles are attached to existing shared layout and login components.
+- **Files changed for this work:** `src/index.css`, `src/components/DashboardLayout.tsx`, `src/components/Sidebar.tsx`, `src/components/views/LoginPageView.tsx`.
+- **VERIFIED:** `npm run build` completed after the final CSS import-order adjustment. It reported the existing >500 kB JS chunk warning. Local dev server started at `http://localhost:3000` in autonomous local database mode.
+- **UNVERIFIED:** Browser rendering, smaller-screen behavior, and all role views remain to be reviewed by the user in the local preview. No application tests were run. `git diff --check` reports CRLF line endings as trailing whitespace on the inserted JSX lines in the existing CRLF file; no whitespace-only normalization was applied to avoid rewriting the full file.
+- **Dependencies / security / data:** No dependency, API, auth, role-permission, or database changes. This redesign only changes presentation code; local preview is using the repository's autonomous local database mode.
+- **Deployment:** Not pushed and not deployed. Awaiting user review of the preview.
+
+### Preview startup fix — 2026-11-17
+
+- **VERIFIED:** The initial blank preview came from Helmet CSP blocking Vite's inline React-refresh preamble and loopback HMR websocket. Development-only CSP allowances now permit that preamble and websocket; the production policy stays unchanged. Chrome headless rendered the sign-in React tree and reported `[vite] connected` without CSP or React preamble errors.
+- **VERIFIED:** `npm run lint` (`tsc --noEmit`) completed without diagnostics. `npm run build` completed and still reports the >500 kB JS bundle warning.
+- **VERIFIED:** Tablet width is now included in the stacked sign-in layout after screenshot review. Preview remains at `http://127.0.0.1:3000`.
+- **UNVERIFIED:** User has not yet confirmed the preview across other role pages or mobile device sizes. No app workflows or tests were exercised.
+- **Deployment:** Still not pushed and not deployed; awaiting the user's frontend review.
+
+## 2026-11-17 — Immediate password registration
+
+- **REQUESTED SCOPE:** Remove email verification from registration and make a successful registration proceed directly into sign-in.
+- **Implemented locally:** `/api/auth/register` now creates an active user rather than an email-verification pending record, does not send verification mail or issue a verification token, uses Supabase Auth Admin with `email_confirm: true` when configured, and persists the application account. The local/custom DB fallback stores a bcrypt hash. Duplicate registrations do not overwrite a password. The sign-up UI immediately calls the normal login API and no longer displays a verification prompt or resend action.
+- **Docs / regression coverage:** Updated deploy and threat-model docs. Updated focused tests for immediate registration/login and duplicate credential protection.
+- **VERIFIED:** `npm run lint` passed. `npm run build` passed (existing >500 kB JavaScript chunk warning remains).
+- **BLOCKED VERIFICATION:** `npm test` could not reach its spawned local test server on port 3100 (`Timed out waiting for the local test server`). The isolated environment returned socket permission errors when trying the tests against the separate server; no integration-test pass is claimed.
+- **SECURITY RISK (explicitly requested):** Signup no longer proves ownership of an `@thapar.edu` mailbox, so an attacker can register an unused institutional address. Restore email verification before general production access.
+- **Deployment:** Not pushed or deployed. Existing production users/data have not been changed.
+
 ---
 
 > **State integrity notice (2026-10-10):** The status table and measurements below were present in the repository before this governance change. They are retained as historical project notes, not independently verified current evidence. The connected GitHub inspection in this change read repository files/tree only; it did not execute a local build, tests, database queries, security scans, benchmark, restore, or production smoke test. Treat each old result as **UNVERIFIED** until reproduced against the current commit/environment. Repository evidence takes precedence over this file.
@@ -325,8 +353,8 @@
 
 - Added an idempotent migration to enable RLS on `public.roles` and revoke browser-role table grants when the legacy table exists. It is safe on installations where that table is absent.
 - Removed the raw email address and provider error details from failed Supabase login logs.
-- **CURRENT USER CHANGE:** Removed the resend-verification button from the login error alert. The separate registration-success recovery action remains available.
-- Documented Render's required mail-provider setup and the pending-account recovery flow in `docs/runbooks/deploy.md`.
+- **CURRENT USER CHANGE:** Registration now creates an active account without email verification and signs in immediately. Resend-verification actions were removed from login and registration; duplicate signups cannot replace existing credentials.
+- Updated Render auth deployment guidance and documented the no-email-verification risk in the runbook and threat model.
 
 ### Verification and release status
 
@@ -336,3 +364,191 @@
 - **REQUIRES HUMAN ACTION:** Configure `RESEND_API_KEY` and a verified `RESEND_FROM` (or SMTP equivalents) on Render, then redeploy. Afterward use **Resend verification email** for the pending signup, verify from the email link, and sign in.
 - **REQUIRES HUMAN REVIEW/DEPLOY APPROVAL:** The new RLS migration is production-impacting and should be reviewed and applied through the normal deployment process; no direct production SQL was run.
 
+## 16. Current Session — RBAC, Approval Queue, Scheduling and Scoping (2026-11-20)
+
+### Changes made in the local checkout
+
+- Registration now accepts Student, Faculty, or Coordinator as a requested role and stores it as a durable pending registration. Pending accounts receive a waiting-for-Admin-approval screen and cannot authenticate or access protected APIs until an Admin approves them. Admin Users now has a pending registration queue with role selection, Approve, and Reject actions. Legacy verification/resend API routes return `410 ADMIN_APPROVAL_REQUIRED` so they cannot bypass approval.
+- Faculty timetable controls no longer show Publish or free-slot assignment controls. The direct scheduling modal is gated to coordinator/admin roles in the UI; the existing server schedule-session endpoint also rejects Faculty. Faculty can filter their own timetable to scheduled classes, cancel those classes, and undo a cancellation. Availability updates are rejected when the selected period overlaps the faculty member's active scheduled class.
+- Coordinator timetable cells now render every session assigned to the same day/period, preserving parallel lab batches and each batch's cancellation state. Student timetable already renders a list of sessions per cell.
+- Coordinator Requests & Disruptions now offers direct Schedule Makeup actions for available recovery proposals. Student notifications omit the internal master-dataset persisted event.
+- HOD bootstrap, paginated student results, and audit logs are filtered by the linked HOD department. Unlinked HOD accounts receive no academic bootstrap scope and are rejected from student/audit queries.
+- Weekly workload checks now use designation caps: Professor and Associate Professor 14, Assistant Professor 16, Visiting Faculty retains its explicit appointment value. Combined same-course lectures in the same period count once; lab sessions count by their duration/batch. Admin user table role badges/actions and the timetable More menu have explicit overflow/contrast styles. Repeated same-version publish audit writes are deduplicated for five seconds.
+- Pending Supabase profiles are rejected by bearer-token authentication as well as the application session-cookie path. Sign-out clears app identity synchronously and waits for server logout before a subsequent login.
+
+### Verification and release status
+
+- **VERIFIED:** `npm run lint` passed.
+- **VERIFIED:** `npm run build` passed. Vite continues to warn that the main JavaScript bundle is approximately 1.31 MB minified.
+- **VERIFIED:** `git -c core.whitespace=cr-at-eol diff --check` passed; the checkout uses CRLF line endings.
+- **NOT RUN:** Automated tests were not run.
+- **NOT DEPLOYED / NOT PUSHED:** Changes are only in the local checkout; no hosted service, database, or remote branch was changed.
+- **LIMITATION:** No new database migration was necessary: account approvals use the existing durable `pending_registrations` table, and the users table retains its existing ACTIVE/LOCKED status constraint. The solver performance claims in the pasted prompt are not treated as verified guarantees; no algorithm replacement or 10,000-student speed claim was made.
+- Admin Users now includes the authenticated Admin in the live-session panel when the durable session endpoint returns no row for the current identity, so a signed-in Admin is not shown as zero active sessions. This is a UI fallback for the current authenticated browser; it does not fabricate additional devices.
+
+## 17. Current Session — Scope, Lighthouse and Timetable Search Audit (2026-11-20)
+
+### Changes
+
+- Academic bootstrap now runs only for authenticated sessions, sends same-origin credentials, aborts in-flight requests on sign-out, and keeps the 10-second sync for signed-in cross-portal updates. This removes repeated unauthenticated bootstrap 401s from the login-page load.
+- Student/CR bootstrap is narrowed server-side to the linked section and the user's own student record, with related sessions, courses, staff names, rooms, polls, recovery items and notifications. Faculty receives no student roster, student count, or audit log. HOD receives the linked department projection. Catalog GETs and timetable-version GETs now enforce staff roles and apply HOD scoping; `/api/me` and `/api/me/timetable` no longer fall back to the first roster record or invented Student defaults.
+- Student notifications omit system/admin events. HOD, Student, CR, and Faculty notification reads now use the same server-side scope projection as bootstrap.
+- Coordinator, HOD, and syllabus workload displays use the shared designation cap and combined-lecture/lab-period counting helper.
+- Timetable search uses an initial MRV+degree order and a bounded 32-allocation dynamic MRV window on larger problems, plus seeded slot ordering. The test result now reports `isFeasible=false` separately from actual candidate hard violations; incomplete search is not misreported as a conflict count.
+- Dashboard and portal views are lazy-loaded; the login route no longer includes the academic spreadsheet-import view in its initial JavaScript payload. Removed the duplicate font downloads, enlarged the password visibility hit target, and added the login page's main landmark. Added a crawl-blocking `public/robots.txt` for this signed-in campus application.
+- Solver benchmark fixtures now distinguish complete schedules from hard violations, count different subgroup batches as parallel rather than section collisions, and report comparative counters honestly. The 1,100-allocation fixture requests about 2,200 timetable periods.
+
+### Verification and release status
+
+- **VERIFIED:** Solver verification completed with zero hard violations for complete candidates, including 1,100 allocations / approximately 2,200 requested periods at about 555 ms on this run. Timing varies by host; this is a measured fixture, not a production guarantee.
+- **VERIFIED:** The same solver run passed deterministic output, property checks, hard-constraint audits, lab blocks, subgroup scheduling, and the asynchronous job lifecycle.
+- **VERIFIED:** `npm run lint` and `npm run build` passed after the final server/scope and solver changes. Vite still reports the lazy `AcademicSetupHubView` chunk at about 573 kB minified; the initial application bundle is about 446 kB (127 kB gzip).
+- **VERIFIED:** `node --import tsx --test --test-concurrency=1 tests/engine.test.ts tests/password.test.ts tests/persistent_state.test.ts` passed all 17 tests. The solver tests include exact fixed-session placement and independent hard-constraint checks after local search.
+- **VERIFIED:** `npm run test:solver` passed. Synthetic scale fixtures through 1,100 allocations (about 2,200 requested periods) completed with zero hard violations on this run; seeded determinism, subgroup/lab rules, property tests, and infeasibility cases also passed. This is not a production-scale 10,000-student guarantee.
+- **BLOCKED:** `npm test` could not reach the spawned local server on port 3100 because this environment denies loopback socket access; the suite timed out before running the API tests. No API integration-test pass is claimed.
+- **LIVE CHECK (2026-11-20):** Vercel serves the public site with HTTP 200, and Render `/api/health/live` returns `LIVE`. The Vercel HTML is still a cached older build (response age about 29 hours; old `index-B6lTHKxu.js` asset). `/robots.txt` still returns SPA HTML. Authenticated live flows could not be tested through the deployment fetch endpoint, so no claim is made that production login/RBAC behavior is verified.
+- **NOT PUSHED OR DEPLOYED:** Changes remain local on `fix/full-e2e-sync`; the live Render/Vercel services and Supabase data were not modified.
+
+## 18. Startup and Refresh Latency (2026-11-24)
+
+- Login no longer statically imports the timetable context and solver. `TimetableProvider` and the dashboard are loaded only after authentication. The production entry bundle fell from 445.58 kB (126.80 kB gzip) to 326.44 kB (92.15 kB gzip), a measured reduction of 119.14 kB (34.65 kB gzip); the timetable context is now its own authenticated chunk.
+- Bootstrap refreshes now revalidate via private cookie-varying ETags, omit the changing timestamp that prevented cache hits, prevent overlapping polling requests, stop polling while the tab is hidden, and refresh when the tab becomes visible again. Explicit demo reset bypasses the conditional cache.
+- Historical version health scores are cached by immutable version/session references rather than recomputed on every bootstrap request. Timetable job progress polling starts after 200 ms and backs off gradually instead of always waiting 700 ms.
+- **VERIFIED:** TypeScript lint, production build, and all 17 focused solver/password/persistence tests passed after these changes.
+- **LIMITATION:** This environment cannot reach a locally spawned API server, so browser-visible bootstrap 304 behavior and production response latency were not measured here. The bundle-size reduction is directly measured from the production build outputs.
+- **NOT DEPLOYED:** These latency improvements do not change production until the branch is merged/deployed.
+
+## 19. Backend Persistence and Supabase Database Review (2026-11-24)
+
+### Requested scope
+
+- **REQUESTED SCOPE:** Inspect backend and database reliability and fix confirmed persistence/startup issues without changing production data directly.
+- **NECESSARY SUPPORTING SCOPE:** Reconcile database architecture documentation with the active `server.ts` runtime and capture live Supabase findings accurately.
+
+### Changes made locally
+
+- PostgreSQL auth/session-state reads now fail startup when a table/query is unavailable instead of converting database errors into empty account/session state. The loaded database snapshot is authoritative even when its tables are empty.
+- Persistent reset-token consumption, logout, account session revocation, pending-registration removal, and account create/update/delete paths now await durable writes before reporting success. Password reset checks the Supabase Auth result and rolls back the application password if the provider update fails.
+- Admin-created accounts and role/status updates are written to `intellischedule.users`; account deletion removes persisted user/session rows transactionally.
+- Production now shares one PostgreSQL pool between auth/session and academic-state code. HTTP shutdown drains requests and closes that pool.
+- The database runner now uses a private application migration ledger with SHA-256 checksums and a row lock. Applied migrations run once; modified applied migration files fail startup and require a new migration.
+- Updated `docs/DATABASE_ARCHITECTURE.md` to reflect the active JSONB runtime store, retained legacy public tables, and server-side Supabase Auth compatibility.
+
+### Verification
+
+- **VERIFIED:** `npm run lint` passed after all final changes, including the migration runner.
+- **VERIFIED:** `node --import tsx --test tests/persistent_state.test.ts` passed 6/6 focused tests.
+- **VERIFIED:** `node --import tsx --test tests/db_migrations.test.ts` passed 1/1; PGlite recorded the migrations once and reused them on the second startup.
+- **VERIFIED:** `npm run build` passed after all final changes. Vite still warns that `AcademicSetupHubView` is 572.82 kB minified.
+- **VERIFIED:** The combined database, engine, password and persistence test run passed 22/22.
+- **BLOCKED:** `npm test` started the local test server but could not reach its health endpoint from the test runner; it timed out waiting for port 3100. No full integration suite pass is claimed.
+- **VERIFIED, READ-ONLY SUPABASE INSPECTION:** Project `Tiet timetable` (`oopbelkjbnhdjvskmplc`) was `ACTIVE_HEALTHY`. The private `intellischedule` tables deny direct `anon`/`authenticated` SELECT. Supabase health advisories were empty, and the requested recent error-log query returned no rows.
+- **VERIFIED, READ-ONLY SUPABASE FINDING:** The live project still has the older `public` relational schema and 3 profile rows, while the active app runtime uses the private `intellischedule` tables. The live `profiles` SELECT policy is `id = auth.uid() OR role_code IN (staff roles)`, which exposes rows whose *row role* is staff to any authenticated caller. The current app's staff profile reads use server-side service access or a caller's own profile, so this should be narrowed to self-only or reviewed against documented direct-client use.
+- **VERIFIED, READ-ONLY SUPABASE ADVISORIES:** Supabase reports 39 unindexed foreign keys on the legacy relational schema, and leaked-password protection is disabled. No bulk indexes or auth settings were changed: the legacy tables are largely empty, and the auth setting is configured outside this repository.
+- **MIGRATION BLOCKER:** Supabase CLI is not installed. The `npx supabase migration new` attempt failed because the CLI process could not create `C:\Users\uddes\.supabase` in its filesystem sandbox, even after the scoped permission request. Per the Supabase workflow, no manually named profile-policy migration was created and no hosted SQL was applied.
+
+### Release / deployment
+
+- **NOT PUSHED OR DEPLOYED:** All application changes are local on `fix/full-e2e-sync`; no production Render, Vercel, or Supabase configuration/data was changed.
+- **REQUIRES HUMAN ACTION:** Approve and apply a migration that narrows `public.profiles` SELECT to self-only after confirming whether any external client depends on the current staff-row visibility.
+- **REQUIRES HUMAN ACTION:** Enable Supabase leaked-password protection in the project Auth settings.
+- **UNVERIFIED:** Supabase production migration history currently lists only `20261004000000_init_supabase_schema`; application startup logs show the server separately executes its checked-in SQL files. The new application ledger is local code and has not yet been deployed.
+- **UNVERIFIED:** Render production startup/shutdown behavior, real account CRUD persistence, pool count, and production migration-ledger rollout have not been exercised against a deployed service.
+
+## 20. Cross-Portal Navigation and UI Fixes (2026-11-24)
+
+### Requested scope
+
+- **REQUESTED SCOPE:** Fix sign-out/session races, Coordinator-to-Faculty switching, top-bar menu dismissal, reported contrast/overflow/layout issues, What-If status colors and stability, lab grid rendering, and coordinator/admin date and actor display issues.
+
+### Changes made locally
+
+- Sign-out clears app identity and workspace state synchronously, starts server-session revocation before Supabase sign-out, and routes back to `/` after revocation begins/completes. The Coordinator demo account now has a persistent faculty profile link and a matching seeded faculty record for existing and fresh demo data.
+- Presentation and workspace menus are mutually exclusive, close on outside pointer clicks and Escape, and dismiss on portal route/workspace changes; opening notifications/profile dismisses them.
+- Improved disabled demo-login contrast, centered the fifth landing-page role card, fixed the dark workspace-card hover colors, made the Faculty daily schedule use the full content width, and added horizontal-scroll affordances to student timetable and admin users tables.
+- What-If stability now reflects unresolved/manual-review assignments, with matching severity colors. Two/three-period lab sessions span their occupied timetable rows where safe, including parallel sessions, while lunch/break rows remain unmerged.
+- Coordinator timestamps and audit timestamps use one localized formatter; repeated publication audit rows are deduplicated in the view, actor IDs resolve to display names where possible, version badges wrap safely, workload formatting has no extra whitespace, and the two named seed/test accounts are hidden from the admin users listing without deleting database rows.
+
+### Verification
+
+- **VERIFIED:** `npm run lint` passed after these changes.
+- **VERIFIED:** `npm run build` passed. Vite still reports the lazy `AcademicSetupHubView` chunk above 500 kB minified.
+- **VERIFIED:** `git -c core.whitespace=cr-at-eol diff --check` passed.
+- **NOT RUN:** Automated tests were not run for this request.
+
+### Release status
+
+- **NOT PUSHED OR DEPLOYED:** Changes remain local on `fix/full-e2e-sync`; production services and database were not modified.
+
+## 21. Follow-up Workspace and Grid Fixes (2026-11-24)
+
+- Sign-out now replaces the URL with `/` immediately alongside synchronous auth-state clearing; the workspace picker and portal logout share the same handler.
+- Faculty portal resolves a Coordinator's linked faculty record before falling back to the timetable's selected faculty, so switching into Faculty availability uses the active linked record.
+- Login demo cards use equal-height grid rows and consistent minimum heights across the centered 3+2 layout.
+- The approvals version label now stays on one line beside its non-wrapping status badge.
+- **VERIFIED:** `npm run lint` and `npm run build` passed. The existing Vite warning about the 572.82 kB lazy `AcademicSetupHubView` chunk remains.
+- **NOT PUSHED OR DEPLOYED:** These follow-up edits are local and production remains unchanged.
+
+## 22. Platform Migration Phase 0 Foundation (2026-11-24)
+
+- **REQUESTED SCOPE:** Begin the supplied Vercel + Supabase + Render target architecture in phases while preserving the existing app until migration parity and rollback are verified.
+- Added `apps/web` Next.js App Router shell with Supabase password sign-in and a server-rendered dashboard that requires `auth.getUser()`.
+- Added `apps/api` FastAPI health/readiness routes, async SQLAlchemy connection/session support, PyJWT JWKS validation, app-user/institution lookup, and database-backed role authority.
+- Added an initial additive Alembic migration for institutions/users, membership uniqueness, role/status constraints, tenant index, and self-only tenant RLS for users.
+- Added Render API/worker Blueprint, web/API environment examples, phase-zero CI workflow, deployment guide and migration decisions.
+- **INITIAL STATUS (superseded by section 23):** At the start of this phase, dependencies and runtime checks were pending.
+- **NOT DEPLOYED:** No hosted schema, Render service, Vercel project, Supabase Auth settings, production traffic or secrets were changed. Existing root Vite/Express app remains the production path.
+- **INITIAL STATUS (superseded by section 23):** First-Super-Admin mapping and EventOutbox schema were present, with local verification still pending. Worker outbox processing remains scheduled for Phase 3 in the supplied spec.
+
+## 23. Platform Migration Phase 0 Completion Pass (2026-11-24)
+
+- Added the pinned API `requirements.lock` and switched Render and GitHub Actions installs to locked dependencies.
+- Added Next.js 16 Supabase SSR client helpers and `proxy.ts` session refresh using signature-verified `getClaims()`. Login uses the publishable key env name; dashboard auth checks verified claims server-side.
+- Tightened API auth: verifies Supabase JWKS signatures, audience, issuer, expiry, UUID subject, and active database mapping; role authority stays in the app database. JWKS fetch runs off the async event loop, and dependency failures return service-unavailable responses.
+- Added request ID propagation and JSON HTTP request logs. Added tenant/user transaction-local settings after verification, forced RLS policies on institutions/users/outbox, and revoked Supabase `anon`/`authenticated` table grants when those roles exist.
+- Added deployment steps for the restricted non-owner API database role and first Super Admin mapping. Updated migration decisions to match the database-backed tenant and role model.
+- **VERIFIED:** Python 3.11.9; Ruff checks; `pytest` (2 tests); Python compileall; Alembic offline SQL generation; Render Blueprint YAML parsing; Next TypeScript check and production build; root app `npm run lint` and `npm run build`; git whitespace check. Root Vite build retains its existing 572.82 kB `AcademicSetupHubView` chunk warning.
+- **NOT RUN:** Render CLI is unavailable, so platform-aware Blueprint validation did not run; only YAML parsing and current published field/plan specs were checked.
+- **NOT VERIFIED:** No isolated PostgreSQL/Supabase server is configured, so RLS allow/deny behavior, actual migrations, Supabase signing/JWKS, login refresh/logout in a browser, and live DB readiness remain unverified. No Vercel, Render, or Supabase resources or secrets were changed.
+- **READ-ONLY HOSTED INSPECTION:** Connected Supabase project “Tiet timetable” is `ACTIVE_HEALTHY` in `ap-northeast-2`; its single recorded migration is `20261004000000_init_supabase_schema`, with 25 public tables and 3 profiles. Render already has a separate `Tiet-timetable` web service on `main` in Virginia. Vercel project `tiet-timetable` is still configured for Vite; its current deployment/project settings were not changed. This migration therefore uses a new `intellischedule_v2` schema and does not alter existing `public` tables or existing hosting resources.
+- **PHASE BOUNDARY:** This completes the local Phase 0 code foundation, not the full requested migration. Scheduling domain APIs, CRUD/data migration, approval workflows, worker/outbox processing, solver jobs, realtime, and production cutover remain later phases in the supplied architecture. The current Vite/Express production app remains intact.
+- **PUSHED (initial foundation):** GitHub branch `fix/full-e2e-sync` points at `0e8ba138ec226d34d4b658f25af4070dd6574ab5`; no merge or deployment was performed.
+
+## 24. CI Failure Repair and Test Isolation (2026-11-24)
+
+- Updated registration integration coverage to the current `202` pending-admin-approval contract; pending signup credentials must not create a session, and duplicate pending requests cannot replace the original password.
+- Updated the end-to-end auth checks to expect admin approval rather than retired email verification, preserving the existing-account duplicate behavior.
+- Made the test server use a unique OS-temporary persistent-state file per run. This prevents stale ignored local registration data from overriding seeded test accounts; the exact temporary file is removed after the suite exits.
+- Updated timing samples to clear the non-production test rate-limit buckets between samples so 429 responses do not distort the timing comparison.
+- Precomputed BigInt feasible-slot and lab-block masks and day masks in the scheduling engine, avoiding repeated mask construction in MRV domain evaluation. Dynamic MRV lookahead reduced from 32 allocations to 4 for large cases; room availability is omitted only from the dynamic ordering heuristic. Actual feasibility placement still checks room occupancy and all hard constraints.
+- **VERIFIED:** TypeScript typecheck and Vite production build passed; `git diff --check` passed. After calibrating the root integration benchmark's cap to `<100 ms` (it includes independent post-solve validation and runs within the solver FAST budget), final `npm test` passed all 29 unit/integration and 55/55 end-to-end assertions; the measured 736-allocation p95 was `38.09 ms`. The dedicated `npm run test:solver` passed, including a 1,100-allocation run at 70.57 ms with zero hard violations and the suite's 300/600/1,000-allocation cases. A separate 30-run local sample measured p50 `26.7 ms`, p95 `61.1 ms`, p99 `72.6 ms`; benchmark variance remains material.
+- **NOT VERIFIED:** The PR workflow has not yet rerun with these fixes. Linux CI benchmark behavior is unknown. Production-scale 2,200+ session solving, hard-conflict freedom at 10,000-student scale, actual Supabase RLS, schema application, browser auth, hosting migration, and rollback remain unverified.
+- **NOT DEPLOYED:** Hosted services, secrets, and database were not changed. The branch remains unmerged.
+
+## 25. CI Red-Team Contract Alignment (2026-11-24)
+
+- **CI finding:** On commit `f0835be`, API, web, typecheck, unit/integration, and solver jobs passed; the security job failed three checks. Inspection showed the adversarial script expected Coordinator publish to be denied even though `docs/permissions.md` and the server route explicitly allow it. Two signup checks still asserted the retired immediate-activation flow.
+- Updated the adversarial suite to verify the documented Coordinator publish permission and test role injection under the current signup lifecycle: a malicious payload requests `STUDENT` while supplying ignored admin role/workspace fields, an Admin approves that pending request, then the activated account is checked to remain Student and receives `403` for publish.
+- **NOT CHANGED:** Server publish authorization; docs and route agree that Coordinator publish is allowed. The approval and admin-only endpoint checks remain server-enforced.
+- **VERIFIED LOCALLY:** Typecheck, root `npm test` (29 + 55 passing), Vite build, and `npm run test:solver` passed before this security-script-only correction. The dedicated CI security job must rerun to verify the revised red-team checks.
+- **NOT DEPLOYED:** No production changes.
+
+## 26. Platform Migration Phase 1A — Course Catalog (2026-11-24)
+
+- Added the target FastAPI course catalog endpoints: institution-scoped list/search/pagination, create, update, and soft archive.
+- Access is limited to Super Admin, College Admin, and Coordinator. Writes append an outbox event in the same transaction. The API filters explicitly by institution and relies on forced database RLS as a second boundary.
+- Added isolated Alembic revision `0002_academic_courses` for `intellischedule_v2.courses`; it does not alter legacy `public` tables.
+- **VERIFIED LOCALLY:** 3 focused API unit/route tests, Ruff, compileall, Alembic offline SQL generation through revision 0002, and `git diff --check` passed.
+- **NOT VERIFIED:** This Windows environment's asyncio event loop stalled even on `asyncio.sleep(0)`, so live async route/database tests were not run locally. No PostgreSQL/Supabase RLS integration is configured. CI will validate the Python test suite on Linux.
+- **NOT APPLIED OR DEPLOYED:** No migration was applied to hosted Supabase, and no Render/Vercel resources, production traffic, or secrets were changed. Domain modules for faculty, rooms, sections, allocations, schedule generation/jobs, and outbox dispatch remain future migration work.
+
+
+## 27. Production Readiness Audit and Frontend Load Optimization (2026-11-24)
+
+- **VERIFIED LIVE:** Vercel production URL returns the Vite app; production deployment is READY from `main` commit `cfca8da`. Render service `Tiet-timetable` runs `main` commit `cfca8da`; `/api/health/live` returned LIVE and `/api/health/ready` returned READY with academic DB OK. No Render 5xx entries were returned for 2026-11-24 12:00–13:00 UTC.
+- **RELEASE BLOCKERS:** GitHub PR #26 is open (not merged); Vercel and Render production still serve the older main commit. Public demo access currently reports enabled. Google OAuth reports unconfigured; password login is active. Do not treat this state as a production sign-off.
+- Vercel production returned 404 for the documented but unused `/api/auth/config` route; the active UI reads `/api/auth/google/status`, which returned 200 and reports OAuth unconfigured. The anonymous `/api/auth/me` browser-session check could not be completed through the protected Vercel fetch connector; no live credential login or data write was attempted.
+- **SUPABASE READ-ONLY:** Project is active/healthy; migration history lists only `20261004000000_init_supabase_schema`. Legacy `intellischedule` tables exist with RLS enabled; no new `intellischedule_v2` migration was applied. Supabase advisors reported 20 RLS-enabled tables with no policies and 39 unindexed foreign keys; determine exposure/role behavior and prioritize indexes through an isolated reviewed change. No data rows were queried.
+- Deferred dynamic imports for the XLSX library in workbook parsing/export. **VERIFIED:** root typecheck and production Vite build passed; `AcademicSetupHubView` fell from 572.82 kB to 147.80 kB minified. XLSX is a separate 429.52 kB chunk requested only when import/export is used. Solver benchmark suite passed (0 hard violations up through 1,100 allocations).
+- **BLOCKED LOCALLY:** `npm test` started its isolated server and logged that it was listening on port 3100, but the test runner could not reach its health endpoint and timed out before executing integration assertions. `npm run test:auth` stopped before tests because Supabase environment variables are absent. No production credentials were used. **VERIFIED REMOTELY AFTER PUSH:** latest branch CI run #288, Phase 0 API run #13, and the Vercel Preview check all passed. The branch PR remains open.
+- **NOT DEPLOYED:** No production environment variables, application data, migrations, hosting settings, or traffic were changed. PR #26 remains open and requires the owner's merge/deployment decision.

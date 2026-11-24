@@ -10,4 +10,3 @@ begin
   end if;
 end;
 $migration$;
-

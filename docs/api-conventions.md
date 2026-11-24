@@ -71,3 +71,7 @@ In process memory, per instance, reset on restart.
 | Change password, per user | 5 per 15 minutes |
 | Post notification, per user | 10 per minute |
 | Solver benchmark, per user | once per 10 seconds |
+
+## Phase 1A target API: Academic course catalog
+
+The isolated FastAPI service exposes institution-scoped course management under `/v1/academic/courses` (list/search/paginate, create, update, and soft archive). Access is limited to `SUPER_ADMIN`, `COLLEGE_ADMIN`, and `COORDINATOR`; faculty, HOD, and student accounts cannot manage the master catalog. Every query includes the active institution, and PostgreSQL forced RLS is an additional boundary. Create/update/archive writes and their `event_outbox` events commit atomically. Listing accepts `search`, `limit` (1–100), and `offset`. Duplicate institution course codes return 409; missing/cross-institution records return 404.

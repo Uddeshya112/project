@@ -3,6 +3,7 @@ import { AlertTriangle, BarChart3, CheckCircle2, ClipboardCheck, Users } from 'l
 import { useAuth } from '../../context/AuthContext';
 import { useTimetable } from '../../context/TimetableContext';
 import { PollComposer } from './PollComposer';
+import { facultyTeachingCap, facultyTeachingPeriods } from '../../lib/facultyWorkload';
 
 const card = 'rounded-xl border border-[#E5E2D9] dark:border-zinc-800 bg-[#FAF9F5] dark:bg-zinc-900';
 
@@ -21,19 +22,9 @@ export function HodPortalView() {
   const departmentSessions = (publishedSessions || []).filter((s) => facultyIds.has(s.facultyId));
   const alreadySignedOff = auditLogs.some((event) => event.action === 'HOD_DEPARTMENT_SIGNED_OFF' && event.entityId.startsWith(`${departmentId}:`));
   const cancelled = departmentSessions.filter((s) => s.status === 'Cancelled');
-  const hoursByFaculty = useMemo(() => {
-    const slotHours = new Map(academicYear.timeSlots.map((slot) => {
-      const [sh, sm] = slot.startTime.split(':').map(Number);
-      const [eh, em] = slot.endTime.split(':').map(Number);
-      return [slot.id, Math.max(0, ((eh * 60 + em) - (sh * 60 + sm)) / 60)];
-    }));
-    const hours = new Map<string, number>();
-    for (const session of departmentSessions) {
-      if (session.status === 'Cancelled') continue;
-      hours.set(session.facultyId, (hours.get(session.facultyId) || 0) + (slotHours.get(session.timeSlotId) || 1));
-    }
-    return hours;
-  }, [academicYear.timeSlots, departmentSessions]);
+  const hoursByFaculty = useMemo(() => new Map(
+    departmentFaculty.map((faculty) => [faculty.id, facultyTeachingPeriods(departmentSessions, faculty.id)]),
+  ), [departmentFaculty, departmentSessions]);
 
   const signOff = async () => {
     setSaving(true);
@@ -88,12 +79,13 @@ export function HodPortalView() {
               {departmentFaculty.map((faculty) => {
                 const hours = Math.round((hoursByFaculty.get(faculty.id) || 0) * 10) / 10;
                 const coursesTaught = new Set(departmentSessions.filter((s) => s.facultyId === faculty.id).map((s) => s.courseId));
-                const over = hours > faculty.maxDirectTeachingHours;
+                const cap = facultyTeachingCap(faculty);
+                const over = hours > cap;
                 return <tr key={faculty.id}>
                   <td className="p-3 font-medium text-stone-900 dark:text-zinc-100">{faculty.name}</td>
                   <td className="p-3 text-stone-600 dark:text-zinc-400">{[...coursesTaught].map((id) => courses.find((c) => c.id === id)?.code || id).join(', ') || 'No classes assigned'}</td>
-                  <td className={`p-3 font-mono ${over ? 'text-rose-700 dark:text-rose-400' : 'text-stone-700 dark:text-zinc-300'}`}>{hours} h</td>
-                  <td className="p-3 text-stone-600 dark:text-zinc-400">{faculty.maxDirectTeachingHours} h</td>
+                  <td className={`p-3 font-mono whitespace-nowrap ${over ? 'text-rose-700 dark:text-rose-400' : 'text-stone-700 dark:text-zinc-300'}`}>{Number(hours.toFixed(1))}&nbsp;h</td>
+                  <td className="p-3 text-stone-600 dark:text-zinc-400">{cap} h</td>
                 </tr>;
               })}
             </tbody>

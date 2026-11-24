@@ -49,14 +49,17 @@ interface AuthContextType {
   login: (email: string, password?: string) => Promise<{
     success: boolean;
     message: string;
+    pendingApproval?: boolean;
     roleKey?: 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin';
     authorizedWorkspaces?: WorkspaceType[];
     user?: AuthUser;
   }>;
-  register: (name: string, email: string, password: string) => Promise<{
+  register: (name: string, email: string, password: string, roleCode?: 'STUDENT' | 'FACULTY' | 'COORDINATOR') => Promise<{
     success: boolean;
     message: string;
     email?: string;
+    status?: string;
+    roleCode?: string;
   }>;
   loginAsDemoRole: (roleKey: 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin') => Promise<{
     success: boolean;
@@ -294,6 +297,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   ): Promise<{
     success: boolean;
     message: string;
+    pendingApproval?: boolean;
     roleKey?: 'Coordinator' | 'Faculty' | 'Student' | 'HOD' | 'Admin';
     authorizedWorkspaces?: WorkspaceType[];
     user?: AuthUser;
@@ -330,6 +334,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return {
           success: false,
           message: data.message || 'Invalid institutional credentials. Please check your email and password.',
+          pendingApproval: data.error === 'ACCOUNT_PENDING_APPROVAL',
         };
       }
     } catch {
@@ -343,25 +348,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  /**
-   * REST backend creates an active account (and a confirmed Supabase Auth user
-   * when the server Admin client is configured). The caller signs in immediately
-   * after registration through the normal application login endpoint.
-   */
+  /** Submit a role request that remains blocked until an Admin approves it. */
   const register = async (
     name: string,
     email: string,
-    password: string
+    password: string,
+    roleCode: 'STUDENT' | 'FACULTY' | 'COORDINATOR' = 'STUDENT'
   ): Promise<{
     success: boolean;
     message: string;
     email?: string;
+    status?: string;
+    roleCode?: string;
   }> => {
     try {
       const resp = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ name: name.trim(), email: email.trim().toLowerCase(), password }),
+        body: JSON.stringify({ name: name.trim(), email: email.trim().toLowerCase(), password, roleCode }),
       });
 
       const data = await resp.json().catch(() => ({}));
@@ -372,8 +376,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         return {
           success: true,
-          message: data.message || 'Account created successfully. Please sign in with your email and password.',
+          message: data.message || 'Registration request submitted. Waiting for Admin Approval.',
           email: data.email || email.trim().toLowerCase(),
+          status: data.status,
+          roleCode: data.roleCode,
         };
       } else {
         setIsAuthenticated(false);
@@ -555,13 +561,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAuthorizedWorkspaces(['Student']);
     setCurrentWorkspace('Student');
     const request = (async () => {
+      try {
+        await fetch(apiUrl('/api/auth/logout'), { method: 'POST', credentials: 'same-origin' });
+      } catch { /* the server cookie expires on the next request if offline */ }
       if (supabaseClient) {
         try { await supabaseClient.auth.signOut(); }
         catch (err) { console.warn('[AUTH TRACE] Supabase signOut notice:', err); }
       }
-      try {
-        await fetch(apiUrl('/api/auth/logout'), { method: 'POST', credentials: 'same-origin' });
-      } catch { /* the server cookie expires on the next request if offline */ }
     })().finally(() => {
       if (logoutRequestRef.current === request) logoutRequestRef.current = null;
     });
