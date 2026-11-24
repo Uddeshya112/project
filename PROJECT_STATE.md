@@ -532,3 +532,12 @@
 - **NOT CHANGED:** Server publish authorization; docs and route agree that Coordinator publish is allowed. The approval and admin-only endpoint checks remain server-enforced.
 - **VERIFIED LOCALLY:** Typecheck, root `npm test` (29 + 55 passing), Vite build, and `npm run test:solver` passed before this security-script-only correction. The dedicated CI security job must rerun to verify the revised red-team checks.
 - **NOT DEPLOYED:** No production changes.
+
+## 26. Platform Migration Phase 1A — Course Catalog (2026-11-24)
+
+- Added the target FastAPI course catalog endpoints: institution-scoped list/search/pagination, create, update, and soft archive.
+- Access is limited to Super Admin, College Admin, and Coordinator. Writes append an outbox event in the same transaction. The API filters explicitly by institution and relies on forced database RLS as a second boundary.
+- Added isolated Alembic revision `0002_academic_courses` for `intellischedule_v2.courses`; it does not alter legacy `public` tables.
+- **VERIFIED LOCALLY:** 3 focused API unit/route tests, Ruff, compileall, Alembic offline SQL generation through revision 0002, and `git diff --check` passed.
+- **NOT VERIFIED:** This Windows environment's asyncio event loop stalled even on `asyncio.sleep(0)`, so live async route/database tests were not run locally. No PostgreSQL/Supabase RLS integration is configured. CI will validate the Python test suite on Linux.
+- **NOT APPLIED OR DEPLOYED:** No migration was applied to hosted Supabase, and no Render/Vercel resources, production traffic, or secrets were changed. Domain modules for faculty, rooms, sections, allocations, schedule generation/jobs, and outbox dispatch remain future migration work.
