@@ -2,9 +2,9 @@ import React, { useState, useRef } from 'react';
 import { useTimetable } from '../../../context/TimetableContext';
 import {
   generateMasterExcelTemplate,
-  parseMasterExcelWorkbook,
-  ExcelImportPreview
+  parseMasterExcelWorkbook
 } from '../../../lib/excelMasterService';
+import type { ExcelImportPreview } from '../../../lib/excelMasterService';
 import {
   FileSpreadsheet,
   Download,
@@ -91,8 +91,8 @@ export function MasterExcelHub({ onNavigateToTab, canEdit = true }: { onNavigate
   };
 
   // 1. Download Master Template (with current data or defaults)
-  const handleDownloadTemplate = (includeCurrentData: boolean) => {
-    const blob = generateMasterExcelTemplate(
+  const handleDownloadTemplate = async (includeCurrentData: boolean) => {
+    const blob = await generateMasterExcelTemplate(
       includeCurrentData
         ? {
             departments,
