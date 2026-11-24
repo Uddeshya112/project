@@ -16,3 +16,4 @@ def test_identity_requires_bearer_token() -> None:
     with pytest.raises(HTTPException) as error:
         current_principal(None, None).send(None)
     assert error.value.status_code == 401
+

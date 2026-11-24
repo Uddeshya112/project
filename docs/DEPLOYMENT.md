@@ -23,7 +23,7 @@ Run first-time bootstrap with the Supabase `postgres`/migration-owner connection
 
 Create services from the repository Blueprint `render.yaml`: API web service and worker. Each currently uses Render's paid `0.5c-512mb` plan; confirm that spend before provisioning. Set `DATABASE_URL` to the restricted runtime role, `DIRECT_URL` to the migration connection, `SUPABASE_URL`, `SUPABASE_JWKS_URL`, and `CORS_ALLOWED_ORIGINS` in Render's secret/config interface. Confirm the project region and select a matching supported Render region before provisioning. The Blueprint health check uses `/health`; `/ready` checks the database.
 
-The API includes health/readiness, verified-JWKS identity lookup, and the first tenant-scoped academic course catalog. Course writes and their outbox events commit together. Worker outbox dispatch and durable solve jobs are not implemented. Do not route production traffic to it as a replacement for the current app yet.
+The API currently includes health/readiness and verified-JWKS identity lookup. Phase 0 does not yet implement domain modules, outbox dispatch, or durable solve jobs. Do not route production traffic to it as a replacement for the current app yet.
 
 ## Vercel
 
@@ -42,3 +42,7 @@ Import the repository with root directory `apps/web`. Set `NEXT_PUBLIC_SUPABASE_
 - Confirm the Supabase project's signing algorithm/JWKS, Auth redirect settings, Data API exposure and policies.
 - Configure Vercel, Render, Supabase secrets and matching deployment regions; none are changed by this repository work.
 - Replace the existing root Vercel project configuration only after migration and rollback have been reviewed.
+
+## Phase 1A — course catalog
+
+The target FastAPI API now includes CRUD-lite course catalog endpoints and Alembic revision `0002_academic_courses`. The revision adds only `intellischedule_v2.courses`, enables and forces tenant RLS, and grants the restricted runtime role only the table operations required by these endpoints. It does not alter the legacy `public` schema. The migration has only been rendered as offline SQL locally; it has not been applied to any hosted database. PostgreSQL RLS integration tests and service deployment remain release gates.

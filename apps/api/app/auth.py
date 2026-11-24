@@ -87,3 +87,4 @@ def require_roles(*roles: str):
             raise HTTPException(status_code=403, detail="role is not permitted")
         return principal
     return guard
+

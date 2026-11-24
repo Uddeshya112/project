@@ -32,3 +32,4 @@ async def get_session() -> AsyncIterator[AsyncSession | None]:
         return
     async with session_factory() as session:
         yield session
+

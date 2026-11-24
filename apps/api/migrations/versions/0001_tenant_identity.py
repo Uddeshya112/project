@@ -110,3 +110,4 @@ def downgrade() -> None:
     op.drop_table("users", schema=SCHEMA)
     op.drop_table("institutions", schema=SCHEMA)
     op.execute(f"DROP SCHEMA IF EXISTS {SCHEMA}")
+

@@ -41,3 +41,4 @@ services:
         sync: false
       - key: SUPABASE_JWKS_URL
         sync: false
+

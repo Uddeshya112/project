@@ -11,3 +11,4 @@ export default async function DashboardPage() {
   const email = typeof claims.email === 'string' ? claims.email : 'authenticated user';
   return <main><h1>Academic dashboard</h1><p>Signed in as {email}</p></main>;
 }
+

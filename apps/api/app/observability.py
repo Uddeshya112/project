@@ -52,3 +52,4 @@ class RequestContextMiddleware:
                 "status": status_code,
                 "durationMs": round((time.perf_counter() - started) * 1000, 2),
             }, separators=(",", ":")))
+

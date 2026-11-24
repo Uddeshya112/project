@@ -22,3 +22,4 @@ export default function LoginPage() {
     {error && <p role="alert">{error}</p>}<button disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
   </form></main>;
 }
+
