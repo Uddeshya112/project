@@ -43,3 +43,6 @@ Import the repository with root directory `apps/web`. Set `NEXT_PUBLIC_SUPABASE_
 - Configure Vercel, Render, Supabase secrets and matching deployment regions; none are changed by this repository work.
 - Replace the existing root Vercel project configuration only after migration and rollback have been reviewed.
 
+## Phase 1A — course catalog
+
+The target FastAPI API now includes CRUD-lite course catalog endpoints and Alembic revision `0002_academic_courses`. The revision adds only `intellischedule_v2.courses`, enables and forces tenant RLS, and grants the restricted runtime role only the table operations required by these endpoints. It does not alter the legacy `public` schema. The migration has only been rendered as offline SQL locally; it has not been applied to any hosted database. PostgreSQL RLS integration tests and service deployment remain release gates.
