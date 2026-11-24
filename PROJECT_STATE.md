@@ -488,3 +488,28 @@
 - The approvals version label now stays on one line beside its non-wrapping status badge.
 - **VERIFIED:** `npm run lint` and `npm run build` passed. The existing Vite warning about the 572.82 kB lazy `AcademicSetupHubView` chunk remains.
 - **NOT PUSHED OR DEPLOYED:** These follow-up edits are local and production remains unchanged.
+
+## 22. Platform Migration Phase 0 Foundation (2026-11-24)
+
+- **REQUESTED SCOPE:** Begin the supplied Vercel + Supabase + Render target architecture in phases while preserving the existing app until migration parity and rollback are verified.
+- Added `apps/web` Next.js App Router shell with Supabase password sign-in and a server-rendered dashboard that requires `auth.getUser()`.
+- Added `apps/api` FastAPI health/readiness routes, async SQLAlchemy connection/session support, PyJWT JWKS validation, app-user/institution lookup, and database-backed role authority.
+- Added an initial additive Alembic migration for institutions/users, membership uniqueness, role/status constraints, tenant index, and self-only tenant RLS for users.
+- Added Render API/worker Blueprint, web/API environment examples, phase-zero CI workflow, deployment guide and migration decisions.
+- **INITIAL STATUS (superseded by section 23):** At the start of this phase, dependencies and runtime checks were pending.
+- **NOT DEPLOYED:** No hosted schema, Render service, Vercel project, Supabase Auth settings, production traffic or secrets were changed. Existing root Vite/Express app remains the production path.
+- **INITIAL STATUS (superseded by section 23):** First-Super-Admin mapping and EventOutbox schema were present, with local verification still pending. Worker outbox processing remains scheduled for Phase 3 in the supplied spec.
+
+## 23. Platform Migration Phase 0 Completion Pass (2026-11-24)
+
+- Added the pinned API `requirements.lock` and switched Render and GitHub Actions installs to locked dependencies.
+- Added Next.js 16 Supabase SSR client helpers and `proxy.ts` session refresh using signature-verified `getClaims()`. Login uses the publishable key env name; dashboard auth checks verified claims server-side.
+- Tightened API auth: verifies Supabase JWKS signatures, audience, issuer, expiry, UUID subject, and active database mapping; role authority stays in the app database. JWKS fetch runs off the async event loop, and dependency failures return service-unavailable responses.
+- Added request ID propagation and JSON HTTP request logs. Added tenant/user transaction-local settings after verification, forced RLS policies on institutions/users/outbox, and revoked Supabase `anon`/`authenticated` table grants when those roles exist.
+- Added deployment steps for the restricted non-owner API database role and first Super Admin mapping. Updated migration decisions to match the database-backed tenant and role model.
+- **VERIFIED:** Python 3.11.9; Ruff checks; `pytest` (2 tests); Python compileall; Alembic offline SQL generation; Render Blueprint YAML parsing; Next TypeScript check and production build; root app `npm run lint` and `npm run build`; git whitespace check. Root Vite build retains its existing 572.82 kB `AcademicSetupHubView` chunk warning.
+- **NOT RUN:** Render CLI is unavailable, so platform-aware Blueprint validation did not run; only YAML parsing and current published field/plan specs were checked.
+- **NOT VERIFIED:** No isolated PostgreSQL/Supabase server is configured, so RLS allow/deny behavior, actual migrations, Supabase signing/JWKS, login refresh/logout in a browser, and live DB readiness remain unverified. No Vercel, Render, or Supabase resources or secrets were changed.
+- **READ-ONLY HOSTED INSPECTION:** Connected Supabase project “Tiet timetable” is `ACTIVE_HEALTHY` in `ap-northeast-2`; its single recorded migration is `20261004000000_init_supabase_schema`, with 25 public tables and 3 profiles. Render already has a separate `Tiet-timetable` web service on `main` in Virginia. Vercel project `tiet-timetable` is still configured for Vite; its current deployment/project settings were not changed. This migration therefore uses a new `intellischedule_v2` schema and does not alter existing `public` tables or existing hosting resources.
+- **PHASE BOUNDARY:** This completes the local Phase 0 code foundation, not the full requested migration. Scheduling domain APIs, CRUD/data migration, approval workflows, worker/outbox processing, solver jobs, realtime, and production cutover remain later phases in the supplied architecture. The current Vite/Express production app remains intact.
+- **NOT PUSHED OR DEPLOYED:** Changes remain local on `fix/full-e2e-sync`.
