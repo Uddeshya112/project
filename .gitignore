@@ -1,4 +1,11 @@
 node_modules
+.venv/
+.ruff_cache/
+.pytest_cache/
+__pycache__/
+*.egg-info/
+*.tsbuildinfo
+.next/
 dist
 dist-server
 .data
@@ -11,3 +18,4 @@ data/
 *.key
 *.log
 *.sqlite
+
