@@ -39,8 +39,8 @@ function MainLayout() {
     const revocation = logout();
     setShowWorkspacePicker(false);
     setShowLoginPage(true);
-    await revocation;
     window.history.replaceState(null, '', '/');
+    await revocation;
   };
 
   const returnToLogin = () => {

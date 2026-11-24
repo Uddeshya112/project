@@ -87,7 +87,7 @@ export function GovernanceView() {
                 >
                   <div className="flex flex-wrap items-start justify-between gap-2 mb-1.5">
                     <div className="flex min-w-0 flex-wrap items-center gap-2">
-                      <span className="break-words font-bold text-stone-900 dark:text-zinc-100 text-xs">{ver.versionLabel}</span>
+                      <span className="whitespace-nowrap font-bold text-stone-900 dark:text-zinc-100 text-xs">{ver.versionLabel}</span>
                       {ver.isPublished || ver.status === 'Published' ? (
                         <span className="shrink-0 whitespace-nowrap text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-300 dark:border-emerald-500/30">
                           Active In Production

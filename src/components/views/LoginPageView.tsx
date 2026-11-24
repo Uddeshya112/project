@@ -811,12 +811,12 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
                   Account details
                 </button>
               </div>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-6">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:auto-rows-fr lg:grid-cols-6">
                 <button
                   type="button"
                   onClick={() => handleDemoLoginClick('Coordinator')}
                   disabled={Boolean(demoRoleLoading) || isLoading || isGoogleLoading}
-                  className="p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-800 active:bg-stone-100 disabled:bg-stone-200 dark:disabled:bg-zinc-700 disabled:opacity-100 disabled:cursor-wait text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs lg:col-span-2"
+                  className="h-full min-h-[88px] p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-800 active:bg-stone-100 disabled:bg-stone-200 dark:disabled:bg-zinc-700 disabled:opacity-100 disabled:cursor-wait text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs lg:col-span-2"
                 >
                   <div className="flex items-center justify-between w-full">
                     <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white group-disabled:text-stone-800 dark:group-disabled:text-zinc-100 transition-colors">Continue as Coordinator</span>
@@ -833,7 +833,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
                   type="button"
                   onClick={() => handleDemoLoginClick('Faculty')}
                   disabled={Boolean(demoRoleLoading) || isLoading || isGoogleLoading}
-                  className="p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-800 active:bg-stone-100 disabled:bg-stone-200 dark:disabled:bg-zinc-700 disabled:opacity-100 disabled:cursor-wait text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs lg:col-span-2"
+                  className="h-full min-h-[88px] p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-800 active:bg-stone-100 disabled:bg-stone-200 dark:disabled:bg-zinc-700 disabled:opacity-100 disabled:cursor-wait text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs lg:col-span-2"
                 >
                   <div className="flex items-center justify-between w-full">
                     <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white group-disabled:text-stone-800 dark:group-disabled:text-zinc-100 transition-colors">Continue as Faculty</span>
@@ -850,7 +850,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
                   type="button"
                   onClick={() => handleDemoLoginClick('Student')}
                   disabled={Boolean(demoRoleLoading) || isLoading || isGoogleLoading}
-                  className="p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-800 active:bg-stone-100 disabled:bg-stone-200 dark:disabled:bg-zinc-700 disabled:opacity-100 disabled:cursor-wait text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs lg:col-span-2"
+                  className="h-full min-h-[88px] p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-800 active:bg-stone-100 disabled:bg-stone-200 dark:disabled:bg-zinc-700 disabled:opacity-100 disabled:cursor-wait text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs lg:col-span-2"
                 >
                   <div className="flex items-center justify-between w-full">
                     <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white group-disabled:text-stone-800 dark:group-disabled:text-zinc-100 transition-colors">Continue as Student</span>
@@ -867,7 +867,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
                   type="button"
                   onClick={() => handleDemoLoginClick('Admin')}
                   disabled={Boolean(demoRoleLoading) || isLoading || isGoogleLoading}
-                  className="p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-800 active:bg-stone-100 disabled:bg-stone-200 dark:disabled:bg-zinc-700 disabled:opacity-100 disabled:cursor-wait text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs lg:col-span-2 lg:col-start-2"
+                  className="h-full min-h-[88px] p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-800 active:bg-stone-100 disabled:bg-stone-200 dark:disabled:bg-zinc-700 disabled:opacity-100 disabled:cursor-wait text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs lg:col-span-2 lg:col-start-2"
                 >
                   <div className="flex items-center justify-between w-full">
                     <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white group-disabled:text-stone-800 dark:group-disabled:text-zinc-100 transition-colors">Continue as Admin</span>
@@ -884,7 +884,7 @@ export function LoginPageView({ onSuccessLogin }: LoginPageViewProps) {
                   type="button"
                   onClick={() => handleDemoLoginClick('HOD')}
                   disabled={Boolean(demoRoleLoading) || isLoading || isGoogleLoading}
-                  className="p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-800 active:bg-stone-100 disabled:bg-stone-200 dark:disabled:bg-zinc-700 disabled:opacity-100 disabled:cursor-wait text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs lg:col-span-2 lg:col-start-4"
+                  className="h-full min-h-[88px] p-2.5 bg-white dark:bg-zinc-950 hover:bg-stone-50 dark:hover:bg-zinc-800 active:bg-stone-100 disabled:bg-stone-200 dark:disabled:bg-zinc-700 disabled:opacity-100 disabled:cursor-wait text-left border border-[#E5E2D9] dark:border-zinc-800 hover:border-stone-400 dark:hover:border-zinc-700 rounded-lg transition-all flex flex-col gap-0.5 group focus:outline-none focus-visible:ring-1 focus-visible:ring-[#8C1B2E] shadow-2xs lg:col-span-2 lg:col-start-4"
                 >
                   <div className="flex items-center justify-between w-full">
                     <span className="text-xs font-semibold text-stone-900 dark:text-zinc-200 group-hover:text-[#8C1B2E] dark:group-hover:text-white group-disabled:text-stone-800 dark:group-disabled:text-zinc-100 transition-colors">Continue as HOD</span>

@@ -57,7 +57,12 @@ export function FacultyPortalView() {
   const isTeacher = roleCode === 'FACULTY' || roleCode === 'HOD';
   // The server assigns an extra class to the signed-in teacher, so only FACULTY accounts can claim one.
   const canClaim = roleCode === 'FACULTY';
-  const facultyId = isTeacher ? roster?.facultyId ?? '' : selectedFacultyId;
+  const linkedFacultyId = currentUser?.facultyId || '';
+  const facultyId = isTeacher
+    ? roster?.facultyId || linkedFacultyId
+    : roleCode === 'COORDINATOR' && linkedFacultyId
+      ? linkedFacultyId
+      : selectedFacultyId;
   const currentFaculty = facultyMembers.find(f => f.id === facultyId);
 
   const { workingDays, timeSlots, lunchPeriodId } = academicYear;

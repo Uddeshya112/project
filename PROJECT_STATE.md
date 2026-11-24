@@ -479,3 +479,12 @@
 ### Release status
 
 - **NOT PUSHED OR DEPLOYED:** Changes remain local on `fix/full-e2e-sync`; production services and database were not modified.
+
+## 21. Follow-up Workspace and Grid Fixes (2026-11-24)
+
+- Sign-out now replaces the URL with `/` immediately alongside synchronous auth-state clearing; the workspace picker and portal logout share the same handler.
+- Faculty portal resolves a Coordinator's linked faculty record before falling back to the timetable's selected faculty, so switching into Faculty availability uses the active linked record.
+- Login demo cards use equal-height grid rows and consistent minimum heights across the centered 3+2 layout.
+- The approvals version label now stays on one line beside its non-wrapping status badge.
+- **VERIFIED:** `npm run lint` and `npm run build` passed. The existing Vite warning about the 572.82 kB lazy `AcademicSetupHubView` chunk remains.
+- **NOT PUSHED OR DEPLOYED:** These follow-up edits are local and production remains unchanged.
