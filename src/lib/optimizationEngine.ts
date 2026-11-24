@@ -137,7 +137,9 @@ interface InternalAllocation {
   electiveGroupId?: string;
   candidateRooms: number[]; // roomIdx array
   feasibleSlotIndices: number[]; // slotIdx array where faculty & room prerequisites allow assignment
+  feasibleSlotMask: bigint;
   feasibleBlocks?: number[][]; // [slot1, slot2, ...] blocks for multi-period sessions
+  feasibleBlockMasks?: bigint[];
   feasibleLabBlocks?: [number, number][]; // [slot1, slot2] pairs for 2-hour atomic labs
 }
 
@@ -154,6 +156,7 @@ interface CompiledProblem {
   totalSlots: number;
   numDays: number;
   numPeriodsPerDay: number;
+  daySlotMasks: bigint[];
   lunchSlotIndices: Set<number>;
   infeasibilityReasons: string[];
   slotKeyMap: Map<string, SlotRef>;
@@ -190,6 +193,7 @@ export function compileSchedulingProblem(
 
   const slots: SlotRef[] = [];
   const lunchSlotIndices = new Set<number>();
+  const daySlotMasks = Array.from({ length: numDays }, () => 0n);
 
   let slotCounter = 0;
   for (let d = 0; d < numDays; d++) {
@@ -203,6 +207,7 @@ export function compileSchedulingProblem(
         day: workingDays[d],
         timeSlotId: slot.id,
       });
+      daySlotMasks[d] |= 1n << BigInt(slotIdx);
 
       if (slot.isLunch || slot.id === academicYear.lunchPeriodId) {
         lunchSlotIndices.add(slotIdx);
@@ -390,7 +395,9 @@ export function compileSchedulingProblem(
       electiveGroupId: alloc.electiveGroupId,
       candidateRooms: candidateRoomsIndices,
       feasibleSlotIndices,
+      feasibleSlotMask: feasibleSlotIndices.reduce((mask, slotIdx) => mask | (1n << BigInt(slotIdx)), 0n),
       feasibleBlocks,
+      feasibleBlockMasks: feasibleBlocks.map(block => block.reduce((mask, slotIdx) => mask | (1n << BigInt(slotIdx)), 0n)),
       feasibleLabBlocks,
     });
   }
@@ -463,6 +470,7 @@ export function compileSchedulingProblem(
     totalSlots,
     numDays,
     numPeriodsPerDay,
+    daySlotMasks,
     lunchSlotIndices,
     infeasibilityReasons,
     slotKeyMap,
@@ -642,14 +650,16 @@ export function executeOptimizationEngine(
     return count;
   };
 
-  const currentDomainSize = (alloc: InternalAllocation): number => {
+  const currentDomainSize = (alloc: InternalAllocation, includeRoomAvailability = true): number => {
     const remainingHours = alloc.requiredHours - allocHoursAssigned[alloc.allocIdx];
     if (remainingHours <= 0) return Number.MAX_SAFE_INTEGER;
 
     // A slot is unavailable to every compatible room only when every candidate
     // room is occupied; intersecting the room masks computes that in one pass.
-    let roomsBusyEverywhere = allSlotsMask;
-    for (const roomIdx of alloc.candidateRooms) roomsBusyEverywhere &= roomOccupancy[roomIdx];
+    let roomsBusyEverywhere = includeRoomAvailability ? allSlotsMask : 0n;
+    if (includeRoomAvailability) {
+      for (const roomIdx of alloc.candidateRooms) roomsBusyEverywhere &= roomOccupancy[roomIdx];
+    }
 
     let blocked = facultyOccupancy[alloc.facultyIdx] |
       sectionWholeOccupancy[alloc.sectionIdx] |
@@ -662,25 +672,23 @@ export function executeOptimizationEngine(
 
     if (alloc.durationPeriods > 1 && alloc.feasibleBlocks?.length) {
       let availableBlocks = 0;
-      for (const block of alloc.feasibleBlocks) {
-        let blockMask = 0n;
-        for (const slotIdx of block) blockMask |= 1n << BigInt(slotIdx);
+      for (const blockMask of alloc.feasibleBlockMasks ?? []) {
         if ((blocked & blockMask) !== 0n) continue;
-        if (alloc.candidateRooms.some(roomIdx => (roomOccupancy[roomIdx] & blockMask) === 0n)) {
+        if (!includeRoomAvailability || alloc.candidateRooms.some(roomIdx => (roomOccupancy[roomIdx] & blockMask) === 0n)) {
           availableBlocks++;
         }
       }
       return availableBlocks;
     }
 
-    let feasibleMask = alloc.feasibleSlotIndices.reduce((mask, slotIdx) => mask | (1n << BigInt(slotIdx)), 0n);
+    let feasibleMask = alloc.feasibleSlotMask;
     if (alloc.requiredHours <= problem.numDays) {
+      let occupiedDayMask = 0n;
       for (const assigned of allocAssignedSlots[alloc.allocIdx]) {
         const dayIdx = problem.slots[assigned.slotIdx].dayIdx;
-        for (const slot of problem.slots) {
-          if (slot.dayIdx === dayIdx) feasibleMask &= ~(1n << BigInt(slot.slotIdx));
-        }
+        occupiedDayMask |= problem.daySlotMasks[dayIdx];
       }
+      feasibleMask &= ~occupiedDayMask;
     }
     return countSetBits(feasibleMask & ~blocked & allSlotsMask);
   };
@@ -689,7 +697,7 @@ export function executeOptimizationEngine(
   // dynamic window. Scanning every remaining allocation at every recursion
   // depth is quadratic and stalls large schedules; a fixed lookahead keeps
   // MRV responsive to newly occupied resources at linear overall scan cost.
-  const dynamicMRVWindow = searchAllocOrder.length <= 160 ? searchAllocOrder.length : 32;
+  const dynamicMRVWindow = searchAllocOrder.length <= 160 ? searchAllocOrder.length : 4;
   if (searchAllocOrder.length > 160) {
     searchAllocOrder.sort((a, b) => {
       const ratioA = currentDomainSize(a) / Math.max(1, a.requiredHours);
@@ -734,7 +742,7 @@ export function executeOptimizationEngine(
       for (let index = allocOrderIdx; index < windowEnd; index++) {
         const candidate = searchAllocOrder[index];
         const remaining = Math.max(1, candidate.requiredHours - allocHoursAssigned[candidate.allocIdx]);
-        const ratio = currentDomainSize(candidate) / remaining;
+        const ratio = currentDomainSize(candidate, false) / remaining;
         const degree = allocationDegree.get(candidate.allocIdx) || 0;
         if (ratio < bestRatio || (ratio === bestRatio && degree > bestDegree)) {
           selectedIndex = index;

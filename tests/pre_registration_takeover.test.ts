@@ -3,7 +3,7 @@ import assert from 'node:assert';
 
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:3000';
 
-test('Duplicate registration cannot replace a created account password', async () => {
+test('Duplicate pending registration cannot replace the requested account password', async () => {
   const victimEmail = `victim.${Date.now()}@thapar.edu`;
   const attackerPwd = 'AttackerPassword123!';
   const victimPwd = 'VictimPassword123!';
@@ -20,7 +20,7 @@ test('Duplicate registration cannot replace a created account password', async (
       department: 'CSED',
     }),
   });
-  assert.strictEqual(reg1Res.status, 201);
+  assert.strictEqual(reg1Res.status, 202);
 
   // 2. A second registration must not replace the first account's credentials.
   const reg2Res = await fetch(`${BASE_URL}/api/auth/register`, {
@@ -34,19 +34,21 @@ test('Duplicate registration cannot replace a created account password', async (
       department: 'CSED',
     }),
   });
-  assert.strictEqual(reg2Res.status, 201);
+  assert.strictEqual(reg2Res.status, 202);
   const reg2Data = await reg2Res.json();
   assert.strictEqual(reg2Data.verificationToken, undefined);
+  assert.strictEqual(reg2Data.status, 'PENDING');
 
-  // 3. First account is active immediately.
+  // 3. The original password remains associated with the pending request.
   const loginAttacker = await fetch(`${BASE_URL}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: victimEmail, password: attackerPwd }),
   });
-  assert.strictEqual(loginAttacker.status, 200);
+  assert.strictEqual(loginAttacker.status, 403);
+  assert.strictEqual((await loginAttacker.json()).error, 'ACCOUNT_PENDING_APPROVAL');
 
-  // 4. The second password cannot replace the first one.
+  // 4. The second password cannot replace the first one; invalid credentials remain denied.
   const loginSecondRegistration = await fetch(`${BASE_URL}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
