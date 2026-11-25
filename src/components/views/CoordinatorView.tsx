@@ -1,10 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useTimetable } from '../../context/TimetableContext';
 import { useAuth } from '../../context/AuthContext';
 import { PollComposer } from './PollComposer';
 import { formatLocalizedTimestamp } from '../../lib/userUtils';
-import { supabaseClient, getSupabaseAccessToken } from '../../lib/supabaseClient';
-import { getResolvedApiBaseUrl, apiUrl } from '../../lib/apiConfig';
 import {
   CheckCircle2,
   XCircle,
@@ -14,7 +12,6 @@ import {
   Calendar,
   AlertTriangle,
   Lock,
-  ShieldCheck,
   ShieldAlert
 } from 'lucide-react';
 
@@ -34,120 +31,13 @@ export function CoordinatorView() {
     validationReport,
     setActiveView,
     generateDualRoutinesAPI,
+    studentsCount = 0,
   } = useTimetable();
+  const requiredPeriods = allocations.reduce((total, allocation) => total + allocation.hoursPerWeek, 0);
 
   const { currentUser, authStatus, isAuthLoading, isAuthenticated, currentRole, logout } = useAuth();
   const [isGenerating, setIsGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
-
-  // Environment and Preview Determination
-  const isDevOrPreview =
-    typeof window !== 'undefined' &&
-    (import.meta.env.DEV ||
-      window.location.hostname.includes('run.app') ||
-      window.location.hostname === 'localhost' ||
-      window.location.hostname === '127.0.0.1');
-
-  const environmentLabel =
-    typeof window !== 'undefined' && (window.location.hostname.includes('run.app') || window.location.hostname === 'localhost')
-      ? 'PREVIEW'
-      : 'PRODUCTION';
-
-  // Live Auth Diagnostics State (Dev / Preview Only)
-  const [authDiagnostics, setAuthDiagnostics] = useState<{
-    sessionFound: boolean;
-    userFound: boolean;
-    tokenPresent: boolean;
-    profileFound: boolean;
-    role: string;
-    apiBase: string;
-    backendStatus: 'AUTHENTICATED' | '401' | '403' | 'UNREACHABLE' | 'CHECKING';
-  }>({
-    sessionFound: false,
-    userFound: false,
-    tokenPresent: false,
-    profileFound: false,
-    role: 'UNKNOWN',
-    apiBase: getResolvedApiBaseUrl(),
-    backendStatus: 'CHECKING',
-  });
-
-  useEffect(() => {
-    let isMounted = true;
-    const runDiagnostics = async () => {
-      const apiBase = getResolvedApiBaseUrl();
-      let sessionFound = false;
-      let userFound = false;
-      let tokenPresent = false;
-      let profileFound = false;
-      let role = 'UNKNOWN';
-      let backendStatus: 'AUTHENTICATED' | '401' | '403' | 'UNREACHABLE' = '401';
-
-      if (supabaseClient) {
-        try {
-          const { data: { session } } = await supabaseClient.auth.getSession();
-          if (session) {
-            sessionFound = true;
-            tokenPresent = Boolean(session.access_token);
-            if (session.user) {
-              userFound = true;
-              const { data: prof } = await supabaseClient
-                .from('profiles')
-                .select('*')
-                .eq('id', session.user.id)
-                .maybeSingle();
-              if (prof) {
-                profileFound = true;
-                role = prof.role_code || 'OTHER';
-              }
-            }
-          }
-        } catch {}
-      }
-
-      try {
-        const token = await getSupabaseAccessToken();
-        const headers: Record<string, string> = {};
-        if (token) headers['Authorization'] = `Bearer ${token}`;
-        const meRes = await fetch(apiUrl('/api/auth/me'), { headers });
-        if (meRes.status === 200) {
-          const meData = await meRes.json();
-          if (meData.authenticated) {
-            backendStatus = 'AUTHENTICATED';
-            if (meData.roleCode) role = meData.roleCode;
-            profileFound = true;
-          } else {
-            backendStatus = '401';
-          }
-        } else if (meRes.status === 403) {
-          backendStatus = '403';
-        } else if (meRes.status === 401) {
-          backendStatus = '401';
-        } else {
-          backendStatus = 'UNREACHABLE';
-        }
-      } catch {
-        backendStatus = 'UNREACHABLE';
-      }
-
-      if (isMounted) {
-        setAuthDiagnostics({
-          sessionFound,
-          userFound,
-          tokenPresent,
-          profileFound,
-          role: role === 'COORDINATOR' ? 'COORDINATOR' : role !== 'UNKNOWN' ? 'OTHER' : 'UNKNOWN',
-          apiBase,
-          backendStatus,
-        });
-      }
-    };
-
-    runDiagnostics();
-    return () => {
-      isMounted = false;
-    };
-  }, [authStatus]);
 
   const isCoordinatorAuthorized =
     authStatus === 'AUTHENTICATED' &&
@@ -178,10 +68,10 @@ export function CoordinatorView() {
   const isValidated = hasDraft && noHardConflicts;
 
   // Real Timestamps
-  const activeVersion = versions.find((version) => version.versionNumber === activeVersionNumber);
+  const publishedVersion = versions.find((version) => version.versionNumber === activeVersionNumber);
   const timestampStr = formatLocalizedTimestamp(isPublished
-    ? academicYear.publishedAt || activeVersion?.createdAt
-    : activeVersion?.createdAt);
+    ? academicYear.publishedAt || publishedVersion?.createdAt
+    : versions[0]?.createdAt);
 
   // Generation Handler
   const handleGenerate = async () => {
@@ -315,7 +205,7 @@ export function CoordinatorView() {
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs pt-1">
           <div>
             <span className="text-[10px] text-stone-400 block font-medium">Scheduled Sessions</span>
-            <span className="font-mono font-bold text-stone-900 dark:text-zinc-100">{sessions.length} / 736</span>
+            <span className="font-mono font-bold text-stone-900 dark:text-zinc-100">{sessions.length} / {requiredPeriods}</span>
           </div>
 
           <div>
@@ -328,7 +218,7 @@ export function CoordinatorView() {
           <div className="col-span-2">
             <span className="text-[10px] text-stone-400 block font-medium">Academic Dataset</span>
             <span className="font-sans text-stone-800 dark:text-zinc-200 font-semibold">
-              1,280 students · {activeFacultyCount} faculty · {activeSectionsCount} sections · {allocations.length} allocations
+              {studentsCount.toLocaleString()} students · {activeFacultyCount} faculty · {activeSectionsCount} sections · {allocations.length} allocations
             </span>
           </div>
         </div>
@@ -409,7 +299,7 @@ export function CoordinatorView() {
         <div className="space-y-3 pt-2 border-t border-[#E5E2D9] dark:border-zinc-800 text-xs">
           {hasDraft ? (
             <p className="text-stone-600 dark:text-zinc-300">
-              <strong className="text-stone-900 dark:text-zinc-100 font-semibold">{sessions.length} / 736</strong> sessions scheduled with <strong className="text-emerald-700 dark:text-emerald-400">{hardViolationsCount} hard conflicts</strong>. Ready for review or regeneration.
+              <strong className="text-stone-900 dark:text-zinc-100 font-semibold">{sessions.length} / {requiredPeriods}</strong> sessions scheduled with <strong className="text-emerald-700 dark:text-emerald-400">{hardViolationsCount} hard conflicts</strong>. Ready for review or regeneration.
             </p>
           ) : generationAllowed ? (
             <p className="text-stone-600 dark:text-zinc-300">
@@ -594,77 +484,6 @@ export function CoordinatorView() {
         </div>
       </div>
 
-      {/* 6. Temporary Auth Diagnostics Panel (Development & Preview Only - Section 12) */}
-      {isDevOrPreview && (
-        <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-3 space-y-2 text-xs font-mono">
-          <div className="flex items-center justify-between border-b border-[#E5E2D9] dark:border-zinc-800 pb-1.5">
-            <span className="font-bold text-[11px] text-stone-700 dark:text-zinc-300 uppercase tracking-wider flex items-center gap-1.5">
-              <ShieldCheck className="h-3.5 w-3.5 text-[#8C1B2E] dark:text-red-400" />
-              AUTH DIAGNOSTICS
-            </span>
-            <span className="text-[10px] px-2 py-0.5 rounded bg-stone-200 dark:bg-zinc-800 text-stone-700 dark:text-zinc-300 font-semibold">
-              Environment: {environmentLabel}
-            </span>
-          </div>
-
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] pt-1">
-            <div>
-              <span className="text-stone-400 block text-[10px]">Session:</span>
-              <span className={authDiagnostics.sessionFound ? 'text-emerald-700 dark:text-emerald-400 font-bold' : 'text-rose-700 dark:text-rose-400 font-bold'}>
-                {authDiagnostics.sessionFound ? 'FOUND' : 'NOT FOUND'}
-              </span>
-            </div>
-
-            <div>
-              <span className="text-stone-400 block text-[10px]">Supabase User:</span>
-              <span className={authDiagnostics.userFound ? 'text-emerald-700 dark:text-emerald-400 font-bold' : 'text-rose-700 dark:text-rose-400 font-bold'}>
-                {authDiagnostics.userFound ? 'FOUND' : 'NOT FOUND'}
-              </span>
-            </div>
-
-            <div>
-              <span className="text-stone-400 block text-[10px]">Access Token:</span>
-              <span className={authDiagnostics.tokenPresent ? 'text-emerald-700 dark:text-emerald-400 font-bold' : 'text-rose-700 dark:text-rose-400 font-bold'}>
-                {authDiagnostics.tokenPresent ? 'PRESENT' : 'MISSING'}
-              </span>
-            </div>
-
-            <div>
-              <span className="text-stone-400 block text-[10px]">Profile:</span>
-              <span className={authDiagnostics.profileFound ? 'text-emerald-700 dark:text-emerald-400 font-bold' : 'text-rose-700 dark:text-rose-400 font-bold'}>
-                {authDiagnostics.profileFound ? 'FOUND' : 'NOT FOUND'}
-              </span>
-            </div>
-
-            <div>
-              <span className="text-stone-400 block text-[10px]">Role:</span>
-              <span className="font-bold text-stone-800 dark:text-zinc-200">
-                {authDiagnostics.role}
-              </span>
-            </div>
-
-            <div className="col-span-2">
-              <span className="text-stone-400 block text-[10px]">API:</span>
-              <span className="text-stone-700 dark:text-zinc-300 truncate block text-[10px]" title={authDiagnostics.apiBase}>
-                {authDiagnostics.apiBase || '(relative / same origin)'}
-              </span>
-            </div>
-
-            <div>
-              <span className="text-stone-400 block text-[10px]">Backend:</span>
-              <span className={`font-bold ${
-                authDiagnostics.backendStatus === 'AUTHENTICATED'
-                  ? 'text-emerald-700 dark:text-emerald-400'
-                  : authDiagnostics.backendStatus === '403'
-                  ? 'text-amber-700 dark:text-amber-400'
-                  : 'text-rose-700 dark:text-rose-400'
-              }`}>
-                {authDiagnostics.backendStatus}
-              </span>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

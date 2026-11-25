@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { useTimetable } from '../../context/TimetableContext';
 import { useAuth } from '../../context/AuthContext';
 import { formatLocalizedTimestamp } from '../../lib/userUtils';
+import { periodLabel } from '../../lib/recoveryEngine';
 import {
   History,
   Lock,
@@ -16,7 +17,7 @@ import {
 } from 'lucide-react';
 
 export function GovernanceView() {
-  const { versions, auditLogs, sessions, restoreVersion } = useTimetable();
+  const { versions, auditLogs, sessions, publishStatus, courses, sections, academicYear, restoreVersion } = useTimetable();
   const { allUsers } = useAuth();
   const [restoreState, setRestoreState] = useState<{ message: string; error: boolean } | null>(null);
   const [restoring, setRestoring] = useState<number | null>(null);
@@ -110,7 +111,8 @@ export function GovernanceView() {
                       <time className="font-mono">{formatLocalizedTimestamp(ver.createdAt)}</time>
                     </div>
 
-                    {!isCurrent && (
+                    {/* The published version can be loaded again to drop the changes in a draft. */}
+                    {(!isCurrent || publishStatus !== 'Published') && (
                       <button
                         disabled={restoring !== null}
                         onClick={async () => {
@@ -158,10 +160,10 @@ export function GovernanceView() {
                 <div>
                   <div className="font-bold text-stone-900 dark:text-zinc-100 flex items-center gap-2">
                     <Lock className="h-3.5 w-3.5 text-[#8C1B2E] dark:text-red-400" />
-                    <span>{session.courseId} ({session.day} {session.timeSlotId})</span>
+                    <span>{courses.find(course => course.id === session.courseId)?.code ?? session.courseId} · {sections.find(section => section.id === session.sectionId)?.name ?? session.sectionId} ({session.day} {periodLabel(academicYear, session.timeSlotId)})</span>
                   </div>
                   <div className="text-[11px] text-stone-500 dark:text-zinc-400 mt-0.5">
-                    {session.lockReason || 'Hardware lab pinned for semester'}
+                    {session.lockReason || 'Locked by the coordinator'}
                   </div>
                 </div>
 

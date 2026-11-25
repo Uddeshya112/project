@@ -3,6 +3,8 @@ import { useTimetable } from '../../context/TimetableContext';
 import { useAuth } from '../../context/AuthContext';
 import { api } from '../../lib/api';
 import { DayOfWeek, TimeSlot } from '../../types';
+import { courseLabel, courseName } from '../../lib/courseLabel';
+import { pollOptionLabel } from '../../lib/pollLabel';
 import {
   Users,
   Calendar,
@@ -183,7 +185,7 @@ export function CRPortalView() {
           >
             {sectionCourses.length === 0 && <option value="">No courses</option>}
             {sectionCourses.map(c => (
-              <option key={c.id} value={c.id}>{c.code} – {c.name}</option>
+              <option key={c.id} value={c.id}>{courseLabel(c, ' – ')}</option>
             ))}
           </select>
 
@@ -306,8 +308,7 @@ export function CRPortalView() {
                               <div key={session.id}>
                                 <div className="font-bold text-stone-900 dark:text-zinc-100 flex items-center gap-2">
                                   <span className="text-[#8C1B2E] dark:text-red-400 font-mono">{course?.code ?? '—'}</span>
-                                  <span>·</span>
-                                  <span>{course?.name ?? session.courseId}</span>
+                                  {courseName(course) && <><span>·</span><span>{courseName(course)}</span></>}
                                   {sub && <span className="text-[10px] font-medium text-stone-500 dark:text-zinc-400">({sub})</span>}
                                   {session.status === 'Cancelled' && (
                                     <span className="text-[10px] px-2 py-0.5 rounded bg-red-100 dark:bg-red-950 text-[#8C1B2E] dark:text-red-300 border border-red-200 dark:border-red-800/60 font-semibold">
@@ -382,7 +383,7 @@ export function CRPortalView() {
                         return (
                           <div key={opt.id} className="p-2.5 bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg space-y-1.5">
                             <div className="flex items-center justify-between">
-                              <span className="text-stone-900 dark:text-zinc-200 font-bold">{opt.timeSlotLabel} {opt.isSystemRecommended && <span className="text-emerald-800 dark:text-emerald-400 text-[10px] bg-emerald-50 dark:bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-200 dark:border-emerald-800/50 font-semibold ml-1">Best time</span>}</span>
+                              <span className="text-stone-900 dark:text-zinc-200 font-bold">{pollOptionLabel(opt)} {opt.isSystemRecommended && <span className="text-emerald-800 dark:text-emerald-400 text-[10px] bg-emerald-50 dark:bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-200 dark:border-emerald-800/50 font-semibold ml-1">Best time</span>}</span>
                               <span className="text-stone-500 dark:text-zinc-400">{opt.votes} votes ({percentage}%)</span>
                             </div>
                             <div className="h-1.5 bg-stone-200 dark:bg-zinc-800 rounded-full overflow-hidden">
@@ -437,7 +438,7 @@ export function CRPortalView() {
                 >
                   <option value="">No specific course</option>
                   {sectionCourses.map(c => (
-                    <option key={c.id} value={c.id}>{c.code} – {c.name}</option>
+                    <option key={c.id} value={c.id}>{courseLabel(c, ' – ')}</option>
                   ))}
                 </select>
               </div>

@@ -1,6 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import { useTimetable } from '../../context/TimetableContext';
-import { getGridCellRowSpan, isGridCellCoveredByLab } from '../../lib/timetableGridLayout';
+import { getGridCellRowSpan, isGridCellCoveredByLab, isPracticalType } from '../../lib/timetableGridLayout';
+import { courseLabel, courseName } from '../../lib/courseLabel';
+import { pollOptionLabel } from '../../lib/pollLabel';
 import { useAuth } from '../../context/AuthContext';
 import { DayOfWeek, ClassSession, Course, TimeSlot } from '../../types';
 import {
@@ -135,10 +137,11 @@ export function StudentPortalView() {
   const roomOf = (id: string) => rooms.find(r => r.id === id);
   const subName = (id?: string) => (id ? currentSection.subSections?.find(x => x.id === id)?.name : undefined);
   const isNowSlot = (day: string, t: TimeSlot) => day === todayName && t.startTime <= nowTime && nowTime < t.endTime;
-  const homeRoom = (currentSection.homeRoomId ? roomOf(currentSection.homeRoomId) : undefined)
-    || sectionSessions.map(session => roomOf(session.roomId)).find(Boolean);
-  const facultyMentor = sectionSessions.map(session => facultyMembers.find(faculty => faculty.id === session.facultyId)).find(Boolean)
-    || facultyMembers.find(faculty => faculty.departmentId === currentSection.departmentId);
+  // The group's own room, or the room most of its lectures are in.
+  const lectureRooms = sectionSessions.filter(s => s.type === 'Lecture').map(s => s.roomId);
+  const timesUsed = (roomId: string) => lectureRooms.filter(id => id === roomId).length;
+  const mainRoomId = [...new Set(lectureRooms)].sort((a, b) => timesUsed(b) - timesUsed(a))[0];
+  const homeRoom = roomOf(currentSection.homeRoomId || mainRoomId || '');
   const sectionAnnouncements = [...new Map(notifications.filter(item =>
     ['cancellation', 'makeup_request', 'poll_created'].includes(item.type) &&
     item.message.toLowerCase().includes(currentSection.name.toLowerCase()),
@@ -289,7 +292,7 @@ export function StudentPortalView() {
                 <div className="text-base sm:text-lg font-bold text-stone-900 dark:text-zinc-100 font-serif">
                   {nextClass
                     ? nextCourse
-                      ? `${nextCourse.code} · ${nextCourse.name}`
+                      ? courseLabel(nextCourse)
                       : nextClass.session.courseId
                     : 'No upcoming classes this week'}
                 </div>
@@ -357,7 +360,7 @@ export function StudentPortalView() {
                     const makeup = sectionSessions.find(m => m.originalSessionId === s.id && m.status !== 'Cancelled');
                     return (
                       <div key={s.id} className="font-semibold text-stone-900 dark:text-zinc-100">
-                        {s.day} · {slotTime(s.timeSlotId)} · {c ? `${c.code} ${c.name}` : s.courseId} cancelled
+                        {s.day} · {slotTime(s.timeSlotId)} · {c ? courseLabel(c, ' ') : s.courseId} cancelled
                         {makeup && (
                           <span className="font-normal text-stone-500 dark:text-zinc-400">
                             {' '}— replacement on {makeup.day} {slotTime(makeup.timeSlotId)}
@@ -456,16 +459,15 @@ export function StudentPortalView() {
                                 <div>
                                   <div className="flex items-center gap-2 font-medium text-stone-900 dark:text-zinc-100">
                                     <span className="font-mono font-semibold text-[#8C1B2E] dark:text-red-400">{course?.code ?? '—'}</span>
-                                    <span className="text-stone-300">·</span>
-                                    <span>{course?.name ?? session.courseId}</span>
+                                    {courseName(course) && <><span className="text-stone-300">·</span><span>{courseName(course)}</span></>}
                                     {session.status === 'Cancelled' && (
                                       <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-100 dark:bg-rose-950 text-rose-800 dark:text-rose-300 border border-rose-200 dark:border-rose-900 font-medium">
                                         Cancelled
                                       </span>
                                     )}
-                                    {session.type === 'Lab' && (
+                                    {isPracticalType(session.type) && (
                                       <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-950 text-blue-800 dark:text-blue-300 border border-blue-200 dark:border-blue-900 font-medium">
-                                        Lab{subName(session.subSectionId) ? ` · ${subName(session.subSectionId)}` : ''}
+                                        {session.type}{subName(session.subSectionId) ? ` · ${subName(session.subSectionId)}` : ''}
                                       </span>
                                     )}
                                   </div>
@@ -510,7 +512,7 @@ export function StudentPortalView() {
                   <div key={poll.id} className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl p-5 space-y-4 text-xs">
                     <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-[#E5E2D9] dark:border-zinc-800">
                       <div className="font-semibold text-stone-900 dark:text-zinc-100">
-                        {pollCourse ? `${pollCourse.code} · ${pollCourse.name} — ` : ''}{poll.question}
+                        {pollCourse ? `${courseLabel(pollCourse)} — ` : ''}{poll.question}
                       </div>
                       <div className="text-stone-500 dark:text-zinc-400 text-[11px]">
                         {poll.votedStudentsCount} {poll.votedStudentsCount === 1 ? 'response' : 'responses'} recorded
@@ -534,7 +536,7 @@ export function StudentPortalView() {
                             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                               <div className="space-y-1">
                                 <div className="font-bold text-stone-900 dark:text-zinc-100 text-sm">
-                                  {opt.timeSlotLabel}
+                                  {pollOptionLabel(opt)}
                                 </div>
                                 <div className="text-xs text-stone-500 dark:text-zinc-400">
                                   {percentage}% of students selected this option
@@ -578,7 +580,7 @@ export function StudentPortalView() {
       {/* 3. TAB 2: MY TIMETABLE (TRUE WEEKLY MATRIX GRID) */}
       {/* ============================================================ */}
       {currentTab === 'timetable' && (
-        <div className="space-y-4 animate-in fade-in duration-150">
+        <div className="timetable-print-view space-y-4 animate-in fade-in duration-150">
 
           {/* Timetable Header & Controls */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -707,7 +709,7 @@ export function StudentPortalView() {
                                         className={`p-2.5 rounded-lg border text-left cursor-pointer transition-all hover:-translate-y-0.5 ${
                                           session.status === 'Cancelled'
                                             ? 'bg-rose-50/50 dark:bg-rose-950/20 border-rose-200 dark:border-rose-900/50'
-                                            : session.type === 'Lab'
+                                            : isPracticalType(session.type)
                                             ? 'bg-blue-50/40 dark:bg-blue-950/20 border-blue-200 dark:border-blue-900/40'
                                             : isNow
                                             ? 'bg-white dark:bg-zinc-800 border-[#8C1B2E] shadow-xs'
@@ -728,15 +730,15 @@ export function StudentPortalView() {
                                               Cancelled
                                             </span>
                                           )}
-                                          {session.type === 'Lab' && (
+                                          {isPracticalType(session.type) && (
                                             <span className="text-[9px] font-medium text-blue-700 dark:text-blue-400">
-                                              Lab{subName(session.subSectionId) ? ` · ${subName(session.subSectionId)}` : ''}
+                                              {session.type}{subName(session.subSectionId) ? ` · ${subName(session.subSectionId)}` : ''}
                                             </span>
                                           )}
                                         </div>
 
                                         <div className="text-xs font-semibold text-stone-900 dark:text-zinc-100 line-clamp-1">
-                                          {course?.name ?? session.courseId}
+                                          {courseName(course) || session.type}
                                         </div>
 
                                         <div className="text-[11px] text-stone-500 dark:text-zinc-400 mt-1 flex items-center justify-between">
@@ -817,8 +819,7 @@ export function StudentPortalView() {
                               >
                                 <div className="font-medium text-stone-900 dark:text-zinc-100 flex items-center gap-2">
                                   <span className="font-mono font-bold text-[#8C1B2E]">{course?.code ?? '—'}</span>
-                                  <span>·</span>
-                                  <span>{course?.name ?? session.courseId}</span>
+                                  {courseName(course) && <><span>·</span><span>{courseName(course)}</span></>}
                                   {session.status === 'Cancelled' && (
                                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-100 dark:bg-rose-950 text-rose-800 dark:text-rose-300 font-medium">
                                       Cancelled
@@ -888,10 +889,12 @@ export function StudentPortalView() {
                         <span className="font-bold text-sm text-[#8C1B2E] dark:text-red-400 font-mono">
                           {course.code}
                         </span>
-                        <span className="text-stone-300">·</span>
-                        <h3 className="font-bold text-sm text-stone-900 dark:text-zinc-100">
-                          {course.name}
-                        </h3>
+                        {courseName(course) && (
+                          <>
+                            <span className="text-stone-300">·</span>
+                            <h3 className="font-bold text-sm text-stone-900 dark:text-zinc-100">{courseName(course)}</h3>
+                          </>
+                        )}
                         <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-white dark:bg-zinc-800 text-stone-600 dark:text-zinc-400 border border-[#E5E2D9] dark:border-zinc-700">
                           {course.credits} Credits
                         </span>
@@ -955,7 +958,7 @@ export function StudentPortalView() {
             <div className="p-4 rounded-xl bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800">
               <span className="text-[11px] text-stone-500 dark:text-zinc-400 block mb-0.5">Home Classroom</span>
               <span className="text-base font-bold text-stone-900 dark:text-zinc-100 font-serif">
-                {homeRoom?.name ?? 'LT-101'}
+                {homeRoom?.name ?? '—'}
               </span>
             </div>
 
@@ -968,10 +971,10 @@ export function StudentPortalView() {
 
             <div className="p-4 rounded-xl bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800">
               <span className="text-[11px] text-stone-500 dark:text-zinc-400 mb-0.5 flex items-center gap-1.5">
-                Faculty Mentor
+                Registered Courses
               </span>
               <span className="text-xs font-semibold text-stone-900 dark:text-zinc-100 truncate block">
-                {facultyMentor?.name || 'Dr. Arvind Sharma'}
+                {enrolledCourses.length}
               </span>
             </div>
           </div>
@@ -1042,7 +1045,7 @@ export function StudentPortalView() {
             <div className="flex items-start justify-between">
               <div>
                 <span className="text-[11px] font-mono font-bold text-[#8C1B2E] dark:text-red-400">
-                  {courseOf(selectedSession.courseId)?.code}
+                  {courseName(courseOf(selectedSession.courseId)) && courseOf(selectedSession.courseId)?.code}
                 </span>
                 <h3 id="student-session-dialog-title" className="text-base font-bold font-serif mt-0.5">
                   {courseOf(selectedSession.courseId)?.name ?? selectedSession.courseId}
@@ -1120,7 +1123,7 @@ export function StudentPortalView() {
             <div className="flex items-start justify-between">
               <div>
                 <span className="text-[11px] font-mono font-bold text-[#8C1B2E] dark:text-red-400">
-                  {selectedCourseDetail.code}
+                  {courseName(selectedCourseDetail) && selectedCourseDetail.code}
                 </span>
                 <h3 id="student-course-dialog-title" className="text-base font-bold font-serif mt-0.5">
                   {selectedCourseDetail.name}

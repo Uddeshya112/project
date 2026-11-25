@@ -61,6 +61,8 @@ export function DashboardLayout({
     notice,
     dismissNotice,
     resetDemoAcademicData,
+    saveError,
+    clearSaveError,
   } = useTimetable();
 
   const {
@@ -188,7 +190,7 @@ export function DashboardLayout({
       {/* 1. Compact Enterprise Header */}
       <header className="study-topbar h-12 bg-[#FAF9F5] dark:bg-zinc-900 border-b border-[#E5E2D9] dark:border-zinc-800 px-3 sm:px-5 flex items-center justify-between sticky top-0 z-30">
         {/* Left: Mobile Drawer Trigger + Portal Context */}
-        <div className="flex items-center gap-2.5">
+        <div className="flex min-w-0 items-center gap-2.5">
           <button
             onClick={() => setIsMobileNavOpen(!isMobileNavOpen)}
             aria-label={isMobileNavOpen ? 'Close navigation menu' : 'Open navigation menu'}
@@ -197,14 +199,14 @@ export function DashboardLayout({
             <Menu className="h-4 w-4" />
           </button>
 
-          <span className="text-xs text-stone-600 dark:text-zinc-400 font-semibold">{getWorkspaceTitle()}</span>
+          <span className="truncate text-xs text-stone-600 dark:text-zinc-400 font-semibold">{getWorkspaceTitle()}</span>
         </div>
 
         {/* Right: Multi-Role Switcher + Theme Toggle + Notifications + User Profile */}
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-1 sm:gap-2">
           <div ref={topbarMenusRef} className="flex items-center gap-2">
-          {currentUser?.isDemoUser && (
-            <div className="relative">
+          {currentUser?.isDemoUser && (currentWorkspace === 'Coordinator' || currentWorkspace === 'Admin') && (
+            <div className="relative hidden sm:block">
               <button type="button" aria-haspopup="menu" aria-expanded={openTopbarMenu === 'presentation'} onClick={() => setOpenTopbarMenu(openTopbarMenu === 'presentation' ? null : 'presentation')} className="inline-flex items-center gap-1 rounded-md border border-[#E5E2D9] bg-white px-2 py-1 text-[10px] font-semibold text-stone-600 hover:text-[#8C1B2E] dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">Presentation controls <ChevronDown className="h-3 w-3" /></button>
               {openTopbarMenu === 'presentation' && (
               <div className="absolute right-0 mt-1 z-40 rounded-lg border border-[#E5E2D9] bg-white p-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
@@ -212,7 +214,7 @@ export function DashboardLayout({
               type="button"
               disabled={resettingDemo}
               onClick={async () => {
-                if (!window.confirm('Restore the shared demo timetable and academic data to its seeded state?')) return;
+                if (!window.confirm('Replace all academic data, including any imported timetable, with the built-in sample data? This cannot be undone.')) return;
                 setResettingDemo(true);
                 try {
                   const result = await resetDemoAcademicData();
@@ -410,6 +412,12 @@ export function DashboardLayout({
           <button onClick={dismissNotice} aria-label="Dismiss message" className="p-0.5 rounded hover:bg-black/5">
             <X className="h-3.5 w-3.5" />
           </button>
+        </div>
+      )}
+      {saveError && (
+        <div role="alert" className="fixed bottom-4 right-4 left-4 sm:left-auto sm:max-w-sm z-[72] rounded-xl border p-3 text-xs shadow-lg border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-800 dark:bg-rose-950 dark:text-rose-200 flex items-start justify-between gap-3">
+          <span>{saveError}</span>
+          <button type="button" onClick={clearSaveError} aria-label="Dismiss message" className="font-bold">×</button>
         </div>
       )}
       {resetToast && (

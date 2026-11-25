@@ -30,8 +30,6 @@ import {
 } from '../types';
 import {
   validateTimetableIndependently,
-  validateProposedSessionMove,
-  validateProposedSessionSwap,
   IndependentValidationReport,
   ViolationDetail
 } from '../lib/independentValidator';
@@ -227,13 +225,15 @@ interface TimetableContextType {
   // Validation & Generation Engine
   runValidation: () => ValidationReport;
   resetDemoAcademicData: () => Promise<{ success: boolean; message?: string }>;
+  saveError: string;
+  clearSaveError: () => void;
   generateDraftTimetable: () => Promise<{ isSuccess: boolean; sessionsGenerated: number; conflicts: string[]; scheduledHours: number; totalHours: number }>;
-  updatePublishStatus: (status: TimetablePublishStatus, reviewerName?: string) => Promise<{ success: boolean }>;
+  updatePublishStatus: (status: 'Review' | 'Approved' | 'Published') => Promise<{ success: boolean; message?: string }>;
   bulkImportData: (type: 'faculty' | 'courses' | 'rooms' | 'sections' | 'allocations', records: any[]) => { successCount: number; errors: string[] };
   commitMasterImport: (
     parsedData: ExcelImportPreview['parsedData'],
     mode?: 'upsert' | 'replace'
-  ) => { success: boolean; importedCount: number; message: string };
+  ) => Promise<{ success: boolean; importedCount: number; message: string }>;
   bulkGenerateGroups: (params: {
     programName: string;
     batchYear: number;
@@ -243,10 +243,10 @@ interface TimetableContextType {
     numSubgroupsPerGroup: number;
     subgroupNamingPattern?: string;
     departmentId?: string;
-  }) => StudentSection[];
+  }) => Promise<{ success: boolean; message: string }>;
 
   // Routine Timetable Operations
-  cancelSession: (sessionId: string, reason: string) => Promise<{ success: boolean }>;
+  cancelSession: (sessionId: string, reason: string) => Promise<{ success: boolean; message?: string }>;
   undoCancellation: (sessionId: string) => Promise<{ success: boolean }>;
   scheduleMakeup: (opportunityId: string) => Promise<{ success: boolean }>;
   votePoll: (pollId: string, optionId: string) => Promise<{ success: boolean }>;
@@ -254,13 +254,12 @@ interface TimetableContextType {
   toggleSessionLock: (sessionId: string, reason?: string) => Promise<{ success: boolean; message?: string }>;
   setFacultyProtectedSlot: (facultyId: string, day: DayOfWeek, periodId: string, reason: 'Research' | 'Lunch' | 'Personal' | 'Department' | 'Meeting') => Promise<{ success: boolean }>;
   restoreVersion: (versionNumber: number) => Promise<{ success: boolean; message?: string }>;
-  applySimulation: () => void;
   markNotificationRead: (id: string) => Promise<void>;
   triggerAutoMatchAll: () => void;
   requestStudentMakeup: (courseId: string, sectionId: string) => Promise<{ success: boolean }>;
   declineOpportunity: (opportunityId: string) => Promise<{ success: boolean }>;
-  claimMarketplaceSlot: (courseId: string, sectionId: string, day: DayOfWeek, timeSlotId: string, roomId: string, type: string) => Promise<{ success: boolean }>;
-  requestSubstituteCover: (substituteFacultyId: string, courseId: string, sectionId: string, day: DayOfWeek, timeSlotId: string) => Promise<{ success: boolean }>;
+  claimMarketplaceSlot: (courseId: string, sectionId: string, day: DayOfWeek, timeSlotId: string, roomId: string, type: string, facultyId: string) => Promise<{ success: boolean }>;
+  requestSubstituteCover: (substituteFacultyId: string, sessionId: string) => Promise<{ success: boolean }>;
   addSession: (sessionData: Omit<ClassSession, 'id' | 'version'>) => Promise<{ isSuccess: boolean; error?: string }>;
   deleteSession: (sessionId: string) => Promise<{ success: boolean; message?: string }>;
 
@@ -284,13 +283,12 @@ interface TimetableContextType {
     validationReports: IndependentValidationReport[];
     diagnostics?: string[];
   };
-  generateDualRoutinesAPI: () => Promise<GenerationResponse>;
+  generateDualRoutinesAPI: (budgetMode?: 'FAST' | 'BALANCED' | 'MAXIMUM_OPTIMIZATION') => Promise<GenerationResponse>;
   selectRoutineAPI: (versionNumber: number) => Promise<{ success: boolean; message?: string }>;
   latestGeneratedRoutines: GenerationRoutine[] | null;
   setLatestGeneratedRoutines: (routines: GenerationRoutine[] | null) => void;
   applyCandidateAsDraft: (candidate: GeneratedCandidate) => void;
   publishMasterTimetable: (reviewerName?: string) => Promise<{ success: boolean; error?: string }>;
-  unpublishMasterTimetable: () => Promise<{ success: boolean }>;
   compareTimetableVersions: (versionNumberA: number, versionNumberB: number) => Array<{
     courseCode: string;
     courseName: string;
@@ -399,6 +397,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
   const [selectedSectionId, setSelectedSectionId] = useState<string>('sec-cse-a');
   const [selectedRoomId, setSelectedRoomId] = useState<string>('room-cr-1');
   const [latestGeneratedRoutines, setLatestGeneratedRoutines] = useState<GenerationRoutine[] | null>(null);
+  const [saveError, setSaveError] = useState('');
 
   const getAuthHeaders = (): Record<string, string> => {
     return {
@@ -412,6 +411,58 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       'Content-Type': 'application/json',
       'X-Requested-With': 'XMLHttpRequest',
     };
+  };
+
+  // Reloads what the server holds, so the screen never shows a change that was not saved.
+  const refreshAcademicData = async () => {
+    const response = await fetch(apiUrl('/api/academic/bootstrap'), { credentials: 'same-origin', cache: 'no-cache', headers: getAuthHeaders() });
+    if (response.ok) applyBootstrapData(await response.json());
+  };
+
+  /** Save a change on the server, then show what the server holds. A refused change is reported, never shown as done. */
+  const saveChange = async (path: string, method: string, body: unknown = {}): Promise<{ success: boolean; message: string; error?: string; data?: any }> => {
+    let message = 'Could not reach the server. The change was not saved.';
+    let saved: any;
+    try {
+      const response = await fetch(apiUrl(path), { method, credentials: 'same-origin', headers: getAuthHeaders(), body: JSON.stringify(body) });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data.success !== false) saved = data;
+      else message = data.message || `The change was not saved (${response.status}).`;
+    } catch {
+      // The message above already says what happened.
+    }
+    setSaveError(saved ? '' : message);
+    // When this reload fails, the next automatic refresh shows the saved data.
+    await refreshAcademicData().catch(() => undefined);
+    return saved ? { success: true, message: saved.message || 'Saved.', data: saved } : { success: false, message, error: message };
+  };
+
+  // An import or reset can remove the selected record; show the first one rather than an empty timetable.
+  useEffect(() => {
+    if (sections.length > 0 && !sections.some(item => item.id === selectedSectionId)) setSelectedSectionId(sections[0].id);
+    if (facultyMembers.length > 0 && !facultyMembers.some(item => item.id === selectedFacultyId)) setSelectedFacultyId(facultyMembers[0].id);
+    if (rooms.length > 0 && !rooms.some(item => item.id === selectedRoomId)) setSelectedRoomId(rooms[0].id);
+  }, [sections, facultyMembers, rooms, selectedSectionId, selectedFacultyId, selectedRoomId]);
+
+  const applyBootstrapData = (data: any) => {
+    if (data.academicYear) setAcademicYear(data.academicYear);
+    if (Array.isArray(data.departments)) setDepartments(data.departments);
+    if (Array.isArray(data.programs)) setPrograms(data.programs);
+    if (Array.isArray(data.courses)) setCourses(data.courses);
+    if (Array.isArray(data.facultyMembers)) setFacultyMembers(data.facultyMembers);
+    if (Array.isArray(data.rooms)) setRooms(data.rooms);
+    if (Array.isArray(data.sections)) setSections(data.sections);
+    if (Array.isArray(data.allocations)) setAllocations(data.allocations);
+    if (Array.isArray(data.constraints)) setConstraints(data.constraints);
+    if (Array.isArray(data.sessions)) setSessions(data.sessions);
+    if (Array.isArray(data.publishedSessions)) setPublishedSessions(data.publishedSessions);
+    if (Array.isArray(data.versions)) setVersions(data.versions);
+    if (Array.isArray(data.notifications)) setNotifications(data.notifications);
+    if (Array.isArray(data.makeupTasks)) setMakeupTasks(data.makeupTasks);
+    if (Array.isArray(data.recoveryOpportunities)) setRecoveryOpportunities(data.recoveryOpportunities);
+    if (Array.isArray(data.polls)) setPolls(data.polls);
+    if (Array.isArray(data.auditLogs)) setAuditLogs(data.auditLogs);
+    if (data.publishStatus) setPublishStatus(data.publishStatus);
   };
 
   // Load shared academic state only after authentication. Polling while signed
@@ -438,24 +489,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         if (res.ok) {
           const data = await res.json();
           if (data.success && isMounted) {
-            if (data.academicYear) setAcademicYear(data.academicYear);
-            if (Array.isArray(data.departments)) setDepartments(data.departments);
-            if (Array.isArray(data.programs)) setPrograms(data.programs);
-            if (Array.isArray(data.courses)) setCourses(data.courses);
-            if (Array.isArray(data.facultyMembers)) setFacultyMembers(data.facultyMembers);
-            if (Array.isArray(data.rooms)) setRooms(data.rooms);
-            if (Array.isArray(data.sections)) setSections(data.sections);
-            if (Array.isArray(data.allocations)) setAllocations(data.allocations);
-            if (Array.isArray(data.constraints)) setConstraints(data.constraints);
-            if (Array.isArray(data.sessions)) setSessions(data.sessions);
-            if (Array.isArray(data.publishedSessions)) setPublishedSessions(data.publishedSessions);
-            if (Array.isArray(data.versions)) setVersions(data.versions);
-            if (Array.isArray(data.notifications)) setNotifications(data.notifications);
-            if (Array.isArray(data.makeupTasks)) setMakeupTasks(data.makeupTasks);
-            if (Array.isArray(data.recoveryOpportunities)) setRecoveryOpportunities(data.recoveryOpportunities);
-            if (Array.isArray(data.polls)) setPolls(data.polls);
-            if (Array.isArray(data.auditLogs)) setAuditLogs(data.auditLogs);
-            if (data.publishStatus) setPublishStatus(data.publishStatus);
+            applyBootstrapData(data);
           }
         }
       } catch (err) {
@@ -500,26 +534,13 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
 
   // Computed Health Score
   const health = useMemo(() => {
-    return calculateHealthScore(sessions, rooms, facultyMembers, sections, courses);
-  }, [sessions, rooms, facultyMembers, sections, courses]);
+    return calculateHealthScore(sessions, rooms, facultyMembers, sections, courses, academicYear);
+  }, [sessions, rooms, facultyMembers, sections, courses, academicYear]);
 
   // CRUD: Academic Year
   const updateAcademicYear = async (updates: Partial<AcademicYearConfig>) => {
-    setAcademicYear(prev => ({ ...prev, ...updates }));
-    setAuditLogs(prev => [
-      {
-        id: `log-${Date.now()}`,
-        timestamp: new Date().toLocaleString(),
-        userId: 'coordinator',
-        userName: 'Timetable Coordinator',
-        action: 'ACADEMIC_YEAR_CONFIG_UPDATED',
-        entityType: 'AcademicYearConfig',
-        entityId: academicYear.id,
-        details: 'Updated semester calendar and working period parameters.',
-      },
-      ...prev,
-    ]);
-    return { success: true, message: 'Success' };
+    const { yearLabel, semesterType, semesterNumber, workingDays } = updates;
+    return saveChange('/api/academic/year', 'PUT', { yearLabel, semesterType, semesterNumber, workingDays });
   };
 
   // CRUD: Departments
@@ -528,41 +549,25 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     const newDept: Department = { ...dept, id: newId };
     setDepartments(prev => [...prev, newDept]);
 
-    fetch('/api/academic/departments', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(dept),
-    }).catch(err => console.warn('[SUPABASE_API] Department persistence notice:', err));
-    return { success: true, message: 'Success' };
+    return saveChange('/api/academic/departments', 'POST', dept);
   };
 
   const updateDepartment = async (id: string, updates: Partial<Department>) => {
     setDepartments(prev => prev.map(d => (d.id === id ? { ...d, ...updates } : d)));
 
-    fetch(`/api/academic/departments/${encodeURIComponent(id)}`, {
-      method: 'PUT',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(updates),
-    }).catch(err => console.warn('[SUPABASE_API] Department update notice:', err));
-    return { success: true, message: 'Success' };
+    return saveChange(`/api/academic/departments/${encodeURIComponent(id)}`, 'PUT', updates);
   };
 
   const deleteDepartment = async (id: string) => {
     setDepartments(prev => prev.filter(d => d.id !== id));
 
-    fetch(`/api/academic/departments/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders(),
-    }).catch(err => console.warn('[SUPABASE_API] Department deletion notice:', err));
-    return { success: true, message: 'Success' };
+    return saveChange(`/api/academic/departments/${encodeURIComponent(id)}`, 'DELETE');
   };
 
   const toggleDepartmentStatus = async (id: string) => {
     const dept = departments.find(d => d.id === id);
     if (!dept) return { success: false, error: 'Department not found' };
-    const nextStatus = dept.status === 'Active' ? 'Inactive' : 'Active';
-    await updateDepartment(id, { status: nextStatus });
-    return { success: true, message: 'Success' };
+    return updateDepartment(id, { status: dept.status === 'Active' ? 'Inactive' : 'Active' });
   };
 
   // CRUD: Programs
@@ -571,33 +576,19 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     const newProg: Program = { ...prog, id: newId };
     setPrograms(prev => [...prev, newProg]);
 
-    fetch('/api/academic/programs', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(prog),
-    }).catch(err => console.warn('[SUPABASE_API] Program persistence notice:', err));
-    return { success: true, message: 'Success' };
+    return saveChange('/api/academic/programs', 'POST', prog);
   };
 
   const updateProgram = async (id: string, updates: Partial<Program>) => {
     setPrograms(prev => prev.map(p => (p.id === id ? { ...p, ...updates } : p)));
 
-    fetch(`/api/academic/programs/${encodeURIComponent(id)}`, {
-      method: 'PUT',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(updates),
-    }).catch(err => console.warn('[SUPABASE_API] Program update notice:', err));
-    return { success: true, message: 'Success' };
+    return saveChange(`/api/academic/programs/${encodeURIComponent(id)}`, 'PUT', updates);
   };
 
   const deleteProgram = async (id: string) => {
     setPrograms(prev => prev.filter(p => p.id !== id));
 
-    fetch(`/api/academic/programs/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders(),
-    }).catch(err => console.warn('[SUPABASE_API] Program deletion notice:', err));
-    return { success: true, message: 'Success' };
+    return saveChange(`/api/academic/programs/${encodeURIComponent(id)}`, 'DELETE');
   };
 
   // CRUD: Rooms & Labs
@@ -606,40 +597,25 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     const newRoom: Room = { ...room, id: newId };
     setRooms(prev => [...prev, newRoom]);
 
-    fetch('/api/academic/rooms', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(room),
-    }).catch(err => console.warn('[SUPABASE_API] Room persistence notice:', err));
-    return { success: true, message: 'Success' };
+    return saveChange('/api/academic/rooms', 'POST', room);
   };
 
   const updateRoom = async (id: string, updates: Partial<Room>) => {
     setRooms(prev => prev.map(r => (r.id === id ? { ...r, ...updates } : r)));
 
-    fetch(`/api/academic/rooms/${encodeURIComponent(id)}`, {
-      method: 'PUT',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(updates),
-    }).catch(err => console.warn('[SUPABASE_API] Room update notice:', err));
-    return { success: true, message: 'Success' };
+    return saveChange(`/api/academic/rooms/${encodeURIComponent(id)}`, 'PUT', updates);
   };
 
   const deleteRoom = async (id: string) => {
     setRooms(prev => prev.filter(r => r.id !== id));
 
-    fetch(`/api/academic/rooms/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders(),
-    }).catch(err => console.warn('[SUPABASE_API] Room deletion notice:', err));
-    return { success: true, message: 'Success' };
+    return saveChange(`/api/academic/rooms/${encodeURIComponent(id)}`, 'DELETE');
   };
 
   const toggleRoomAvailability = async (id: string) => {
     const rm = rooms.find(r => r.id === id);
     if (!rm) return { success: false, error: 'Room not found' };
-    await updateRoom(id, { isAvailable: !rm.isAvailable });
-    return { success: true, message: 'Success' };
+    return updateRoom(id, { isAvailable: !rm.isAvailable });
   };
 
   // CRUD: Faculty
@@ -648,45 +624,25 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     const newFac: Faculty = { ...fac, id: newId };
     setFacultyMembers(prev => [...prev, newFac]);
 
-    fetch('/api/academic/faculty', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(fac),
-    }).catch(err => console.warn('[SUPABASE_API] Faculty persistence notice:', err));
-    return { success: true, message: 'Success' };
+    return saveChange('/api/academic/faculty', 'POST', fac);
   };
 
   const updateFaculty = async (id: string, updates: Partial<Faculty>) => {
     setFacultyMembers(prev => prev.map(f => (f.id === id ? { ...f, ...updates } : f)));
 
-    fetch(`/api/academic/faculty/${encodeURIComponent(id)}`, {
-      method: 'PUT',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(updates),
-    }).catch(err => console.warn('[SUPABASE_API] Faculty update notice:', err));
-    return { success: true, message: 'Success' };
+    return saveChange(`/api/academic/faculty/${encodeURIComponent(id)}`, 'PUT', updates);
   };
 
   const deleteFaculty = async (id: string) => {
     setFacultyMembers(prev => prev.filter(f => f.id !== id));
 
-    fetch(`/api/academic/faculty/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders(),
-    }).catch(err => console.warn('[SUPABASE_API] Faculty deletion notice:', err));
-    return { success: true, message: 'Success' };
+    return saveChange(`/api/academic/faculty/${encodeURIComponent(id)}`, 'DELETE');
   };
 
   const toggleFacultyStatus = async (id: string) => {
-    setFacultyMembers(prev =>
-      prev.map(f => {
-        if (f.id !== id) return f;
-        const nextStatus = f.status === 'Active' ? 'Inactive' : 'Active';
-        updateFaculty(id, { status: nextStatus });
-        return { ...f, status: nextStatus };
-      })
-    );
-    return { success: true, message: 'Success' };
+    const faculty = facultyMembers.find(f => f.id === id);
+    if (!faculty) return { success: false, error: 'Faculty member not found' };
+    return updateFaculty(id, { status: faculty.status === 'Active' ? 'Inactive' : 'Active' });
   };
 
   const updateFacultyAvailability = async (id: string, preferences: Faculty['preferences']) => {
@@ -707,33 +663,19 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     };
     setSections(prev => [...prev, newSec]);
 
-    fetch('/api/academic/groups', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(sec),
-    }).catch(err => console.warn('[SUPABASE_API] Cohort persistence notice:', err));
-    return { success: true, message: 'Success' };
+    return saveChange('/api/academic/groups', 'POST', sec);
   };
 
   const updateSection = async (id: string, updates: Partial<StudentSection>) => {
     setSections(prev => prev.map(s => (s.id === id ? { ...s, ...updates } : s)));
 
-    fetch(`/api/academic/groups/${encodeURIComponent(id)}`, {
-      method: 'PUT',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(updates),
-    }).catch(err => console.warn('[SUPABASE_API] Cohort update notice:', err));
-    return { success: true, message: 'Success' };
+    return saveChange(`/api/academic/groups/${encodeURIComponent(id)}`, 'PUT', updates);
   };
 
   const deleteSection = async (id: string) => {
     setSections(prev => prev.filter(s => s.id !== id));
 
-    fetch(`/api/academic/groups/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders(),
-    }).catch(err => console.warn('[SUPABASE_API] Cohort deletion notice:', err));
-    return { success: true, message: 'Success' };
+    return saveChange(`/api/academic/groups/${encodeURIComponent(id)}`, 'DELETE');
   };
 
   const addSubSection = async (sectionId: string, subSec: Omit<SubSection, 'id' | 'sectionId'>) => {
@@ -753,12 +695,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       })
     );
 
-    fetch('/api/academic/subgroups', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify({ groupId: sectionId, name: subSec.name, studentCount: subSec.studentCount, type: subSec.type }),
-    }).catch(err => console.warn('[SUPABASE_API] Subgroup persistence notice:', err));
-    return { success: true, message: 'Success' };
+    return saveChange('/api/academic/subgroups', 'POST', { groupId: sectionId, name: subSec.name, studentCount: subSec.studentCount, type: subSec.type });
   };
 
   const deleteSubSection = async (sectionId: string, subSecId: string) => {
@@ -772,11 +709,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       })
     );
 
-    fetch(`/api/academic/subgroups/${encodeURIComponent(sectionId)}/${encodeURIComponent(subSecId)}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders(),
-    }).catch(err => console.warn('[SUPABASE_API] Subgroup deletion notice:', err));
-    return { success: true, message: 'Success' };
+    return saveChange(`/api/academic/subgroups/${encodeURIComponent(sectionId)}/${encodeURIComponent(subSecId)}`, 'DELETE');
   };
 
   // CRUD: Courses
@@ -788,41 +721,25 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     };
     setCourses(prev => [...prev, newCourse]);
 
-    fetch('/api/academic/courses', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(course),
-    }).catch(err => console.warn('[SUPABASE_API] Course persistence notice:', err));
-    return { success: true, message: 'Success' };
+    return saveChange('/api/academic/courses', 'POST', course);
   };
 
   const updateCourse = async (id: string, updates: Partial<Course>) => {
     setCourses(prev => prev.map(c => (c.id === id ? { ...c, ...updates } : c)));
 
-    fetch(`/api/academic/courses/${encodeURIComponent(id)}`, {
-      method: 'PUT',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(updates),
-    }).catch(err => console.warn('[SUPABASE_API] Course update notice:', err));
-    return { success: true, message: 'Success' };
+    return saveChange(`/api/academic/courses/${encodeURIComponent(id)}`, 'PUT', updates);
   };
 
   const deleteCourse = async (id: string) => {
     setCourses(prev => prev.filter(c => c.id !== id));
 
-    fetch(`/api/academic/courses/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders(),
-    }).catch(err => console.warn('[SUPABASE_API] Course deletion notice:', err));
-    return { success: true, message: 'Success' };
+    return saveChange(`/api/academic/courses/${encodeURIComponent(id)}`, 'DELETE');
   };
 
   const toggleCourseStatus = async (id: string) => {
     const crs = courses.find(c => c.id === id);
     if (!crs) return { success: false, error: 'Course not found' };
-    const nextStatus = crs.status === 'Active' ? 'Archived' : 'Active';
-    await updateCourse(id, { status: nextStatus });
-    return { success: true, message: 'Success' };
+    return updateCourse(id, { status: crs.status === 'Active' ? 'Archived' : 'Active' });
   };
 
   // CRUD: Course Allocations
@@ -835,33 +752,19 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     };
     setAllocations(prev => [...prev, newAlloc]);
 
-    fetch('/api/academic/allocations', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(alloc),
-    }).catch(err => console.warn('[SUPABASE_API] Allocation persistence notice:', err));
-    return { success: true, message: 'Success' };
+    return saveChange('/api/academic/allocations', 'POST', alloc);
   };
 
   const updateAllocation = async (id: string, updates: Partial<CourseAllocation>) => {
     setAllocations(prev => prev.map(a => (a.id === id ? { ...a, ...updates } : a)));
 
-    fetch(`/api/academic/allocations/${encodeURIComponent(id)}`, {
-      method: 'PUT',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(updates),
-    }).catch(err => console.warn('[SUPABASE_API] Allocation update notice:', err));
-    return { success: true, message: 'Success' };
+    return saveChange(`/api/academic/allocations/${encodeURIComponent(id)}`, 'PUT', updates);
   };
 
   const deleteAllocation = async (id: string) => {
     setAllocations(prev => prev.filter(a => a.id !== id));
 
-    fetch(`/api/academic/allocations/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders(),
-    }).catch(err => console.warn('[SUPABASE_API] Allocation deletion notice:', err));
-    return { success: true, message: 'Success' };
+    return saveChange(`/api/academic/allocations/${encodeURIComponent(id)}`, 'DELETE');
   };
 
   // CRUD: Constraints
@@ -880,8 +783,8 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
   };
 
   const toggleConstraint = async (id: string) => {
-    setConstraints(prev => prev.map(c => (c.id === id ? { ...c, isActive: !c.isActive } : c)));
-    return { success: true, message: 'Success' };
+    const constraint = constraints.find(c => c.id === id);
+    return saveChange(`/api/academic/constraints/${encodeURIComponent(id)}`, 'PUT', { isActive: !constraint?.isActive });
   };
 
   // Pre-generation Validation Run
@@ -943,7 +846,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       const applied = await applyResponse.json().catch(() => ({}));
       if (!applyResponse.ok || !applied.success) throw new Error(applied.message || 'Generated schedule could not be saved.');
 
-      setSessions(candidate.sessions);
+      setSessions(applied.version?.sessions?.length ? applied.version.sessions : candidate.sessions);
       setPublishStatus('Draft');
       if (applied.version) setVersions((previous) => [applied.version, ...previous.filter((version) => version.id !== applied.version.id)]);
       setAuditLogs((previous) => [{
@@ -958,44 +861,10 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
   };
 
   // Publish Status Lifecycle
-  const updatePublishStatus = async (status: TimetablePublishStatus, reviewerName?: string): Promise<{ success: boolean }> => {
-    if (status === 'Approved' || status === 'Published') {
-      try {
-        const endpoint = status === 'Approved' ? '/api/timetable/approve' : '/api/timetable/publish';
-        const response = await fetch(apiUrl(endpoint), {
-          method: 'POST', credentials: 'same-origin', headers: getAuthHeaders(),
-          body: JSON.stringify({ versionId: `V${versions[0]?.versionNumber || 1}.0` }),
-        });
-        if (!response.ok) return { success: false };
-      } catch {
-        return { success: false };
-      }
-    }
-    setPublishStatus(status);
-    setAcademicYear(prev => ({
-      ...prev,
-      publishStatus: status,
-      approvedBy: status === 'Approved' || status === 'Published' ? reviewerName || 'Dean Academic Affairs' : prev.approvedBy,
-      approvedAt: status === 'Approved' ? new Date().toISOString() : prev.approvedAt,
-      publishedAt: status === 'Published' ? new Date().toISOString() : prev.publishedAt,
-    }));
-
-    setAuditLogs(prev => [
-      {
-        id: `log-${Date.now()}`,
-        timestamp: new Date().toLocaleString(),
-        userId: 'coordinator',
-        userName: 'Timetable Coordinator',
-        action: `TIMETABLE_STATUS_${status.toUpperCase()}`,
-        entityType: 'TimetablePublishStatus',
-        entityId: academicYear.id,
-        details: `Updated schedule lifecycle state to ${status}.`,
-      },
-      ...prev,
-    ]);
-
-    return { success: true };
-  };
+  const updatePublishStatus = async (status: 'Review' | 'Approved' | 'Published'): Promise<{ success: boolean; message?: string }> =>
+    status === 'Review' ? saveChange('/api/timetable/submit', 'POST')
+      : status === 'Approved' ? saveChange('/api/timetable/approve', 'POST', { versionId: `V${versions[0]?.versionNumber || 1}.0` })
+        : saveChange('/api/timetable/publish', 'POST');
 
   // ---------------------------------------------------------------------------
   // Independent Validation & Controlled Manual Editing Pipeline
@@ -1017,201 +886,17 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     targetTimeSlotId: string,
     targetRoomId: string,
     reason = 'Manual Coordinator Adjustment'
-  ): Promise<{ success: boolean; error?: string }> => {
-    const valResult = validateProposedSessionMove(
-      sessions,
-      sessionId,
-      targetDay,
-      targetTimeSlotId,
-      targetRoomId,
-      {
-        academicYear,
-        allocations,
-        facultyMembers,
-        rooms,
-        sections,
-        courses
-      }
-    );
-
-    if (!valResult.allowed) {
-      return {
-        success: false,
-        error: valResult.blockingReason || 'Cannot move session: would violate scheduling constraints.'
-      };
-    }
-
-    const targetSession = sessions.find(s => s.id === sessionId);
-    if (!targetSession) return { success: false, error: 'Session not found' };
-
-    const oldDay = targetSession.day;
-    const oldSlot = targetSession.timeSlotId;
-    const oldRoom = targetSession.roomId;
-
-    const updatedSessions = sessions.map(s => {
-      if (s.id !== sessionId) return s;
-      return {
-        ...s,
-        day: targetDay,
-        timeSlotId: targetTimeSlotId,
-        roomId: targetRoomId,
-        version: (s.version || 1) + 1
-      };
-    });
-
-    try {
-      const response = await fetch(apiUrl('/api/timetable/move'), {
-        method: 'POST', credentials: 'same-origin', headers: getAuthHeaders(),
-        body: JSON.stringify({ sessionId, targetDay, targetTimeSlotId, targetRoomId, reason }),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data.success) return { success: false, error: data.message || 'Server rejected the session move.' };
-    } catch {
-      return { success: false, error: 'Could not reach the timetable service. The session was not moved.' };
-    }
-
-    setSessions(updatedSessions);
-    if (publishStatus === 'Published') {
-      setPublishStatus('Draft');
-    }
-
-    const newVerNum = versions.length + 1;
-    const courseObj = courses.find(c => c.id === targetSession.courseId);
-    const roomObj = rooms.find(r => r.id === targetRoomId);
-
-    const newVersion: TimetableVersion = {
-      versionNumber: newVerNum,
-      versionLabel: `Draft V${newVerNum}.0`,
-      createdAt: new Date().toISOString(),
-      createdBy: 'Timetable Coordinator',
-      changeSummary: `${courseObj?.code || targetSession.courseId} moved from ${oldDay} ${oldSlot} to ${targetDay} ${targetTimeSlotId} in ${roomObj?.name || targetRoomId}`,
-      reason,
-      isPublished: false,
-      healthScore: 98,
-      sessions: updatedSessions
-    };
-    setVersions(prev => [newVersion, ...prev]);
-
-    setAuditLogs(prev => [
-      {
-        id: `log-move-${Date.now()}`,
-        timestamp: new Date().toLocaleString(),
-        userId: 'coordinator',
-        userName: 'Timetable Coordinator',
-        action: 'SESSION_MANUALLY_MOVED',
-        entityType: 'ClassSession',
-        entityId: sessionId,
-        details: `${courseObj?.code || targetSession.courseId} moved: ${oldDay} ${oldSlot} (${oldRoom}) -> ${targetDay} ${targetTimeSlotId} (${targetRoomId}). Independent validation: PASS.`
-      },
-      ...prev
-    ]);
-
-    return { success: true };
-  };
+  ): Promise<{ success: boolean; error?: string }> =>
+    saveChange('/api/timetable/move', 'POST', { sessionId, targetDay, targetTimeSlotId, targetRoomId, reason });
 
   const swapSessionsWithValidation = async (
     sessionAId: string,
     sessionBId: string,
-    reason = 'Manual Coordinator Swap'
-  ): Promise<{ success: boolean; error?: string }> => {
-    const valResult = validateProposedSessionSwap(
-      sessions,
-      sessionAId,
-      sessionBId,
-      {
-        academicYear,
-        allocations,
-        facultyMembers,
-        rooms,
-        sections,
-        courses
-      }
-    );
+    reason = 'Manual Session Swap'
+  ): Promise<{ success: boolean; error?: string }> =>
+    saveChange('/api/timetable/swap', 'POST', { sessionAId, sessionBId, reason });
 
-    if (!valResult.allowed) {
-      return {
-        success: false,
-        error: valResult.blockingReason || 'Cannot swap sessions: results in a constraint violation.'
-      };
-    }
-
-    const sessionA = sessions.find(s => s.id === sessionAId);
-    const sessionB = sessions.find(s => s.id === sessionBId);
-    if (!sessionA || !sessionB) return { success: false, error: 'One or both sessions not found' };
-
-    const updatedSessions = sessions.map(s => {
-      if (s.id === sessionAId) {
-        return {
-          ...s,
-          day: sessionB.day,
-          timeSlotId: sessionB.timeSlotId,
-          roomId: sessionB.roomId,
-          version: (s.version || 1) + 1
-        };
-      }
-      if (s.id === sessionBId) {
-        return {
-          ...s,
-          day: sessionA.day,
-          timeSlotId: sessionA.timeSlotId,
-          roomId: sessionA.roomId,
-          version: (s.version || 1) + 1
-        };
-      }
-      return s;
-    });
-
-    try {
-      const response = await fetch(apiUrl('/api/timetable/swap'), {
-        method: 'POST', credentials: 'same-origin', headers: getAuthHeaders(),
-        body: JSON.stringify({ sessionAId, sessionBId, reason }),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data.success) return { success: false, error: data.message || 'Server rejected the session swap.' };
-    } catch {
-      return { success: false, error: 'Could not reach the timetable service. The sessions were not swapped.' };
-    }
-
-    setSessions(updatedSessions);
-    if (publishStatus === 'Published') {
-      setPublishStatus('Draft');
-    }
-
-    const newVerNum = versions.length + 1;
-    const courseA = courses.find(c => c.id === sessionA.courseId);
-    const courseB = courses.find(c => c.id === sessionB.courseId);
-
-    const newVersion: TimetableVersion = {
-      versionNumber: newVerNum,
-      versionLabel: `Draft V${newVerNum}.0`,
-      createdAt: new Date().toISOString(),
-      createdBy: 'Timetable Coordinator',
-      changeSummary: `Swapped slots between ${courseA?.code || sessionA.courseId} and ${courseB?.code || sessionB.courseId}`,
-      reason,
-      isPublished: false,
-      healthScore: 98,
-      sessions: updatedSessions
-    };
-    setVersions(prev => [newVersion, ...prev]);
-
-    setAuditLogs(prev => [
-      {
-        id: `log-swap-${Date.now()}`,
-        timestamp: new Date().toLocaleString(),
-        userId: 'coordinator',
-        userName: 'Timetable Coordinator',
-        action: 'SESSIONS_SWAPPED',
-        entityType: 'ClassSession',
-        entityId: `${sessionAId}_${sessionBId}`,
-        details: `Swapped ${courseA?.code} (${sessionA.day} ${sessionA.timeSlotId}) with ${courseB?.code} (${sessionB.day} ${sessionB.timeSlotId}). Independent validation: PASS.`
-      },
-      ...prev
-    ]);
-
-    return { success: true };
-  };
-
-  const generateDualRoutinesAPI = async (): Promise<GenerationResponse> => {
+  const generateDualRoutinesAPI = async (budgetMode: 'FAST' | 'BALANCED' | 'MAXIMUM_OPTIMIZATION' = 'BALANCED'): Promise<GenerationResponse> => {
     try {
       const headers = await getAuthHeadersAsync();
       const targetUrl = apiUrl('/api/academic/generate');
@@ -1229,6 +914,8 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         method: 'POST',
         headers,
         body: JSON.stringify({
+          budgetMode,
+          timeBudgetMs: { FAST: 2_000, BALANCED: 5_000, MAXIMUM_OPTIMIZATION: 10_000 }[budgetMode],
           routines: [
             { id: 'student-focused', label: 'Student-focused', optimizationProfile: 'STUDENT_FOCUSED' },
             { id: 'faculty-focused', label: 'Faculty-focused', optimizationProfile: 'FACULTY_FOCUSED' },
@@ -1236,49 +923,19 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         }),
       });
 
-      const data = await res.json();
-      if (data.success && data.routines && data.routines.length > 0) {
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        return { success: false, isFeasible: false, routines: [], message: data.message || `Generation failed (${res.status}).` } as GenerationResponse;
+      }
+      if (data.routines && data.routines.length > 0) {
         setSessions(data.routines[0].sessions);
         setPublishStatus('Draft');
         setLatestGeneratedRoutines(data.routines);
       }
       return data;
     } catch (err: any) {
-      console.warn('[TIMETABLE_API] Generate API fallback to local solver:', err);
-      // Fallback to local execution if backend network fails
-      const candRes = generateMultiCandidateTimetables({ timeBudgetMs: 800 });
-      const fallbackRoutines: GenerationRoutine[] = candRes.candidates.map((c, i) => ({
-        id: i === 0 ? 'student-focused' : 'faculty-focused',
-        label: i === 0 ? 'Student-focused' : 'Faculty-focused',
-        description: i === 0 ? 'Prioritizes student timetable quality and minimizes student gaps.' : 'Prioritizes faculty timetable quality and minimizes faculty gaps.',
-        optimizationProfile: (i === 0 ? 'STUDENT_FOCUSED' : 'FACULTY_FOCUSED') as any,
-        versionNumber: i + 1,
-        versionId: `ver-${i + 1}`,
-        sessions: c.sessions,
-        validation: {
-          valid: candRes.validationReports[i]?.hardViolationsCount === 0,
-          hardViolations: candRes.validationReports[i]?.hardViolationsCount || 0,
-          unscheduled: 0,
-          studentConflicts: 0,
-          facultyConflicts: 0,
-          roomConflicts: 0,
-          capacityViolations: 0,
-          availabilityViolations: 0,
-        },
-        metrics: {
-          studentGaps: 96,
-          facultyGaps: 15,
-          roomUtilization: 23.0,
-          labUtilization: 21.33,
-        },
-        healthScore: c.healthScore,
-      }));
-      setLatestGeneratedRoutines(fallbackRoutines);
-      return {
-        success: candRes.isSuccess,
-        isFeasible: candRes.isSuccess,
-        routines: fallbackRoutines,
-      };
+      console.warn('[TIMETABLE_API] Generate request failed:', err);
+      return { success: false, isFeasible: false, routines: [], message: 'Could not reach the server. The timetable was not changed.' } as GenerationResponse;
     }
   };
 
@@ -1290,11 +947,8 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         headers,
         body: JSON.stringify({ versionNumber }),
       });
-      const data = await res.json();
-      if (data.success && data.version?.sessions) {
-        setSessions(data.version.sessions);
-        setPublishStatus('Draft');
-      }
+      const data = await res.json().catch(() => ({ success: false, message: 'The routine could not be selected.' }));
+      if (data.success) await refreshAcademicData().catch(() => undefined);
       return data;
     } catch (err: any) {
       console.warn('[TIMETABLE_API] Select routine fallback:', err);
@@ -1371,113 +1025,14 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     ]);
   };
 
-  const publishMasterTimetable = async (reviewerName = 'Dean Academic Affairs'): Promise<{ success: boolean; error?: string }> => {
+  const publishMasterTimetable = async (): Promise<{ success: boolean; error?: string }> => {
     const report = runIndependentValidation(sessions);
     if (!report.canPublish) {
-      return {
-        success: false,
-        error: `Cannot publish: timetable has ${report.hardViolationsCount} hard constraint violations and ${report.requiredSessionsCount - report.scheduledSessionsCount} unscheduled hours.`
-      };
+      const error = `Cannot publish: timetable has ${report.hardViolationsCount} hard constraint violations and ${report.requiredSessionsCount - report.scheduledSessionsCount} unscheduled hours.`;
+      setSaveError(error);
+      return { success: false, error };
     }
-
-    try {
-      const response = await fetch(apiUrl('/api/timetable/publish'), {
-        method: 'POST', credentials: 'same-origin', headers: getAuthHeaders(),
-        body: JSON.stringify({ versionId: `V${versions[0]?.versionNumber || 1}.0` }),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) return { success: false, error: data.message || `Publishing failed (${response.status}).` };
-    } catch {
-      return { success: false, error: 'Could not reach the server. The timetable was not published.' };
-    }
-
-    setPublishStatus('Published');
-    setPublishedSessions(sessions);
-    setAcademicYear(prev => ({
-      ...prev,
-      publishStatus: 'Published',
-      approvedBy: reviewerName,
-      approvedAt: new Date().toISOString(),
-      publishedAt: new Date().toISOString(),
-    }));
-
-    setVersions(prev =>
-      prev.map((v, i) => (i === 0 ? { ...v, isPublished: true, versionLabel: `Published Master V${v.versionNumber}.0` } : v))
-    );
-
-    setNotifications(prev => [
-      {
-        id: `notif-pub-${Date.now()}`,
-        type: 'system_alert',
-        title: 'Master Schedule Published',
-        message: `Official semester timetable has been verified (0 violations) and published for campus access across all sections and faculty.`,
-        timestamp: new Date().toISOString(),
-        read: false,
-        category: 'Success',
-      },
-      ...prev.filter(item => item.title !== 'Master Schedule Published' && item.title !== 'Master Timetable Published & Live'),
-    ]);
-
-    setAuditLogs(prev => [
-      {
-        id: `log-publish-${Date.now()}`,
-        timestamp: new Date().toLocaleString(),
-        userId: 'coordinator',
-        userName: reviewerName,
-        action: 'TIMETABLE_PUBLISHED',
-        entityType: 'TimetableVersion',
-        entityId: `master-${academicYear.yearLabel}`,
-        details: `Published master timetable with ${sessions.length} conflict-free sessions across ${sections.length} student groups. Independent validation PASS.`
-      },
-      ...prev
-    ]);
-
-    return { success: true };
-  };
-
-  const unpublishMasterTimetable = async (): Promise<{ success: boolean }> => {
-    setPublishStatus('Draft');
-    setPublishedSessions([]);
-    setAcademicYear(prev => ({
-      ...prev,
-      publishStatus: 'Draft',
-      approvedBy: undefined,
-      approvedAt: undefined,
-      publishedAt: undefined,
-    }));
-
-    setVersions(prev =>
-      prev.map(v => (v.isPublished ? { ...v, isPublished: false, versionLabel: `Draft V${v.versionNumber}.0 (Unpublished)` } : v))
-    );
-
-    setNotifications(prev => [
-      {
-        id: `notif-unpub-${Date.now()}`,
-        type: 'system_alert',
-        title: 'Timetable Returned to Draft Mode',
-        message: 'The master timetable has been unpublished and returned to draft editing mode.',
-        timestamp: new Date().toISOString(),
-        read: false,
-        category: 'Info',
-      },
-      ...prev,
-    ]);
-
-    setAuditLogs(prev => [
-      {
-        id: `log-unpublish-${Date.now()}`,
-        timestamp: new Date().toLocaleString(),
-        userId: 'coordinator',
-        userName: 'Academic Coordinator',
-        action: 'TIMETABLE_UNPUBLISHED',
-        entityType: 'TimetableVersion',
-        entityId: `draft-${academicYear.yearLabel}`,
-        details: 'Stopped publishing. Master timetable status changed to Draft.',
-      },
-      ...prev,
-    ]);
-
-    return { success: true };
+    return saveChange('/api/timetable/publish', 'POST');
   };
 
   const compareTimetableVersions = (versionNumberA: number, versionNumberB: number) => {
@@ -1738,7 +1293,7 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
   };
 
   // Bulk generate arbitrary number of groups with hierarchical subgroups
-  const bulkGenerateGroups = (params: {
+  const bulkGenerateGroups = async (params: {
     programName: string;
     batchYear: number;
     totalStudents: number;
@@ -1747,592 +1302,41 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     numSubgroupsPerGroup: number;
     subgroupNamingPattern?: string;
     departmentId?: string;
-  }): StudentSection[] => {
-    const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-    const studentsPerGroup = Math.max(1, Math.round(params.totalStudents / params.numGroups));
-    const studentsPerSubgroup = Math.max(1, Math.round(studentsPerGroup / params.numSubgroupsPerGroup));
+  }) => saveChange('/api/academic/groups/bulk', 'POST', params);
 
-    const newSections: StudentSection[] = [];
-
-    for (let i = 0; i < params.numGroups; i++) {
-      let groupLetter = '';
-      if (i < 26) {
-        groupLetter = letters[i];
-      } else {
-        const first = letters[Math.floor(i / 26) - 1];
-        const second = letters[i % 26];
-        groupLetter = `${first}${second}`;
-      }
-
-      const groupName = params.namingPattern.replace('{LETTER}', groupLetter).replace('{NUM}', String(i + 1));
-      const sectionId = `sec-gen-${groupName.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
-
-      const subSections: SubSection[] = [];
-      for (let s = 1; s <= params.numSubgroupsPerGroup; s++) {
-        const subName = (params.subgroupNamingPattern || '{LETTER}{NUM}')
-          .replace('{LETTER}', groupLetter)
-          .replace('{NUM}', String(s));
-
-        subSections.push({
-          id: `sub-${sectionId}-${subName.toLowerCase()}`,
-          sectionId,
-          name: subName,
-          studentCount: studentsPerSubgroup,
-          type: 'Lab',
-        });
-      }
-
-      newSections.push({
-        id: sectionId,
-        name: groupName,
-        departmentId: params.departmentId || 'dept-cse',
-        program: params.programName || 'B.Tech Computer Science & Engineering',
-        semester: 5,
-        batchYear: params.batchYear || 2024,
-        studentCount: studentsPerGroup,
-        targetSize: studentsPerGroup,
-        maxSize: Math.ceil(studentsPerGroup * 1.2),
-        subSections,
-        classRepresentative: {
-          name: `CR ${groupName}`,
-          email: `cr.${groupName.toLowerCase()}@thapar.edu`,
-          studentId: `102403${String(i + 1).padStart(3, '0')}`,
-        },
-        status: 'Active',
-      });
-    }
-
-    setSections(prev => {
-      const existingNames = new Set(newSections.map(s => s.name.toUpperCase()));
-      const filtered = prev.filter(s => !existingNames.has(s.name.toUpperCase()));
-      return [...filtered, ...newSections];
-    });
-
-    setAuditLogs(prev => [
-      {
-        id: `log-bulk-grp-${Date.now()}`,
-        timestamp: new Date().toISOString(),
-        userId: 'coordinator',
-        userName: 'Academic Coordinator',
-        action: 'BULK_GROUPS_GENERATED',
-        entityType: 'StudentSection',
-        entityId: 'multiple',
-        details: `Generated ${newSections.length} groups with ${params.numSubgroupsPerGroup} subgroups each for batch ${params.batchYear} (${params.totalStudents} total students).`,
-      },
-      ...prev,
-    ]);
-
-    return newSections;
-  };
-
-  // Transactional Master Excel Import
-  const commitMasterImport = (
+  // Master Excel import. The server validates and saves the workbook; the client then reloads the saved data,
+  // so a rejected import is reported instead of appearing to succeed.
+  const commitMasterImport = async (
     parsedData: ExcelImportPreview['parsedData'],
     mode: 'upsert' | 'replace' = 'upsert'
-  ): { success: boolean; importedCount: number; message: string } => {
-    let totalImported = 0;
-
-    // 1. Departments
-    const deptCodeMap = new Map<string, string>();
-    departments.forEach(d => deptCodeMap.set(d.code.toUpperCase(), d.id));
-
-    if (parsedData.departments.length > 0) {
-      setDepartments(prev => {
-        const next = [...prev];
-        parsedData.departments.forEach(deptIn => {
-          const codeUpper = deptIn.code.toUpperCase();
-          const existingIdx = next.findIndex(d => d.code.toUpperCase() === codeUpper);
-          if (existingIdx >= 0) {
-            next[existingIdx] = { ...next[existingIdx], ...deptIn };
-            deptCodeMap.set(codeUpper, next[existingIdx].id);
-          } else {
-            const newId = `dept-${deptIn.code.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
-            const newDept: Department = { ...deptIn, id: newId };
-            next.push(newDept);
-            deptCodeMap.set(codeUpper, newId);
-          }
-          totalImported++;
-        });
-        return next;
+  ): Promise<{ success: boolean; importedCount: number; message: string }> => {
+    try {
+      const response = await fetch(apiUrl('/api/academic/import'), {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ parsedData, mode }),
       });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        return { success: false, importedCount: 0, message: data.message || `Import failed (${response.status}).` };
+      }
+      await refreshAcademicData().catch(() => undefined);
+      return { success: true, importedCount: data.importedCount, message: data.message };
+    } catch {
+      return { success: false, importedCount: 0, message: 'Could not reach the server. Nothing was imported.' };
     }
-
-    // 2. Programs
-    const progCodeMap = new Map<string, string>();
-    programs.forEach(p => progCodeMap.set(p.code.toUpperCase(), p.id));
-
-    if (parsedData.programs.length > 0) {
-      setPrograms(prev => {
-        const next = [...prev];
-        parsedData.programs.forEach(progIn => {
-          const codeUpper = progIn.code.toUpperCase();
-          const deptId = deptCodeMap.get(progIn.departmentCode?.toUpperCase()) || 'dept-cse';
-          const existingIdx = next.findIndex(p => p.code.toUpperCase() === codeUpper);
-          if (existingIdx >= 0) {
-            next[existingIdx] = { ...next[existingIdx], ...progIn, departmentId: deptId };
-            progCodeMap.set(codeUpper, next[existingIdx].id);
-          } else {
-            const newId = `prog-${progIn.code.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
-            const newProg: Program = {
-              id: newId,
-              name: progIn.name,
-              code: progIn.code,
-              departmentId: deptId,
-              durationYears: progIn.durationYears || 4,
-              totalSemesters: progIn.totalSemesters || 8,
-              status: 'Active',
-            };
-            next.push(newProg);
-            progCodeMap.set(codeUpper, newId);
-          }
-          totalImported++;
-        });
-        return next;
-      });
-    }
-
-    // 3. Faculty
-    const facEmailMap = new Map<string, string>();
-    facultyMembers.forEach(f => facEmailMap.set(f.email.toLowerCase(), f.id));
-
-    if (parsedData.faculty.length > 0) {
-      setFacultyMembers(prev => {
-        const next = [...prev];
-        parsedData.faculty.forEach(facIn => {
-          const emailLower = facIn.email.toLowerCase();
-          const deptId = deptCodeMap.get(facIn.departmentCode?.toUpperCase()) || 'dept-cse';
-          const existingIdx = next.findIndex(f => f.email.toLowerCase() === emailLower);
-          if (existingIdx >= 0) {
-            next[existingIdx] = {
-              ...next[existingIdx],
-              ...facIn,
-              departmentId: deptId,
-            };
-            facEmailMap.set(emailLower, next[existingIdx].id);
-          } else {
-            const newId = `fac-${emailLower.split('@')[0].replace(/[^a-z0-9]/g, '')}`;
-            const newFac: Faculty = {
-              id: newId,
-              name: facIn.name,
-              email: facIn.email,
-              departmentId: deptId,
-              designation: facIn.designation,
-              subjectsQualified: facIn.subjectsQualified || [],
-              maxDirectTeachingHours: facIn.maxDirectTeachingHours || 14,
-              weeklyHoursLimit: 40,
-              preferences: facIn.preferences || {
-                preferredDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
-                preferredPeriods: [1, 2, 3, 4, 6, 7],
-                protectedSlots: [],
-                maxConsecutivePeriods: 3,
-                availableForMakeup: true,
-                availableForTutorial: true,
-              },
-              status: 'Active',
-            };
-            next.push(newFac);
-            facEmailMap.set(emailLower, newId);
-          }
-          totalImported++;
-        });
-        return next;
-      });
-    }
-
-    // 4. Rooms
-    const roomNameMap = new Map<string, string>();
-    rooms.forEach(r => roomNameMap.set(r.name.toUpperCase(), r.id));
-
-    if (parsedData.rooms.length > 0) {
-      setRooms(prev => {
-        const next = [...prev];
-        parsedData.rooms.forEach(rmIn => {
-          const nameUpper = rmIn.name.toUpperCase();
-          const existingIdx = next.findIndex(r => r.name.toUpperCase() === nameUpper);
-          if (existingIdx >= 0) {
-            next[existingIdx] = { ...next[existingIdx], ...rmIn };
-            roomNameMap.set(nameUpper, next[existingIdx].id);
-          } else {
-            const newId = `room-${rmIn.name.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
-            const newRoom: Room = { ...rmIn, id: newId };
-            next.push(newRoom);
-            roomNameMap.set(nameUpper, newId);
-          }
-          totalImported++;
-        });
-        return next;
-      });
-    }
-
-    // 5. Courses
-    const courseCodeMap = new Map<string, string>();
-    courses.forEach(c => courseCodeMap.set(c.code.toUpperCase(), c.id));
-
-    if (parsedData.courses.length > 0) {
-      setCourses(prev => {
-        const next = [...prev];
-        parsedData.courses.forEach(crsIn => {
-          const codeUpper = crsIn.code.toUpperCase();
-          const deptId = deptCodeMap.get(crsIn.departmentCode?.toUpperCase()) || 'dept-cse';
-          const facId = (crsIn.primaryFacultyEmail && facEmailMap.get(crsIn.primaryFacultyEmail.toLowerCase())) || 'fac-sharma';
-          const existingIdx = next.findIndex(c => c.code.toUpperCase() === codeUpper);
-          if (existingIdx >= 0) {
-            next[existingIdx] = {
-              ...next[existingIdx],
-              ...crsIn,
-              departmentId: deptId,
-              primaryFacultyId: facId,
-            };
-            courseCodeMap.set(codeUpper, next[existingIdx].id);
-          } else {
-            const newId = `course-${crsIn.code.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
-            const newCourse: Course = {
-              id: newId,
-              code: crsIn.code,
-              name: crsIn.name,
-              departmentId: deptId,
-              credits: crsIn.credits || 4,
-              requiredLecturesPerWeek: crsIn.requiredLecturesPerWeek || 3,
-              requiredTutorialsPerWeek: crsIn.requiredTutorialsPerWeek || 0,
-              requiredLabsPerWeek: crsIn.requiredLabsPerWeek || 0,
-              totalSemesterHours: crsIn.totalSemesterHours || 45,
-              completedHours: 0,
-              cancelledHours: 0,
-              requiresLab: crsIn.requiresLab || (crsIn.requiredLabsPerWeek || 0) > 0,
-              requiredEquipment: crsIn.requiredEquipment || ['Projector'],
-              primaryFacultyId: facId,
-              status: 'Active',
-            };
-            next.push(newCourse);
-            courseCodeMap.set(codeUpper, newId);
-          }
-          totalImported++;
-        });
-        return next;
-      });
-    }
-
-    // 6. Groups & Subgroups
-    const groupCodeMap = new Map<string, string>();
-    const subgroupCodeMap = new Map<string, string>(); // "GROUP:SUBGROUP" -> subId
-    sections.forEach(s => {
-      groupCodeMap.set(s.name.toUpperCase(), s.id);
-      (s.subSections || []).forEach(sub => {
-        subgroupCodeMap.set(`${s.name.toUpperCase()}:${sub.name.toUpperCase()}`, sub.id);
-      });
-    });
-
-    if (parsedData.groups.length > 0) {
-      setSections(prev => {
-        const next = [...prev];
-        parsedData.groups.forEach(grpIn => {
-          const codeUpper = grpIn.name.toUpperCase();
-          const progId = progCodeMap.get(grpIn.program?.toUpperCase()) || '';
-
-          // Find declared subgroups for this group in parsedData
-          const declaredSubgroups = parsedData.subgroups.filter(
-            sub => sub.groupCode.toUpperCase() === codeUpper
-          );
-
-          const existingIdx = next.findIndex(s => s.name.toUpperCase() === codeUpper);
-          const secId = existingIdx >= 0 ? next[existingIdx].id : `sec-${grpIn.name.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
-          groupCodeMap.set(codeUpper, secId);
-
-          const builtSubgroups: SubSection[] = declaredSubgroups.map((sub, sIdx) => {
-            const subId = `sub-${secId}-${sub.name.toLowerCase()}`;
-            subgroupCodeMap.set(`${codeUpper}:${sub.name.toUpperCase()}`, subId);
-            return {
-              id: subId,
-              sectionId: secId,
-              name: sub.name,
-              studentCount: sub.studentCount || Math.ceil(grpIn.studentCount / 2),
-              type: sub.type || 'Lab',
-            };
-          });
-
-          // If no subgroups were explicitly listed in Subgroups sheet, create default A1/A2
-          if (builtSubgroups.length === 0) {
-            builtSubgroups.push(
-              { id: `sub-${secId}-1`, sectionId: secId, name: '1', studentCount: Math.ceil(grpIn.studentCount / 2), type: 'Lab' },
-              { id: `sub-${secId}-2`, sectionId: secId, name: '2', studentCount: Math.floor(grpIn.studentCount / 2), type: 'Lab' }
-            );
-            subgroupCodeMap.set(`${codeUpper}:1`, `sub-${secId}-1`);
-            subgroupCodeMap.set(`${codeUpper}:2`, `sub-${secId}-2`);
-          }
-
-          if (existingIdx >= 0) {
-            next[existingIdx] = {
-              ...next[existingIdx],
-              ...grpIn,
-              programId: progId,
-              subSections: builtSubgroups,
-            };
-          } else {
-            const newSec: StudentSection = {
-              id: secId,
-              name: grpIn.name,
-              departmentId: grpIn.departmentId || 'dept-cse',
-              program: grpIn.program,
-              programId: progId,
-              semester: grpIn.semester || 5,
-              batchYear: grpIn.batchYear || 2024,
-              studentCount: grpIn.studentCount,
-              targetSize: grpIn.targetSize || grpIn.studentCount,
-              maxSize: grpIn.maxSize || Math.ceil(grpIn.studentCount * 1.2),
-              subSections: builtSubgroups,
-              classRepresentative: grpIn.classRepresentative || {
-                name: 'Section Representative',
-                email: `cr.${grpIn.name.toLowerCase()}@thapar.edu`,
-                studentId: '102303001',
-              },
-              status: 'Active',
-            };
-            next.push(newSec);
-          }
-          totalImported++;
-        });
-        return next;
-      });
-    }
-
-    // 7. Course Allocations
-    if (parsedData.allocations.length > 0) {
-      setAllocations(prev => {
-        const next = mode === 'replace' ? [] : [...prev];
-        parsedData.allocations.forEach(allocIn => {
-          const courseId = courseCodeMap.get(allocIn.courseCode.toUpperCase()) || 'cs501';
-          const facultyId = facEmailMap.get(allocIn.facultyEmail.toLowerCase()) || 'fac-sharma';
-          const sectionId = groupCodeMap.get(allocIn.groupCode.toUpperCase()) || 'sec-cse-a';
-          const subSectionId = allocIn.subgroupName
-            ? subgroupCodeMap.get(`${allocIn.groupCode.toUpperCase()}:${allocIn.subgroupName.toUpperCase()}`)
-            : undefined;
-          const roomId = allocIn.roomName ? roomNameMap.get(allocIn.roomName.toUpperCase()) : undefined;
-
-          const allocId = `alloc-${courseId}-${sectionId}${subSectionId ? `-${subSectionId}` : ''}-${allocIn.sessionType.toLowerCase()}`;
-          const existingIdx = next.findIndex(a => a.id === allocId);
-
-          const newAlloc: CourseAllocation = {
-            id: allocId,
-            courseId,
-            facultyId,
-            sectionId,
-            subSectionId,
-            sessionType: allocIn.sessionType,
-            hoursPerWeek: allocIn.hoursPerWeek,
-            preferredRoomId: roomId,
-            status: 'Allocated',
-          };
-
-          if (existingIdx >= 0) {
-            next[existingIdx] = newAlloc;
-          } else {
-            next.push(newAlloc);
-          }
-          totalImported++;
-        });
-        return next;
-      });
-    }
-
-    // 8. Immutable Institutional Audit Log
-    setAuditLogs(prev => [
-      {
-        id: `log-excel-import-${Date.now()}`,
-        timestamp: new Date().toISOString(),
-        userId: 'coordinator',
-        userName: 'Academic Coordinator',
-        action: 'EXCEL_MASTER_IMPORT',
-        entityType: 'AcademicSetup',
-        entityId: 'master-workbook',
-        details: `Transactionally imported ${totalImported} academic records across sheets (Departments: ${parsedData.departments.length}, Programs: ${parsedData.programs.length}, Faculty: ${parsedData.faculty.length}, Rooms: ${parsedData.rooms.length}, Courses: ${parsedData.courses.length}, Groups: ${parsedData.groups.length}, Allocations: ${parsedData.allocations.length}).`,
-      },
-      ...prev,
-    ]);
-
-    // 9. Post to Supabase backend API for persistent PostgreSQL storage
-    fetch('/api/academic/import', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify({ parsedData, mode }),
-    }).catch(err => console.warn('[SUPABASE_API] Master import background sync notice:', err));
-
-    // 10. Re-run validation immediately so coordinator sees current status
-    setTimeout(() => {
-      runValidation();
-    }, 100);
-
-    return {
-      success: true,
-      importedCount: totalImported,
-      message: `Master setup data successfully synchronized with database (${totalImported} records processed).`,
-    };
   };
 
   // Cancel Session & Trigger Self-Healing Pipeline
-  const cancelSession = async (sessionId: string, reason: string): Promise<{ success: boolean }> => {
-    const targetSession = sessions.find(s => s.id === sessionId);
-    if (!targetSession) return { success: false };
-    const cancellationReason = reason.trim() || 'Unforeseen conflict';
+  const cancelSession = async (sessionId: string, reason: string): Promise<{ success: boolean; message?: string }> =>
+    saveChange('/api/recovery/cancel-class', 'POST', { sessionId, reason: reason.trim() || 'Unforeseen conflict' });
 
-    try {
-      const response = await fetch(apiUrl('/api/recovery/cancel-class'), {
-        method: 'POST', credentials: 'same-origin', headers: getAuthHeaders(),
-        body: JSON.stringify({ sessionId, reason: cancellationReason }),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data.success) return { success: false };
-    } catch {
-      return { success: false };
-    }
+  const undoCancellation = async (sessionId: string): Promise<{ success: boolean }> =>
+    saveChange('/api/recovery/undo-cancel', 'POST', { sessionId });
 
-    const updatedSessions = sessions.map(s =>
-        s.id === sessionId
-          ? {
-              ...s,
-              status: 'Cancelled' as const,
-              statusBeforeCancellation: s.status === 'Cancelled' ? s.statusBeforeCancellation : s.status,
-              cancellationReason,
-              cancellationTimestamp: new Date().toISOString(),
-            }
-          : s
-      );
-    setSessions(updatedSessions);
-    if (publishStatus === 'Published') setPublishedSessions(updatedSessions);
-
-    const newTaskId = `makeup-${Date.now()}`;
-    const newMakeupTask: MakeupTask = {
-      id: newTaskId,
-      cancelledSessionId: sessionId,
-      courseId: targetSession.courseId,
-      sectionId: targetSession.sectionId,
-      facultyId: targetSession.facultyId,
-      cancelledDay: targetSession.day,
-      cancelledTimeSlot: targetSession.timeSlotId,
-      priorityScore: 95,
-      status: 'ProposalsGenerated',
-      createdAt: new Date().toISOString(),
-    };
-
-    setMakeupTasks(prev => [newMakeupTask, ...prev.filter(task => task.cancelledSessionId !== sessionId)]);
-
-    const discoveredOpps = findSelfHealingRecoverySlots(
-      newMakeupTask,
-      sessions,
-      rooms,
-      facultyMembers,
-      sections,
-      courses
-    );
-
-    if (discoveredOpps.length > 0) {
-      setRecoveryOpportunities(prev => [...discoveredOpps.filter(option => !prev.some(existing => existing.makeupTaskId === option.makeupTaskId && existing.targetDay === option.targetDay && existing.timeSlotId === option.timeSlotId && existing.roomId === option.roomId)), ...prev]);
-    }
-
-    setNotifications(prev => [
-      {
-        id: `notif-${Date.now()}`,
-        type: 'cancellation',
-        title: `Class Disrupted: ${targetSession.courseId}`,
-        message: `${targetSession.day} session was cancelled. Reason: ${cancellationReason}. Suggested makeup slots are available for review.`,
-        timestamp: new Date().toISOString(),
-        read: false,
-        category: 'Critical',
-        actionable: true,
-        actionPayload: { sessionId, sectionId: targetSession.sectionId },
-      },
-      ...prev.filter(item => !(item.type === 'cancellation' && item.actionPayload?.sessionId === sessionId)),
-    ]);
-
-    setAuditLogs(prev => [
-      {
-        id: `log-${Date.now()}`,
-        timestamp: new Date().toLocaleString(),
-        userId: 'faculty-member',
-        userName: 'Faculty Instructor',
-        action: 'CLASS_CANCELLED',
-        entityType: 'ClassSession',
-        entityId: sessionId,
-        details: `Cancelled ${targetSession.courseId} (${targetSession.day} ${targetSession.timeSlotId}). Reason: ${cancellationReason}.`,
-      },
-      ...prev,
-    ]);
-
-    return { success: true };
-  };
-
-  const undoCancellation = async (sessionId: string): Promise<{ success: boolean }> => {
-    try {
-      const response = await fetch(apiUrl('/api/recovery/undo-cancel'), { method: 'POST', credentials: 'same-origin', headers: getAuthHeaders(), body: JSON.stringify({ sessionId }) });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data.success) return { success: false };
-      const session = sessions.find((item) => item.id === sessionId);
-      const restoredStatus = session?.statusBeforeCancellation || 'Published';
-      const updated = (items: ClassSession[]) => items.map((item) => item.id === sessionId ? { ...item, status: restoredStatus, statusBeforeCancellation: undefined, cancellationReason: undefined, cancellationTimestamp: undefined } : item);
-      setSessions(updated);
-      setPublishedSessions(updated);
-      setMakeupTasks((items) => items.filter((item) => item.cancelledSessionId !== sessionId));
-      setRecoveryOpportunities((items) => items.filter((item) => makeupTasks.find((task) => task.id === item.makeupTaskId)?.cancelledSessionId !== sessionId));
-      setNotifications((items) => items.filter((item) => item.actionPayload?.sessionId !== sessionId));
-      return { success: true };
-    } catch {
-      return { success: false };
-    }
-  };
-
-  const scheduleMakeup = async (opportunityId: string): Promise<{ success: boolean }> => {
-    const opp = recoveryOpportunities.find(o => o.id === opportunityId);
-    if (!opp) return { success: false };
-
-    const makeupTask = makeupTasks.find(t => t.id === opp.makeupTaskId);
-    if (!makeupTask) return { success: false };
-
-    const newSessionId = `makeup-sess-${Date.now().toString().slice(-4)}`;
-    const newSession: ClassSession = {
-      id: newSessionId,
-      courseId: makeupTask.courseId,
-      facultyId: opp.facultyId,
-      sectionId: makeupTask.sectionId,
-      roomId: opp.roomId,
-      day: opp.targetDay,
-      timeSlotId: opp.timeSlotId,
-      type: 'Makeup',
-      status: 'Confirmed',
-      originalSessionId: makeupTask.cancelledSessionId,
-      version: 1,
-    };
-
-    setSessions(prev => [...prev, newSession]);
-
-    setMakeupTasks(prev =>
-      prev.map(t => (t.id === makeupTask.id ? { ...t, status: 'Scheduled' } : t))
-    );
-
-    setRecoveryOpportunities(prev =>
-      prev.map(o => (o.id === opportunityId ? { ...o, status: 'Approved' } : o))
-    );
-
-    const roomObj = rooms.find(r => r.id === opp.roomId);
-    setNotifications(prev => [
-      {
-        id: `notif-${Date.now()}`,
-        type: 'makeup_request',
-        title: `Makeup Scheduled: ${makeupTask.courseId}`,
-        message: `Recovery class locked for ${opp.targetDay} in ${roomObj?.name || opp.roomId}. Students and Faculty notified.`,
-        timestamp: new Date().toISOString(),
-        read: false,
-        category: 'Success',
-      },
-      ...prev,
-    ]);
-
-    fetch('/api/recovery/schedule-makeup', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify({ opportunityId }),
-    }).catch(err => console.warn('[SUPABASE_API] Schedule makeup persistence notice:', err));
-
-    return { success: true };
-  };
+  const scheduleMakeup = async (opportunityId: string): Promise<{ success: boolean }> =>
+    saveChange('/api/recovery/schedule-makeup', 'POST', { opportunityId });
 
   const votePoll = async (pollId: string, optionId: string): Promise<{ success: boolean }> => {
     const poll = polls.find(item => item.id === pollId);
@@ -2435,33 +1439,11 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.success || !data.version?.sessions) return { success: false, message: data.message || 'This version could not be restored.' };
       setSessions(data.version.sessions);
-      setPublishedSessions(data.version.sessions);
-      setPublishStatus('Published');
-      setVersions(previous => previous.map(version => ({
-        ...version,
-        isPublished: version.versionNumber === versionNumber,
-        status: version.versionNumber === versionNumber ? 'Published' : (version.status === 'Published' ? 'Approved' : version.status),
-      })));
+      setPublishStatus('Draft');
       return { success: true, message: data.message || `Restored ${data.version.versionLabel}.` };
     } catch {
       return { success: false, message: 'Could not reach the server. This version was not restored.' };
     }
-  };
-
-  const applySimulation = () => {
-    if (!whatIfSimulation) return;
-    setNotifications(prev => [
-      {
-        id: `notif-${Date.now()}`,
-        type: 'system_alert',
-        title: `Simulation Applied: ${whatIfSimulation.title}`,
-        message: 'Sandbox contingency measures applied to candidate staging branch.',
-        timestamp: new Date().toISOString(),
-        read: false,
-        category: 'Warning',
-      },
-      ...prev,
-    ]);
   };
 
   const markNotificationRead = async (id: string) => {
@@ -2497,80 +1479,41 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const declineOpportunity = async (opportunityId: string): Promise<{ success: boolean }> => {
-    setRecoveryOpportunities(prev =>
-      prev.map(o => (o.id === opportunityId ? { ...o, status: 'Rejected' } : o))
-    );
-    return { success: true };
-  };
+  const declineOpportunity = async (opportunityId: string): Promise<{ success: boolean }> =>
+    saveChange('/api/recovery/decline', 'POST', { opportunityId });
 
+  /** Teachers ask for an extra class; the coordinator decides and adds it. */
   const claimMarketplaceSlot = async (
     courseId: string,
     sectionId: string,
     day: DayOfWeek,
     timeSlotId: string,
     roomId: string,
-    type: string
+    type: string,
+    facultyId: string
   ): Promise<{ success: boolean }> => {
-    const newSessionId = `claim-sess-${Date.now().toString().slice(-4)}`;
-    const newSession: ClassSession = {
-      id: newSessionId,
-      courseId,
-      facultyId: selectedFacultyId,
-      sectionId,
-      roomId,
-      day,
-      timeSlotId,
-      type: type as any || 'Lecture',
-      status: 'Confirmed',
-      version: 1,
-    };
-    setSessions(prev => [...prev, newSession]);
-    return { success: true };
+    const taught = sessions.find(s => s.courseId === courseId && s.sectionId === sectionId && s.facultyId === facultyId);
+    const slot = academicYear.timeSlots.find(t => t.id === timeSlotId);
+    const room = rooms.find(r => r.id === roomId);
+    return saveChange('/api/recovery/request-change', 'POST', {
+      sessionId: taught?.id,
+      details: `Requests an extra ${type || 'class'} on ${day} ${slot?.label ?? timeSlotId} in ${room?.name ?? roomId}.`,
+    });
   };
 
   const requestSubstituteCover = async (
     substituteFacultyId: string,
-    courseId: string,
-    sectionId: string,
-    day: DayOfWeek,
-    timeSlotId: string
+    sessionId: string
   ): Promise<{ success: boolean }> => {
     const substitute = facultyMembers.find(f => f.id === substituteFacultyId);
-    const course = courses.find(c => c.id === courseId);
-    setNotifications(prev => [
-      {
-        id: `notif-${Date.now()}`,
-        type: 'makeup_request',
-        title: `Substitute Cover Requested (${course?.code || courseId})`,
-        message: `Requested ${substitute?.name || 'Faculty Member'} to cover ${day} slot for ${sectionId}.`,
-        timestamp: new Date().toISOString(),
-        read: false,
-        category: 'Info',
-      },
-      ...prev,
-    ]);
-    return { success: true };
+    return saveChange('/api/recovery/request-change', 'POST', {
+      sessionId,
+      details: `Requests substitute cover by ${substitute?.name ?? substituteFacultyId}.`,
+    });
   };
 
-  const requestStudentMakeup = async (courseId: string, sectionId: string): Promise<{ success: boolean }> => {
-    const course = courses.find(c => c.id === courseId);
-    const section = sections.find(s => s.id === sectionId);
-    setNotifications(prev => [
-      {
-        id: `notif-${Date.now()}`,
-        type: 'makeup_request',
-        title: `Student Demand: Makeup Request (${course?.code || courseId})`,
-        message: `${section?.name} Class Representative launched makeup petition. 47/52 students signed availability.`,
-        timestamp: new Date().toISOString(),
-        read: false,
-        category: 'Info',
-        actionable: true,
-      },
-      ...prev,
-    ]);
-    return { success: true };
-  };
+  const requestStudentMakeup = async (courseId: string, sectionId: string): Promise<{ success: boolean }> =>
+    saveChange('/api/recovery/student-request', 'POST', { courseId, sectionId });
 
   const addSession = async (sessionData: Omit<ClassSession, 'id' | 'version'>): Promise<{ isSuccess: boolean; error?: string }> => {
     const check = checkHardConstraints(
@@ -2689,6 +1632,8 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         toggleConstraint,
         runValidation,
         resetDemoAcademicData,
+        saveError,
+        clearSaveError: () => setSaveError(''),
         generateDraftTimetable,
         updatePublishStatus,
         bulkImportData,
@@ -2702,7 +1647,6 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         toggleSessionLock,
         setFacultyProtectedSlot,
         restoreVersion,
-        applySimulation,
         markNotificationRead,
         triggerAutoMatchAll,
         requestStudentMakeup,
@@ -2721,11 +1665,10 @@ export function TimetableProvider({ children }: { children: React.ReactNode }) {
         setLatestGeneratedRoutines,
         applyCandidateAsDraft,
         publishMasterTimetable,
-        unpublishMasterTimetable,
         compareTimetableVersions,
         activeVersionNumber: versions.find(version => version.isPublished || version.status === 'Published')?.versionNumber ?? versions[0]?.versionNumber ?? 1,
         publishedSessions,
-        refresh: async () => {},
+        refresh: refreshAcademicData,
         isLoading: false,
         loadError: null,
         notice: null,

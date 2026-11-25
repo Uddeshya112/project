@@ -2,9 +2,10 @@ import React, { useState } from 'react';
 import { Check, CalendarCheck } from 'lucide-react';
 import { useTimetable } from '../../context/TimetableContext';
 import { formatLocalizedTimestamp } from '../../lib/userUtils';
+import { periodLabel } from '../../lib/recoveryEngine';
 
 export function RequestsView() {
-  const { notifications, markNotificationRead, makeupTasks, recoveryOpportunities, scheduleMakeup } = useTimetable();
+  const { notifications, markNotificationRead, makeupTasks, recoveryOpportunities, scheduleMakeup, academicYear } = useTimetable();
   const [savingId, setSavingId] = useState<string | null>(null);
   const [schedulingId, setSchedulingId] = useState<string | null>(null);
   const requests = notifications.filter(item => ['makeup_request', 'approval_needed', 'cancellation'].includes(item.type));
@@ -35,7 +36,7 @@ export function RequestsView() {
           {item.type === 'cancellation' && (() => {
             const task = makeupTasks.find((entry) => entry.cancelledSessionId === item.actionPayload?.sessionId);
             const options = task ? recoveryOpportunities.filter((entry) => entry.makeupTaskId === task.id && entry.status === 'Proposed') : [];
-            return options.slice(0, 3).map((option) => <button key={option.id} type="button" onClick={() => { setSchedulingId(option.id); void scheduleMakeup(option.id).finally(() => setSchedulingId(null)); }} disabled={schedulingId !== null} className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-[#8C1B2E] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"><CalendarCheck className="h-3.5 w-3.5" />{schedulingId === option.id ? 'Scheduling…' : `Schedule ${option.targetDay} ${option.timeSlotId}`}</button>);
+            return options.slice(0, 3).map((option) => <button key={option.id} type="button" onClick={() => { setSchedulingId(option.id); void scheduleMakeup(option.id).finally(() => setSchedulingId(null)); }} disabled={schedulingId !== null} className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-[#8C1B2E] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"><CalendarCheck className="h-3.5 w-3.5" />{schedulingId === option.id ? 'Scheduling…' : `Schedule ${option.targetDay} ${periodLabel(academicYear, option.timeSlotId, option.periods)}`}</button>);
           })()}
         </article>
       ))}

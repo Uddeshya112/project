@@ -7,7 +7,7 @@ import {
   Sliders,
   UserCheck
 } from 'lucide-react';
-import { findSubstituteFaculty } from '../../lib/recoveryEngine';
+import { findSubstituteFaculty, periodLabel } from '../../lib/recoveryEngine';
 
 // Sample content shown to explain the mechanism — edit freely.
 const SAMPLE_FLOW_STEPS = [
@@ -250,7 +250,7 @@ export function RecoveryEngineView() {
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-2">
                       <div className="flex items-center gap-2">
                         <span className="text-base font-bold text-stone-900 dark:text-zinc-100">
-                          {opp.targetDay} {slotLabel(opp.timeSlotId)}
+                          {opp.targetDay} {periodLabel(academicYear, opp.timeSlotId, opp.periods)}
                         </span>
                         <span className="text-[11px] text-stone-500 dark:text-zinc-400">
                           {rooms.find(r => r.id === opp.roomId)?.name ?? opp.roomId}
@@ -377,7 +377,7 @@ export function RecoveryEngineView() {
                         disabled={!isAvailable || requested || busy !== null}
                         onClick={async () => {
                           const ok = await runBusy(`cover:${requestKey}`, () =>
-                            requestSubstituteCover(faculty.id, activeTask.courseId, activeTask.sectionId, activeTask.cancelledDay, activeTask.cancelledTimeSlot)
+                            requestSubstituteCover(faculty.id, activeTask.cancelledSessionId)
                           );
                           if (ok) setRequestedSubs(prev => ({ ...prev, [requestKey]: true }));
                         }}

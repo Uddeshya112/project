@@ -70,7 +70,7 @@ export function AdminPortalView() {
               <span className="text-xs text-stone-500 dark:text-zinc-400 font-medium">Classrooms & Labs</span>
               <div className="text-2xl font-bold font-serif text-stone-900 dark:text-zinc-100">{rooms.length}</div>
               <span className="break-words text-[11px] text-stone-500 dark:text-zinc-400" title={buildings.join(', ')}>
-                {buildings.length ? buildings.join(', ') : 'No rooms yet'}
+                {buildings.length ? buildings.join(', ') : `${rooms.filter(r => r.isAvailable).length} available`}
               </span>
             </div>
 

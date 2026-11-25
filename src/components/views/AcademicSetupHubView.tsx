@@ -193,8 +193,9 @@ export function AcademicSetupHubView() {
     workingDays: academicYear.workingDays,
   });
   const [yearDraft, setYearDraft] = useState<YearDraft>(yearFromServer);
-  useEffect(() => setYearDraft(yearFromServer()), [academicYear]);
-  const yearDirty = JSON.stringify(yearDraft) !== JSON.stringify(yearFromServer());
+  const savedYear = JSON.stringify(yearFromServer());
+  useEffect(() => setYearDraft(JSON.parse(savedYear)), [savedYear]);
+  const yearDirty = JSON.stringify(yearDraft) !== savedYear;
   const yearValid = yearDraft.yearLabel.trim() !== '' && yearDraft.workingDays.length > 0 && Number.isInteger(yearDraft.semesterNumber) && yearDraft.semesterNumber >= 1 && yearDraft.semesterNumber <= 20;
 
   // Generation status state
@@ -614,7 +615,7 @@ export function AcademicSetupHubView() {
             {departments.map(dept => (
               <div key={dept.id} className="p-3.5 bg-white dark:bg-zinc-950/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
                 <div className="space-y-0.5">
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="font-bold text-stone-900 dark:text-zinc-100">{dept.name}</span>
                     <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#FAF9F5] dark:bg-zinc-900 text-[#8C1B2E] dark:text-red-400 border border-[#E5E2D9] dark:border-zinc-800 font-semibold">
                       {dept.code}
@@ -698,7 +699,7 @@ export function AcademicSetupHubView() {
               return (
                 <div key={prog.id} className="p-3.5 bg-white dark:bg-zinc-950/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
                   <div className="space-y-0.5">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className="font-bold text-stone-900 dark:text-zinc-100">{prog.name}</span>
                       <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#FAF9F5] dark:bg-zinc-900 text-stone-700 dark:text-zinc-300 border border-[#E5E2D9] dark:border-zinc-800">
                         {prog.code}
@@ -762,7 +763,7 @@ export function AcademicSetupHubView() {
               <h3 className="text-base font-bold font-serif text-stone-900 dark:text-zinc-100">Course & Subject Catalog</h3>
               <p className="text-xs text-stone-500 dark:text-zinc-400 mt-1">Accredited subjects, lecture/tutorial/lab requirements, and credit hours</p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <div className="relative">
                 <Search className="h-3.5 w-3.5 text-stone-400 dark:text-zinc-500 absolute left-2.5 top-2.5" />
                 <input
@@ -794,7 +795,7 @@ export function AcademicSetupHubView() {
                 return (
                   <div key={course.id} className="p-3.5 bg-white dark:bg-zinc-950/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
                     <div className="space-y-1">
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="font-mono font-bold text-[#8C1B2E] dark:text-red-400">{course.code}</span>
                         <span className="font-semibold text-stone-900 dark:text-zinc-100">{course.name}</span>
                         <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#FAF9F5] dark:bg-zinc-900 text-stone-700 dark:text-zinc-300 border border-[#E5E2D9] dark:border-zinc-800">
@@ -867,7 +868,7 @@ export function AcademicSetupHubView() {
               <h3 className="text-base font-bold font-serif text-stone-900 dark:text-zinc-100">Faculty & Instructional Roster</h3>
               <p className="text-xs text-stone-500 dark:text-zinc-400 mt-1">Manage instructors, designations, and UGC direct workload limits</p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <div className="relative">
                 <Search className="h-3.5 w-3.5 text-stone-400 dark:text-zinc-500 absolute left-2.5 top-2.5" />
                 <input
@@ -897,7 +898,7 @@ export function AcademicSetupHubView() {
                 return (
                   <div key={fac.id} className="p-3.5 bg-white dark:bg-zinc-950/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
                     <div className="space-y-0.5">
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="font-bold text-stone-900 dark:text-zinc-100">{fac.name}</span>
                         <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#FAF9F5] dark:bg-zinc-900 text-stone-700 dark:text-zinc-300 border border-[#E5E2D9] dark:border-zinc-800">
                           {fac.designation}
@@ -917,7 +918,7 @@ export function AcademicSetupHubView() {
                     </div>
 
                     {canEdit && (
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <button
                           onClick={() => submit(() => toggleFacultyStatus(fac.id))}
                           disabled={saving}
@@ -937,7 +938,7 @@ export function AcademicSetupHubView() {
 
           {filteredFaculty.length > 0 && <div className="flex items-center justify-between text-xs text-stone-500 dark:text-zinc-400">
             <span>{facultyPage * facultyPageSize + 1}–{Math.min((facultyPage + 1) * facultyPageSize, filteredFaculty.length)} of {filteredFaculty.length} faculty</span>
-            <div className="flex items-center gap-2"><button type="button" disabled={facultyPage === 0} onClick={() => setFacultyPage(page => Math.max(0, page - 1))} className="rounded border border-[#E5E2D9] px-2 py-1 disabled:opacity-40 dark:border-zinc-700">Previous</button><span>Page {facultyPage + 1} of {facultyPageCount}</span><button type="button" disabled={facultyPage + 1 >= facultyPageCount} onClick={() => setFacultyPage(page => Math.min(facultyPageCount - 1, page + 1))} className="rounded border border-[#E5E2D9] px-2 py-1 disabled:opacity-40 dark:border-zinc-700">Next</button></div>
+            <div className="flex flex-wrap items-center gap-2"><button type="button" disabled={facultyPage === 0} onClick={() => setFacultyPage(page => Math.max(0, page - 1))} className="rounded border border-[#E5E2D9] px-2 py-1 disabled:opacity-40 dark:border-zinc-700">Previous</button><span>Page {facultyPage + 1} of {facultyPageCount}</span><button type="button" disabled={facultyPage + 1 >= facultyPageCount} onClick={() => setFacultyPage(page => Math.min(facultyPageCount - 1, page + 1))} className="rounded border border-[#E5E2D9] px-2 py-1 disabled:opacity-40 dark:border-zinc-700">Next</button></div>
           </div>}
 
           {showAddFaculty && canEdit && (
@@ -1091,7 +1092,7 @@ export function AcademicSetupHubView() {
               return (
                 <div key={item.id} className="p-3.5 bg-white dark:bg-zinc-950/60 flex items-start justify-between gap-3 text-xs">
                   <div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className="font-semibold text-stone-900 dark:text-zinc-100">{item.name}</span>
                       <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
                         isHard ? 'bg-red-50 text-[#8C1B2E] dark:bg-red-500/10 dark:text-red-300 border border-red-200 dark:border-red-500/20 font-bold' : 'bg-stone-100 text-stone-600 dark:bg-zinc-900 dark:text-zinc-400 border border-[#E5E2D9] dark:border-zinc-800'
@@ -1250,7 +1251,7 @@ export function AcademicSetupHubView() {
               <p className="text-xs text-stone-500 dark:text-zinc-400 mt-0.5">Inspect the working draft across Sections, Faculty, and Facilities</p>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {publishStatus === 'Draft' && canEdit && (
                 <button
                   onClick={() => submit(() => updatePublishStatus('Review'))}
@@ -1405,7 +1406,7 @@ export function AcademicSetupHubView() {
                             return (
                               <div key={m.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                                 <div>
-                                  <div className="flex items-center gap-2">
+                                  <div className="flex flex-wrap items-center gap-2">
                                     <span className="font-bold text-stone-900 dark:text-zinc-100">{course?.name || m.courseId}</span>
                                     <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-red-50 text-[#8C1B2E] dark:bg-zinc-900 dark:text-red-400 border border-red-200 dark:border-zinc-800">
                                       {course?.code}

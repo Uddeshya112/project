@@ -7,25 +7,23 @@ import {
   AlertTriangle,
   ArrowRight,
   ShieldAlert,
-  GitBranch,
   Building,
   RotateCcw
 } from 'lucide-react';
 
 export function WhatIfSimulatorView() {
-  const { applySimulation, health, rooms, facultyMembers, sessions, courses, sections, academicYear } = useTimetable();
+  const { health, rooms, facultyMembers, sessions, courses, sections, academicYear } = useTimetable();
 
   const [activeScenario, setActiveScenario] = useState<string>('lab301-closure');
   const [simulationRunning, setSimulationRunning] = useState<boolean>(false);
-  const [hasApplied, setHasApplied] = useState<boolean>(false);
   const [feedback, setFeedback] = useState('');
 
   const scenarios = [
     {
       id: 'lab301-closure',
-      title: 'Hardware Lab Closure',
-      description: 'A hardware lab is taken out of service. The simulator looks for compatible rooms in the current timetable.',
-      target: 'Hardware lab',
+      title: 'Lab Closure',
+      description: 'A lab is taken out of service. The simulator looks for compatible rooms in the current timetable.',
+      target: 'Busiest lab',
     },
     {
       id: 'faculty-leave',
@@ -35,15 +33,17 @@ export function WhatIfSimulatorView() {
     },
     {
       id: 'exam-block',
-      title: 'Auditorium 101 Reserved for GATE Mock Exams',
+      title: 'Largest Lecture Hall Reserved for Exams',
       description: 'A large lecture hall is blocked. The simulator finds available rooms that can hold each section.',
       target: 'Lecture hall',
     },
   ];
 
+  const sessionsIn = (roomId: string) => sessions.filter((session) => session.roomId === roomId && session.status !== 'Cancelled').length;
   const targetRoom = useMemo(() => activeScenario === 'exam-block'
     ? [...rooms].filter((room) => room.type === 'LectureHall' && room.isAvailable).sort((a, b) => b.capacity - a.capacity)[0]
-    : rooms.find((room) => /lab\s*301/i.test(`${room.id} ${room.name}`)) || rooms.find((room) => room.type === 'HardwareLab' && room.isAvailable), [activeScenario, rooms]);
+    : rooms.filter((room) => room.isAvailable && ['ComputerLab', 'HardwareLab'].includes(room.type))
+      .sort((a, b) => sessionsIn(b.id) - sessionsIn(a.id))[0], [activeScenario, rooms, sessions]);
   const targetFaculty = useMemo(() => facultyMembers.find((faculty) => /arvind sharma/i.test(faculty.name) && sessions.some((session) => session.facultyId === faculty.id))
     || facultyMembers.find((faculty) => sessions.some((session) => session.facultyId === faculty.id)), [facultyMembers, sessions]);
   const simulationDiff = useMemo(() => {
@@ -58,13 +58,13 @@ export function WhatIfSimulatorView() {
       const course = courses.find((item) => item.id === original.courseId);
       if (activeScenario === 'faculty-leave') {
         const substitute = facultyMembers.find((faculty) => faculty.id !== targetFaculty?.id
-          && faculty.subjectsQualified.includes(original.courseId)
+          && (faculty.subjectsQualified.includes(original.courseId) || (!!course && faculty.subjectsQualified.includes(course.code)))
           && !occupied.has(`f:${original.day}:${original.timeSlotId}:${faculty.id}`));
         return { original, roomId: original.roomId, facultyId: substitute?.id || original.facultyId, changed: Boolean(substitute), reason: substitute ? 'Qualified substitute available' : 'No qualified free substitute' };
       }
       const replacement = rooms.find((room) => room.isAvailable && room.id !== targetRoom?.id
-        && room.capacity >= (section?.studentCount || 0)
-        && (!course?.requiresLab || ['ComputerLab', 'HardwareLab'].includes(room.type))
+        && room.capacity >= (section?.subSections?.find((sub) => sub.id === original.subSectionId)?.studentCount ?? section?.studentCount ?? 0)
+        && ['Lab', 'Practical'].includes(original.type) === ['ComputerLab', 'HardwareLab'].includes(room.type)
         && !occupied.has(`r:${original.day}:${original.timeSlotId}:${room.id}`));
       return { original, roomId: replacement?.id || original.roomId, facultyId: original.facultyId, changed: Boolean(replacement), reason: replacement ? 'Compatible replacement room' : 'No compatible room available' };
     });
@@ -89,15 +89,8 @@ export function WhatIfSimulatorView() {
     setSimulationRunning(true);
     setTimeout(() => {
       setSimulationRunning(false);
-      setHasApplied(false);
       setFeedback(`Optimization complete: ${simulationDiff.length} affected classes, ${changedCount} feasible changes, ${simulationDiff.length - changedCount} requiring coordinator review.`);
     }, 400);
-  };
-
-  const handleApply = () => {
-    applySimulation();
-    setHasApplied(true);
-    setFeedback('Simulation result recorded. The live timetable was not changed.');
   };
 
   return (
@@ -125,7 +118,6 @@ export function WhatIfSimulatorView() {
               key={s.id}
               onClick={() => {
                 setActiveScenario(s.id);
-                setHasApplied(false);
                 setFeedback('');
               }}
               className={`text-left p-4 rounded-xl border transition-all ${
@@ -169,28 +161,6 @@ export function WhatIfSimulatorView() {
             >
               <RotateCcw className={`h-3.5 w-3.5 ${simulationRunning ? 'animate-spin' : ''}`} />
               <span>Re-run Optimization</span>
-            </button>
-
-            <button
-              onClick={handleApply}
-              disabled={hasApplied}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold shadow-xs transition-all ${
-                hasApplied
-                  ? 'bg-emerald-700 text-white cursor-default'
-                  : 'bg-[#8C1B2E] hover:bg-[#731625] text-white active:scale-95'
-              }`}
-            >
-              {hasApplied ? (
-                <>
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                  <span>Applied to Master V2.0</span>
-                </>
-              ) : (
-                <>
-                  <GitBranch className="h-3.5 w-3.5" />
-                  <span>Record Simulation Result</span>
-                </>
-              )}
             </button>
           </div>
         </div>

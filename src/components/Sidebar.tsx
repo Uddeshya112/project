@@ -87,7 +87,7 @@ export function Sidebar({
   const isAdmin = currentWorkspace === 'Admin';
 
   const navContent = (
-    <div className="study-sidebar flex flex-col h-full bg-[#FAF9F5] dark:bg-zinc-900 border-r border-[#E5E2D9] dark:border-zinc-800 text-stone-700 dark:text-zinc-300 w-60 select-none text-xs font-medium">
+    <div className="study-sidebar dark flex flex-col h-full bg-[#FAF9F5] dark:bg-zinc-900 border-r border-[#E5E2D9] dark:border-zinc-800 text-stone-700 dark:text-zinc-300 w-60 select-none text-xs font-medium">
       {/* Brand Header */}
       <div className="p-3.5 border-b border-[#E5E2D9] dark:border-zinc-800 flex items-center justify-between">
         <div className="flex items-center gap-2.5">

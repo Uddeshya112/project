@@ -24,6 +24,8 @@ import {
   ArrowRight,
   Info,
   Check,
+  Clock,
+  CalendarDays,
   GraduationCap as StudentIcon
 } from 'lucide-react';
 
@@ -36,11 +38,13 @@ const EMPTY_PARSED: ExcelImportPreview['parsedData'] = {
   groups: [],
   subgroups: [],
   allocations: [],
-  students: []
+  students: [],
+  timeSlots: [],
+  timetable: []
 };
 
 const failedPreview = (message: string): ExcelImportPreview => ({
-  sheetCounts: { departments: 0, programs: 0, courses: 0, faculty: 0, rooms: 0, groups: 0, subgroups: 0, allocations: 0, students: 0 },
+  sheetCounts: { departments: 0, programs: 0, courses: 0, faculty: 0, rooms: 0, groups: 0, subgroups: 0, allocations: 0, students: 0, timeSlots: 0, timetable: 0 },
   totalRows: 0,
   validRows: 0,
   warningCount: 0,
@@ -59,6 +63,7 @@ export function MasterExcelHub({ onNavigateToTab, canEdit = true }: { onNavigate
     rooms,
     sections,
     allocations,
+    academicYear,
     commitMasterImport
   } = useTimetable();
 
@@ -129,7 +134,8 @@ export function MasterExcelHub({ onNavigateToTab, canEdit = true }: { onNavigate
         courses,
         facultyMembers,
         rooms,
-        sections
+        sections,
+        academicYear
       });
       setPreview(parsedPreview);
     } catch (err: any) {
@@ -281,6 +287,7 @@ export function MasterExcelHub({ onNavigateToTab, canEdit = true }: { onNavigate
                 <li>Uses human-readable codes (e.g. <code>CSED</code>, <code>CS501</code>, <code>CSE-A</code>, <code>A1</code>).</li>
                 <li>Do not rename worksheet tabs or header columns in row 1.</li>
                 <li>Subgroups automatically associate with their parent group.</li>
+                <li>Optional <code>TimeSlots</code> and <code>Timetable</code> sheets set the daily periods and class times. The classes load as a draft.</li>
               </ul>
             </div>
           </div>
@@ -393,6 +400,20 @@ export function MasterExcelHub({ onNavigateToTab, canEdit = true }: { onNavigate
                       <StudentIcon className="h-3.5 w-3.5 text-stone-400" /> Students
                     </span>
                     <strong className="font-mono text-stone-900 dark:text-zinc-100">{preview.sheetCounts.students}</strong>
+                  </div>
+
+                  <div className="p-2.5 bg-white dark:bg-zinc-950/60 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 flex items-center justify-between">
+                    <span className="text-stone-500 flex items-center gap-1.5">
+                      <Clock className="h-3.5 w-3.5 text-stone-400" /> Daily periods
+                    </span>
+                    <strong className="font-mono text-stone-900 dark:text-zinc-100">{preview.sheetCounts.timeSlots}</strong>
+                  </div>
+
+                  <div className="p-2.5 bg-white dark:bg-zinc-950/60 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 flex items-center justify-between">
+                    <span className="text-stone-500 flex items-center gap-1.5">
+                      <CalendarDays className="h-3.5 w-3.5 text-stone-400" /> Fixed classes
+                    </span>
+                    <strong className="font-mono text-stone-900 dark:text-zinc-100">{preview.sheetCounts.timetable}</strong>
                   </div>
                 </div>
 

@@ -104,11 +104,11 @@ export function GroupsAndSubgroupsTab({ canEdit = true }: { canEdit?: boolean })
     );
   };
 
-  const handleRunBulkGenerator = (e: React.FormEvent) => {
+  const handleRunBulkGenerator = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!bulkForm.departmentId) return;
-    bulkGenerateGroups(bulkForm);
-    setShowBulkGenerator(false);
+    const result = await bulkGenerateGroups(bulkForm);
+    if (result.success) setShowBulkGenerator(false);
   };
 
   // Filter sections by name
@@ -133,7 +133,7 @@ export function GroupsAndSubgroupsTab({ canEdit = true }: { canEdit?: boolean })
       {/* Top Header & Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#E5E2D9] dark:border-zinc-800 pb-3">
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="p-1 rounded bg-[#8C1B2E]/10 dark:bg-red-500/10 text-[#8C1B2E] dark:text-red-400">
               <Users className="h-4 w-4" />
             </span>
@@ -146,7 +146,7 @@ export function GroupsAndSubgroupsTab({ canEdit = true }: { canEdit?: boolean })
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <div className="relative">
             <Search className="h-3.5 w-3.5 text-stone-400 absolute left-2.5 top-2.5" />
             <input
@@ -204,7 +204,7 @@ export function GroupsAndSubgroupsTab({ canEdit = true }: { canEdit?: boolean })
           className="p-4 bg-white dark:bg-zinc-950 border border-[#8C1B2E]/30 rounded-xl space-y-3 shadow-xs animate-in fade-in duration-150"
         >
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Sparkles className="h-4 w-4 text-[#8C1B2E]" />
               <span className="text-xs font-bold font-serif text-stone-900 dark:text-zinc-100">
                 Bulk Cohort Matrix Generator
@@ -441,7 +441,7 @@ export function GroupsAndSubgroupsTab({ canEdit = true }: { canEdit?: boolean })
               {/* Group Main Header */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#E5E2D9]/80 dark:border-zinc-800/80 pb-2.5">
                 <div className="space-y-0.5">
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="font-serif font-bold text-sm text-stone-900 dark:text-zinc-100">
                       Section {sec.name}
                     </span>
@@ -463,7 +463,7 @@ export function GroupsAndSubgroupsTab({ canEdit = true }: { canEdit?: boolean })
                 </div>
 
                 {canEdit && (
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <button
                       onClick={() => {
                         if (isAddingSubgroup) {

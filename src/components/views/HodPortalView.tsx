@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { AlertTriangle, BarChart3, CheckCircle2, ClipboardCheck, Users } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useTimetable } from '../../context/TimetableContext';
+import { periodLabel } from '../../lib/recoveryEngine';
 import { PollComposer } from './PollComposer';
 import { facultyTeachingCap, facultyTeachingPeriods } from '../../lib/facultyWorkload';
 
@@ -96,7 +97,7 @@ export function HodPortalView() {
       <div className="grid gap-4 lg:grid-cols-2">
         <section className={`${card} p-4`}>
           <h2 className="mb-3 flex items-center gap-2 font-serif font-bold text-stone-900 dark:text-zinc-100"><AlertTriangle className="h-4 w-4 text-amber-600" />Class disruptions</h2>
-          {cancelled.length === 0 ? <p className="text-xs text-stone-500 dark:text-zinc-400">No cancelled classes in the current timetable.</p> : <ul className="space-y-2">{cancelled.slice(0, 8).map((session) => <li key={session.id} className="rounded-lg bg-white p-3 text-xs dark:bg-zinc-950"><strong>{courses.find((c) => c.id === session.courseId)?.code || session.courseId}</strong> · {sections.find((s) => s.id === session.sectionId)?.name || session.sectionId} · {session.day} {session.timeSlotId}<div className="mt-1 text-stone-500 dark:text-zinc-400">{session.cancellationReason || 'No reason provided'}</div></li>)}</ul>}
+          {cancelled.length === 0 ? <p className="text-xs text-stone-500 dark:text-zinc-400">No cancelled classes in the current timetable.</p> : <ul className="space-y-2">{cancelled.slice(0, 8).map((session) => <li key={session.id} className="rounded-lg bg-white p-3 text-xs dark:bg-zinc-950"><strong>{courses.find((c) => c.id === session.courseId)?.code || session.courseId}</strong> · {sections.find((s) => s.id === session.sectionId)?.name || session.sectionId} · {session.day} {periodLabel(academicYear, session.timeSlotId)}<div className="mt-1 text-stone-500 dark:text-zinc-400">{session.cancellationReason || 'No reason provided'}</div></li>)}</ul>}
         </section>
 
         <section className={`${card} p-4`}>

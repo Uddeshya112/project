@@ -37,7 +37,6 @@ export function GenerateTimetablePage() {
     generateDualRoutinesAPI,
     selectRoutineAPI,
     latestGeneratedRoutines,
-    applyCandidateAsDraft,
     publishMasterTimetable,
     publishStatus,
     setActiveView,
@@ -45,8 +44,6 @@ export function GenerateTimetablePage() {
 
   // Generator Settings State
   const [budgetMode, setBudgetMode] = useState<'FAST' | 'BALANCED' | 'MAXIMUM_OPTIMIZATION'>('BALANCED');
-  const [timeBudgetMs, setTimeBudgetMs] = useState<number>(1000);
-  const [numCandidates, setNumCandidates] = useState<number>(3);
 
   // Execution State
   const [isGenerating, setIsGenerating] = useState(false);
@@ -57,7 +54,14 @@ export function GenerateTimetablePage() {
   } | null>(null);
 
   const [selectedCandidateIdx, setSelectedCandidateIdx] = useState<number>(0);
-  const [publishFeedback, setPublishFeedback] = useState<{ success: boolean; message: string } | null>(null);
+  const [publishFeedback, setPublishFeedback] = useState<{ success: boolean; title: string; message: string } | null>(null);
+  const requiredPeriods = allocations.reduce((total, allocation) => total + allocation.hoursPerWeek, 0);
+  const placement = (s: { courseId: string; sectionId: string; subSectionId?: string; day: string; timeSlotId: string }) =>
+    [s.courseId, s.sectionId, s.subSectionId ?? '', s.day, s.timeSlotId].join('|');
+  const [routineA, routineB] = generationOutput?.candidates ?? [];
+  const inRoutineA = new Set((routineA?.sessions ?? []).map(placement));
+  const identicalSlots = (routineB?.sessions ?? []).filter(session => inRoutineA.has(placement(session))).length;
+  const comparedSlots = routineB?.sessions.length ?? 0;
 
   const activeCoursesCount = courses.filter(c => c.status !== 'Archived').length;
   const allocatedCoursesCount = new Set(allocations.map(a => a.courseId)).size;
@@ -90,7 +94,7 @@ export function GenerateTimetablePage() {
           },
           healthScore: r.healthScore,
           scheduledHours: r.sessions.length,
-          totalRequestedHours: 736,
+          totalRequestedHours: requiredPeriods,
           unscheduledAllocations: [],
         })),
         validationReports: latestGeneratedRoutines.map(r => ({
@@ -100,7 +104,7 @@ export function GenerateTimetablePage() {
           warningCount: 0,
           violations: [],
           totalSessionsEvaluated: r.sessions.length,
-          requiredSessionsCount: 736,
+          requiredSessionsCount: requiredPeriods,
           scheduledSessionsCount: r.sessions.length,
           completionRate: 100,
           metrics: {
@@ -130,7 +134,7 @@ export function GenerateTimetablePage() {
     setPublishFeedback(null);
 
     try {
-      const res = await generateDualRoutinesAPI();
+      const res = await generateDualRoutinesAPI(budgetMode);
       if (res.success && res.routines && res.routines.length > 0) {
         setGenerationOutput({
           candidates: res.routines.map((r: any, i: number) => ({
@@ -153,7 +157,7 @@ export function GenerateTimetablePage() {
             },
             healthScore: r.healthScore,
             scheduledHours: r.sessions.length,
-            totalRequestedHours: 736,
+            totalRequestedHours: requiredPeriods,
             unscheduledAllocations: [],
           })),
           validationReports: res.routines.map((r: any) => ({
@@ -163,7 +167,7 @@ export function GenerateTimetablePage() {
             warningCount: 0,
             violations: [],
             totalSessionsEvaluated: r.sessions.length,
-            requiredSessionsCount: 736,
+            requiredSessionsCount: requiredPeriods,
             scheduledSessionsCount: r.sessions.length,
             completionRate: 100,
             metrics: {
@@ -189,12 +193,14 @@ export function GenerateTimetablePage() {
       } else {
         setPublishFeedback({
           success: false,
+          title: 'Timetable not generated',
           message: res.error || res.message || 'Generation failed.',
         });
       }
     } catch (err: any) {
       setPublishFeedback({
         success: false,
+        title: 'Timetable not generated',
         message: err.message || 'Generation error.',
       });
     } finally {
@@ -204,9 +210,11 @@ export function GenerateTimetablePage() {
 
   const handleSelectAndApply = async (idx: number) => {
     if (!generationOutput || !generationOutput.candidates[idx]) return;
-    setSelectedCandidateIdx(idx);
-    applyCandidateAsDraft(generationOutput.candidates[idx]);
-    await selectRoutineAPI(idx + 1);
+    const versionNumber = latestGeneratedRoutines?.[idx]?.versionNumber;
+    if (!versionNumber) return;
+    const result = await selectRoutineAPI(versionNumber);
+    if (result.success) setSelectedCandidateIdx(idx);
+    else setPublishFeedback({ success: false, title: 'Routine not selected', message: result.message || 'This routine could not be selected.' });
   };
 
   const handlePublishCurrent = async () => {
@@ -214,11 +222,13 @@ export function GenerateTimetablePage() {
     if (res.success) {
       setPublishFeedback({
         success: true,
+        title: 'Published Successfully',
         message: 'Master timetable officially published! Live matrix synchronized across all Student, Faculty, and Room portals.',
       });
     } else {
       setPublishFeedback({
         success: false,
+        title: 'Publication Blocked',
         message: res.error || 'Failed to publish timetable: hard violations detected.',
       });
     }
@@ -360,21 +370,6 @@ export function GenerateTimetablePage() {
               <option value="MAXIMUM_OPTIMIZATION">Thorough (Maximum Gap Minimization)</option>
             </select>
           </div>
-
-          <div>
-            <label className="text-stone-700 dark:text-zinc-300 font-medium block mb-1">
-              Number of Candidate Options
-            </label>
-            <select
-              value={numCandidates}
-              onChange={e => setNumCandidates(Number(e.target.value))}
-              className="w-full bg-white dark:bg-zinc-950 border border-[#E5E2D9] dark:border-zinc-800 rounded-lg p-2.5 text-stone-900 dark:text-zinc-200 outline-none focus:border-[#8C1B2E]"
-            >
-              <option value={1}>1 Timetable Option</option>
-              <option value={3}>3 Timetable Options (Recommended)</option>
-              <option value={5}>5 Timetable Options</option>
-            </select>
-          </div>
         </div>
 
         <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-[#E5E2D9] dark:border-zinc-800">
@@ -404,6 +399,27 @@ export function GenerateTimetablePage() {
           </button>
         </div>
       </div>
+
+      {/* Feedback */}
+      {publishFeedback && (
+        <div
+          className={`p-4 rounded-xl border text-xs flex items-start gap-2.5 animate-in fade-in duration-200 ${
+            publishFeedback.success
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-900 dark:bg-emerald-950/20 dark:border-emerald-800/40 dark:text-emerald-300'
+              : 'bg-rose-50 border-rose-200 text-rose-900 dark:bg-red-950/20 dark:border-red-800/40 dark:text-red-300'
+          }`}
+        >
+          {publishFeedback.success ? (
+            <CheckCircle2 className="h-4 w-4 text-emerald-600 mt-0.5 shrink-0" />
+          ) : (
+            <XCircle className="h-4 w-4 text-rose-600 mt-0.5 shrink-0" />
+          )}
+          <div>
+            <div className="font-bold">{publishFeedback.title}</div>
+            <div className="mt-0.5">{publishFeedback.message}</div>
+          </div>
+        </div>
+      )}
 
       {/* STEP 3 & 4: Review Options & Publish */}
       {generationOutput && (
@@ -461,7 +477,7 @@ export function GenerateTimetablePage() {
                         {focusDesc}
                       </p>
                       <span className="text-[11px] font-mono font-semibold text-stone-700 dark:text-zinc-300 block mt-1.5">
-                        {cand.scheduledHours} / 736 sessions scheduled
+                        {cand.scheduledHours} / {requiredPeriods} sessions scheduled
                       </span>
                     </div>
 
@@ -560,13 +576,12 @@ export function GenerateTimetablePage() {
             <div className="p-3.5 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl text-xs space-y-1.5 shadow-2xs font-mono">
               <div className="flex items-center justify-between font-serif font-bold text-stone-900 dark:text-zinc-100 font-sans border-b border-[#E5E2D9] dark:border-zinc-800 pb-1.5">
                 <span>Routine A vs Routine B Distinctness Audit</span>
-                <span className="text-emerald-700 dark:text-emerald-400 font-bold">60.87% Distinct</span>
+                <span className="text-emerald-700 dark:text-emerald-400 font-bold">{comparedSlots ? Math.round(((comparedSlots - identicalSlots) / comparedSlots) * 100) : 0}% Distinct</span>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-0.5 text-stone-600 dark:text-zinc-400 text-[11px]">
-                <div>Total Sessions: <strong>736</strong></div>
-                <div>Identical Slots: <strong>288</strong></div>
-                <div>Different Slots: <strong>448</strong></div>
-                <div>Diversity Status: <strong className="text-emerald-700">Genuine Solver Spread</strong></div>
+                <div>Total Sessions: <strong>{comparedSlots}</strong></div>
+                <div>Identical Slots: <strong>{identicalSlots}</strong></div>
+                <div>Different Slots: <strong>{comparedSlots - identicalSlots}</strong></div>
               </div>
             </div>
           )}
@@ -602,27 +617,6 @@ export function GenerateTimetablePage() {
               </button>
             </div>
           </div>
-
-          {/* Feedback */}
-          {publishFeedback && (
-            <div
-              className={`p-4 rounded-xl border text-xs flex items-start gap-2.5 animate-in fade-in duration-200 ${
-                publishFeedback.success
-                  ? 'bg-emerald-50 border-emerald-200 text-emerald-900 dark:bg-emerald-950/20 dark:border-emerald-800/40 dark:text-emerald-300'
-                  : 'bg-rose-50 border-rose-200 text-rose-900 dark:bg-red-950/20 dark:border-red-800/40 dark:text-red-300'
-              }`}
-            >
-              {publishFeedback.success ? (
-                <CheckCircle2 className="h-4 w-4 text-emerald-600 mt-0.5 shrink-0" />
-              ) : (
-                <XCircle className="h-4 w-4 text-rose-600 mt-0.5 shrink-0" />
-              )}
-              <div>
-                <div className="font-bold">{publishFeedback.success ? 'Published Successfully' : 'Publication Blocked'}</div>
-                <div className="mt-0.5">{publishFeedback.message}</div>
-              </div>
-            </div>
-          )}
         </div>
       )}
     </div>

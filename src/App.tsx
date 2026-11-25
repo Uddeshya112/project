@@ -1,4 +1,4 @@
-import React, { Suspense, useState, useEffect } from 'react';
+import React, { Suspense, useState, useEffect, useRef } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 const DashboardLayout = React.lazy(() => import('./components/DashboardLayout').then((module) => ({ default: module.DashboardLayout })));
@@ -11,6 +11,8 @@ import { WorkspaceType } from './types';
 function MainLayout() {
   const { authStatus, authorizedWorkspaces, switchWorkspace, logout } = useAuth();
   const [showLoginPage, setShowLoginPage] = useState(true);
+  // Taken once: the address changes as soon as a workspace opens.
+  const openedWorkspace = useRef(window.location.pathname.split('/')[1]);
   const [showWorkspacePicker, setShowWorkspacePicker] = useState(false);
   const [showEmailVerification, setShowEmailVerification] = useState(() => window.location.pathname === '/verify-email');
 
@@ -23,11 +25,9 @@ function MainLayout() {
   const handleLoginSuccess = (incomingWorkspaces?: WorkspaceType[]) => {
     setShowLoginPage(false);
     const ws = incomingWorkspaces || authorizedWorkspaces;
-    if (ws && ws.length > 1) {
-      setShowWorkspacePicker(true);
-    } else {
-      setShowWorkspacePicker(false);
-    }
+    // A reload or a deep link already says which workspace to open.
+    const isLinked = ws?.some((item) => item.toLowerCase() === openedWorkspace.current);
+    setShowWorkspacePicker(Boolean(ws && ws.length > 1 && !isLinked));
   };
 
   const handleSelectWorkspace = (ws: WorkspaceType) => {
@@ -39,6 +39,7 @@ function MainLayout() {
     const revocation = logout();
     setShowWorkspacePicker(false);
     setShowLoginPage(true);
+    openedWorkspace.current = '';
     window.history.replaceState(null, '', '/');
     await revocation;
   };

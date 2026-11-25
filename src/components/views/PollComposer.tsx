@@ -1,8 +1,11 @@
 import React, { useMemo, useState } from 'react';
 import { useTimetable } from '../../context/TimetableContext';
 import type { DayOfWeek } from '../../types';
+import { courseLabel } from '../../lib/courseLabel';
+import { pollOptionLabel } from '../../lib/pollLabel';
 
-export function PollComposer({ sectionIds }: { sectionIds?: string[] }) {
+/** `taughtBy` limits the courses to the ones that teacher has with the chosen section. */
+export function PollComposer({ sectionIds, taughtBy }: { sectionIds?: string[]; taughtBy?: string }) {
   const { sections, courses, allocations, academicYear, createPoll, polls, sessions } = useTimetable();
   const availableSections = useMemo(() => sections.filter((section) => !sectionIds || sectionIds.includes(section.id)), [sections, sectionIds]);
   const [sectionId, setSectionId] = useState('');
@@ -16,10 +19,11 @@ export function PollComposer({ sectionIds }: { sectionIds?: string[] }) {
   const [saving, setSaving] = useState(false);
   const selectedSectionId = availableSections.some((item) => item.id === sectionId) ? sectionId : availableSections[0]?.id || '';
   const availableCourses = useMemo(() => {
-    const enrolledCourseIds = new Set(allocations.filter((allocation) => allocation.sectionId === selectedSectionId).map((allocation) => allocation.courseId));
-    for (const session of sessions) if (session.sectionId === selectedSectionId) enrolledCourseIds.add(session.courseId);
+    const enrolledCourseIds = new Set((taughtBy ? sessions : [...allocations, ...sessions])
+      .filter((item) => item.sectionId === selectedSectionId && (!taughtBy || item.facultyId === taughtBy))
+      .map((item) => item.courseId));
     return courses.filter((course) => enrolledCourseIds.has(course.id));
-  }, [allocations, courses, selectedSectionId, sessions]);
+  }, [allocations, courses, selectedSectionId, sessions, taughtBy]);
   const selectedCourseId = availableCourses.some((item) => item.id === courseId) ? courseId : availableCourses[0]?.id || '';
 
   const submit = async (event: React.FormEvent) => {
@@ -45,7 +49,7 @@ export function PollComposer({ sectionIds }: { sectionIds?: string[] }) {
         </label>
         <label className="space-y-1 text-[11px] text-stone-600 dark:text-zinc-400">Course
           <select value={selectedCourseId} onChange={(event) => setCourseId(event.target.value)} className="w-full rounded-lg border border-[#E5E2D9] bg-white p-2 text-xs dark:border-zinc-700 dark:bg-zinc-900">
-            {availableCourses.map((course) => <option key={course.id} value={course.id}>{course.code} · {course.name}</option>)}
+            {availableCourses.map((course) => <option key={course.id} value={course.id}>{courseLabel(course)}</option>)}
           </select>
         </label>
       </div>
@@ -68,7 +72,7 @@ export function PollComposer({ sectionIds }: { sectionIds?: string[] }) {
         return <div key={poll.id} className="border-t border-[#E5E2D9] pt-3 text-xs dark:border-zinc-800">
           <p className="font-semibold text-stone-800 dark:text-zinc-200">Live results: {poll.question}</p>
           <p className="mt-1 text-[11px] text-stone-500">{poll.votedStudentsCount} of {poll.totalEligibleStudents} students voted</p>
-          <div className="mt-2 space-y-1">{poll.options.map((option) => <div key={option.id} className="flex justify-between text-[11px] text-stone-600 dark:text-zinc-400"><span>{option.day} · {option.timeSlotLabel}</span><span>{option.votes} ({total ? Math.round(option.votes / total * 100) : 0}%)</span></div>)}</div>
+          <div className="mt-2 space-y-1">{poll.options.map((option) => <div key={option.id} className="flex justify-between text-[11px] text-stone-600 dark:text-zinc-400"><span>{pollOptionLabel(option)}</span><span>{option.votes} ({total ? Math.round(option.votes / total * 100) : 0}%)</span></div>)}</div>
         </div>;
       })}
     </div>

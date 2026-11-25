@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { useTimetable } from '../../../context/TimetableContext';
 import { SessionType } from '../../../types';
+import { courseLabel, courseName } from '../../../lib/courseLabel';
+import { isPracticalType } from '../../../lib/timetableGridLayout';
 import {
   BookOpen,
   Plus,
@@ -122,15 +124,15 @@ export function CourseAllocationsTab({ canEdit = true }: { canEdit?: boolean }) 
   });
 
   const lectureCount = allocations.filter(a => a.sessionType === 'Lecture').length;
-  const labCount = allocations.filter(a => a.sessionType === 'Lab').length;
-  const tutCount = allocations.filter(a => a.sessionType === 'Tutorial' || a.sessionType === 'Practical').length;
+  const labCount = allocations.filter(a => isPracticalType(a.sessionType)).length;
+  const tutCount = allocations.filter(a => a.sessionType === 'Tutorial').length;
 
   return (
     <div className="p-5 bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl space-y-5 shadow-xs">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#E5E2D9] dark:border-zinc-800 pb-3">
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="p-1 rounded bg-[#8C1B2E]/10 dark:bg-red-500/10 text-[#8C1B2E] dark:text-red-400">
               <BookOpen className="h-4 w-4" />
             </span>
@@ -165,11 +167,11 @@ export function CourseAllocationsTab({ canEdit = true }: { canEdit?: boolean }) 
           <span className="font-serif font-bold text-base text-[#8C1B2E] dark:text-red-400">{lectureCount}</span>
         </div>
         <div className="p-3 bg-white dark:bg-zinc-950/60 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 flex items-center justify-between">
-          <span className="text-stone-500">Labs (Subgroup Cohorts)</span>
+          <span className="text-stone-500">Labs &amp; Practicals (Subgroups)</span>
           <span className="font-serif font-bold text-base text-sky-700 dark:text-sky-400">{labCount}</span>
         </div>
         <div className="p-3 bg-white dark:bg-zinc-950/60 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 flex items-center justify-between">
-          <span className="text-stone-500">Tutorials / Practicals</span>
+          <span className="text-stone-500">Tutorials</span>
           <span className="font-serif font-bold text-base text-amber-700 dark:text-amber-400">{tutCount}</span>
         </div>
       </div>
@@ -198,7 +200,7 @@ export function CourseAllocationsTab({ canEdit = true }: { canEdit?: boolean }) 
                 <option value="">Select course…</option>
                 {courses.map(c => (
                   <option key={c.id} value={c.id}>
-                    {c.code} · {c.name}
+                    {courseLabel(c)}
                   </option>
                 ))}
               </select>
@@ -273,7 +275,6 @@ export function CourseAllocationsTab({ canEdit = true }: { canEdit?: boolean }) 
                 <option value="Lab">Lab (Practical Session)</option>
                 <option value="Tutorial">Tutorial</option>
                 <option value="Practical">Practical</option>
-                <option value="Elective">Elective</option>
               </select>
             </div>
 
@@ -336,7 +337,7 @@ export function CourseAllocationsTab({ canEdit = true }: { canEdit?: boolean }) 
 
       {/* Search and Filters Bar */}
       <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <div className="relative">
             <Search className="h-3.5 w-3.5 text-stone-400 absolute left-2.5 top-2.5" />
             <input
@@ -401,7 +402,7 @@ export function CourseAllocationsTab({ canEdit = true }: { canEdit?: boolean }) 
                   <span className="font-mono font-bold text-[#8C1B2E] dark:text-red-400">
                     {course?.code || alloc.courseId}
                   </span>
-                  <span className="font-semibold text-stone-900 dark:text-zinc-100">{course?.name}</span>
+                  <span className="font-semibold text-stone-900 dark:text-zinc-100">{courseName(course)}</span>
 
                   {/* Target Cohort Badge: Whole Group vs Subgroup */}
                   {subgroup ? (
@@ -418,7 +419,7 @@ export function CourseAllocationsTab({ canEdit = true }: { canEdit?: boolean }) 
 
                   <span
                     className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${
-                      alloc.sessionType === 'Lab'
+                      isPracticalType(alloc.sessionType)
                         ? 'bg-purple-50 text-purple-800 border-purple-200 dark:bg-purple-950/20 dark:text-purple-300'
                         : alloc.sessionType === 'Tutorial'
                         ? 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/20 dark:text-amber-300'

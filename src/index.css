@@ -71,7 +71,7 @@
   background-image: radial-gradient(ellipse at 85% 0%, rgba(234, 212, 178, .28), transparent 38%);
   padding: clamp(18px, 3vw, 42px);
 }
-.study-content > * { animation: study-arrive .45s cubic-bezier(.2,.75,.25,1) both; }
+.study-content > * { animation: study-arrive .45s cubic-bezier(.2,.75,.25,1) backwards; }
 .study-content [class*="rounded"][class*="border"] { transition: box-shadow .22s ease, border-color .22s ease, transform .22s ease; }
 .study-content [class*="bg-white"][class*="border"] { box-shadow: 0 2px 3px rgba(45, 32, 25, .035), 0 12px 32px rgba(45, 32, 25, .035); }
 .study-content [class*="bg-white"][class*="border"]:hover { border-color: #d6c7b4; }
@@ -102,8 +102,19 @@
 .study-course-three { left: 7%; top: 126px; z-index: 1; background: #c07c3d; transform: rotate(-2deg); animation-delay: -4s; }
 .study-story-foot { max-width: 420px; display: flex; justify-content: space-between; border-top: 1px solid #d8cec0; padding-top: 14px; font-size: 9px; }
 .study-login-card { border-radius: 24px; border-color: rgba(255,255,255,.84); background: rgba(250,249,245,.94); box-shadow: 0 28px 80px rgba(55,39,32,.13), 0 4px 12px rgba(55,39,32,.05); padding: clamp(24px, 3vw, 38px); }
-@keyframes study-arrive { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.dark .study-workspace, .dark .study-content, .dark .study-login { background: #0c0c0e; }
+.dark .study-topbar { background: rgba(24, 24, 27, .92); border-color: #27272a; }
+.dark .study-content [class*="bg-white"][class*="border"]:hover { border-color: #52525b; }
+.dark .study-login-card { background: #18181b; border-color: #27272a; }
+.dark .study-login-story h1 { color: #f4f4f5; }
+.dark .study-login-story h1 em { color: #f87171; }
+.dark .study-story-kicker, .dark .study-story-foot, .dark .study-story-copy { color: #a1a1aa; }
+.dark .study-story-foot { border-color: #3f3f46; }
+@keyframes study-arrive { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @keyframes study-float { 0%,100% { translate: 0 0; } 50% { translate: 0 -8px; } }
+@media (min-width: 901px) {
+  .study-login-footer { position: absolute; inset: auto 0 14px; margin: 0; }
+}
 @media (max-width: 900px) {
   .study-login { flex-direction: column; align-items: center; gap: 14px; padding: 22px; }
   .study-login-story { width: min(100%, 520px); padding: 0; }
@@ -145,6 +156,9 @@
   .timetable-print-view, .timetable-print-view * { visibility: visible !important; }
   .timetable-print-view { position: absolute; inset: 0 auto auto 0; width: 100%; max-width: none !important; padding: 0 !important; background: white !important; color: black !important; }
   .timetable-print-view button, .timetable-print-view select { display: none !important; }
+  /* Each class in the grid is a button. */
+  .timetable-print-view td button:not(.print-skip) { display: block !important; }
+  .timetable-print-view .overflow-x-auto, .timetable-print-view .overflow-hidden { overflow: visible !important; }
 }
 
 /* Refined custom scrollbars */

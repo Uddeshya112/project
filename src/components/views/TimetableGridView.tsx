@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useTimetable } from '../../context/TimetableContext';
 import { useAuth } from '../../context/AuthContext';
-import { TIME_SLOTS } from '../../lib/initialData';
-import { getGridCellRowSpan, isGridCellCoveredByLab } from '../../lib/timetableGridLayout';
+import { getGridCellRowSpan, isGridCellCoveredByLab, isPracticalType } from '../../lib/timetableGridLayout';
+import { courseLabel, courseName } from '../../lib/courseLabel';
+import { classBlock, periodLabel } from '../../lib/recoveryEngine';
 import { DayOfWeek, ClassSession } from '../../types';
 
 const downloadFile = (filename: string, mimeType: string, content: string) => {
@@ -49,6 +50,7 @@ export function TimetableGridView() {
     addSession,
     deleteSession,
     moveSessionWithValidation,
+    runIndependentValidation,
     swapSessionsWithValidation,
     publishStatus,
     publishMasterTimetable,
@@ -63,9 +65,9 @@ export function TimetableGridView() {
   const [cancellationReasonInput, setCancellationReasonInput] = useState('');
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [scheduleSlotTarget, setScheduleSlotTarget] = useState<{ day: DayOfWeek; timeSlotId: string } | null>(null);
-  const [newCourseId, setNewCourseId] = useState(() => courses.find(c => c.code === 'CS501')?.id || courses[0]?.id || '');
-  const [newFacultyId, setNewFacultyId] = useState(() => facultyMembers.find(f => f.id === 'fac-0001')?.id || facultyMembers[0]?.id || '');
-  const [newRoomId, setNewRoomId] = useState(() => rooms.find(r => r.name === 'LT-101')?.id || rooms[0]?.id || '');
+  const [newCourseId, setNewCourseId] = useState(() => courses[0]?.id || '');
+  const [newFacultyId, setNewFacultyId] = useState(() => facultyMembers[0]?.id || '');
+  const [newRoomId, setNewRoomId] = useState(() => rooms[0]?.id || '');
   const [newSectionId, setNewSectionId] = useState('sec-cse-a');
   const [newType, setNewType] = useState<'Lecture' | 'Lab' | 'Tutorial'>('Lecture');
   const [scheduleError, setScheduleError] = useState<string | null>(null);
@@ -81,12 +83,12 @@ export function TimetableGridView() {
   const [sessionActionBusy, setSessionActionBusy] = useState(false);
   const canManageSessions = ['COORDINATOR', 'COLLEGE_ADMIN', 'SUPER_ADMIN'].includes(currentUser?.roleCode || '');
 
-  const days: DayOfWeek[] = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+  const days: DayOfWeek[] = academicYear.workingDays.length > 0 ? academicYear.workingDays : ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
 
   useEffect(() => {
-    if (!courses.some(c => c.id === newCourseId)) setNewCourseId(courses.find(c => c.code === 'CS501')?.id || courses[0]?.id || '');
-    if (!facultyMembers.some(f => f.id === newFacultyId)) setNewFacultyId(facultyMembers.find(f => f.id === 'fac-0001')?.id || facultyMembers[0]?.id || '');
-    if (!rooms.some(r => r.id === newRoomId)) setNewRoomId(rooms.find(r => r.name === 'LT-101')?.id || rooms[0]?.id || '');
+    if (!courses.some(c => c.id === newCourseId)) setNewCourseId(courses[0]?.id || '');
+    if (!facultyMembers.some(f => f.id === newFacultyId)) setNewFacultyId(facultyMembers[0]?.id || '');
+    if (!rooms.some(r => r.id === newRoomId)) setNewRoomId(rooms[0]?.id || '');
     if (!sections.some(s => s.id === newSectionId)) setNewSectionId(sections.find(s => s.name === 'CSE-A')?.id || sections[0]?.id || '');
   }, [courses, facultyMembers, rooms, sections, newCourseId, newFacultyId, newRoomId, newSectionId]);
 
@@ -132,13 +134,29 @@ export function TimetableGridView() {
     const events = filteredSessions.filter((session) => session.status !== 'Cancelled').map((session) => {
       const slot = academicYear.timeSlots.find((item) => item.id === session.timeSlotId);
       const course = courses.find((item) => item.id === session.courseId);
-      const title = course ? `${course.code} ${course.name}` : session.courseId;
+      const title = course ? courseLabel(course, ' ') : session.courseId;
       const room = rooms.find((item) => item.id === session.roomId)?.name || session.roomId;
       const start = slot ? icsDateTime(session.day, slot.startTime) : icsDateTime(session.day, '09:00');
       const end = slot ? icsDateTime(session.day, slot.endTime) : icsDateTime(session.day, '10:00');
       return `BEGIN:VEVENT\r\nUID:${session.id}@tiet-timetable\r\nDTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')}\r\nDTSTART:${start}\r\nDTEND:${end}\r\nRRULE:FREQ=WEEKLY;COUNT=16\r\nSUMMARY:${escapeIcs(title)}\r\nLOCATION:${escapeIcs(room)}\r\nEND:VEVENT`;
     });
     downloadFile('timetable.ics', 'text/calendar;charset=utf-8', `BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//TIET//Timetable//EN\r\n${events.join('\r\n')}\r\nEND:VCALENDAR`);
+  };
+
+  const detailCourse = courses.find(c => c.id === activeSessionDetail?.courseId);
+  const detailSection = sections.find(s => s.id === activeSessionDetail?.sectionId);
+  const detailSubgroup = detailSection?.subSections?.find(sub => sub.id === activeSessionDetail?.subSectionId);
+  // Only people who manage the timetable receive everything the check needs.
+  const detailId = canManageSessions ? activeSessionDetail?.id : undefined;
+  const detailProblems = useMemo(() => detailId === undefined ? [] : [...new Set(
+    runIndependentValidation(sessions).violations.filter(v => v.severity === 'CRITICAL' && v.sessionIds.includes(detailId)).map(v => v.message)
+  )], [detailId, sessions]);
+
+  /** "Practical · 3C21" for one subgroup, otherwise the type and the length of a block. */
+  const sessionLabel = (session: ClassSession) => {
+    const subgroup = sections.find(item => item.id === session.sectionId)?.subSections?.find(sub => sub.id === session.subSectionId)?.name;
+    if (subgroup) return `${session.type} · ${subgroup}`;
+    return (session.durationPeriods ?? 1) > 1 ? `${session.type} (${session.durationPeriods} periods)` : session.type;
   };
 
   // Filter sessions based on active mode
@@ -163,7 +181,7 @@ export function TimetableGridView() {
     );
     setSavingCancellation(false);
     if (!result.success) {
-      setScheduleError('The cancellation was not saved. Check your connection and authorization, then try again.');
+      setScheduleError(result.message || 'The class was not cancelled.');
       return;
     }
     setShowCancelModal(false);
@@ -413,17 +431,17 @@ export function TimetableGridView() {
               </tr>
             </thead>
             <tbody className="divide-y divide-[#E5E2D9] dark:divide-zinc-800">
-              {TIME_SLOTS.map(slot => {
-                const isLunch = slot.id === 'ts-5';
+              {academicYear.timeSlots.map(slot => {
+                const isLunch = Boolean(slot.isLunch || slot.id === academicYear.lunchPeriodId);
 
-                if (isLunch) {
+                if (isLunch || slot.isBreak) {
                   return (
                     <tr key={slot.id} className="bg-[#F4F2EC] dark:bg-zinc-950/60">
                       <td className="p-2.5 font-mono text-[11px] text-stone-500 dark:text-zinc-400 border-r border-[#E5E2D9] dark:border-zinc-800 whitespace-nowrap">
                         {slot.startTime}–{slot.endTime}
                       </td>
-                      <td colSpan={5} className="p-2.5 text-center text-xs font-medium text-stone-500 dark:text-zinc-400 tracking-wide">
-                        Lunch Break
+                      <td colSpan={days.length} className="p-2.5 text-center text-xs font-medium text-stone-500 dark:text-zinc-400 tracking-wide">
+                        {isLunch ? 'Lunch Break' : 'Break'}
                       </td>
                     </tr>
                   );
@@ -435,12 +453,12 @@ export function TimetableGridView() {
                       {slot.startTime}–{slot.endTime}
                     </td>
                     {days.map(day => {
-                      if (isGridCellCoveredByLab(filteredSessions, day, slot.id, TIME_SLOTS)) return null;
+                      if (isGridCellCoveredByLab(filteredSessions, day, slot.id, academicYear.timeSlots)) return null;
                       const slotSessions = filteredSessions.filter(
                         s => s.day === day && s.timeSlotId === slot.id
                       );
                       const session = slotSessions[0];
-                      const rowSpan = getGridCellRowSpan(filteredSessions, day, slot.id, TIME_SLOTS);
+                      const rowSpan = getGridCellRowSpan(filteredSessions, day, slot.id, academicYear.timeSlots);
 
                       if (!session) {
                         return (
@@ -451,7 +469,7 @@ export function TimetableGridView() {
                                 setScheduleSlotTarget({ day, timeSlotId: slot.id });
                                 setScheduleError(null);
                               }}
-                              className="w-full h-16 rounded-lg border border-dashed border-[#E5E2D9] dark:border-zinc-700/80 hover:border-[#8C1B2E] hover:bg-[#8C1B2E]/5 flex flex-col items-center justify-center text-stone-400 hover:text-[#8C1B2E] text-[10px] transition-all group"
+                              className="print-skip w-full h-16 rounded-lg border border-dashed border-[#E5E2D9] dark:border-zinc-700/80 hover:border-[#8C1B2E] hover:bg-[#8C1B2E]/5 flex flex-col items-center justify-center text-stone-400 hover:text-[#8C1B2E] text-[10px] transition-all group"
                             >
                               <span className="font-medium">+ Assign</span>
                               <span className="text-[9px] text-stone-400 group-hover:text-[#8C1B2E]">Free Slot</span>
@@ -466,7 +484,7 @@ export function TimetableGridView() {
                           const parallelSection = sections.find(item => item.id === parallelSession.sectionId);
                           const parallelFaculty = facultyMembers.find(item => item.id === parallelSession.facultyId);
                           const cancelled = parallelSession.status === 'Cancelled';
-                          return <button key={parallelSession.id} type="button" onClick={() => handleCellClick(parallelSession)} className={`w-full rounded-lg border p-2 text-left ${cancelled ? 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300' : 'border-blue-200 bg-blue-50/60 text-stone-900 dark:border-blue-900 dark:bg-blue-950/30 dark:text-zinc-100'}`}><div className="flex items-center justify-between gap-1"><span className="font-mono text-xs font-bold">{parallelCourse?.code || parallelSession.courseId}</span><span className="text-[9px]">{cancelled ? 'Cancelled' : parallelSession.durationPeriods && parallelSession.durationPeriods > 1 ? `${parallelSession.type} (${parallelSession.durationPeriods}h)` : parallelSession.type}</span></div><div className="truncate text-[10px]">{filterMode === 'faculty' ? parallelSection?.name : parallelFaculty?.name?.split(' ').pop()} · {parallelSection?.name || parallelSession.sectionId}</div></button>;
+                          return <button key={parallelSession.id} type="button" onClick={() => handleCellClick(parallelSession)} className={`w-full rounded-lg border p-2 text-left ${cancelled ? 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300' : 'border-blue-200 bg-blue-50/60 text-stone-900 dark:border-blue-900 dark:bg-blue-950/30 dark:text-zinc-100'}`}><div className="flex items-center justify-between gap-1"><span className="font-mono text-xs font-bold">{parallelCourse?.code || parallelSession.courseId}</span><span className="text-[9px]">{cancelled ? 'Cancelled' : sessionLabel(parallelSession)}</span></div><div className="truncate text-[10px]">{filterMode === 'faculty' ? parallelSection?.name || parallelSession.sectionId : filterMode === 'section' ? parallelFaculty?.name?.split(' ').pop() : `${parallelFaculty?.name?.split(' ').pop()} · ${parallelSection?.name || parallelSession.sectionId}`}</div></button>;
                         })}</div></td>;
                       }
 
@@ -487,7 +505,7 @@ export function TimetableGridView() {
                                 ? 'bg-rose-50/50 dark:bg-rose-950/20 border-rose-200 dark:border-rose-900/50 text-rose-800 dark:text-rose-300'
                                 : isRescheduled
                                 ? 'bg-emerald-50/50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-900/50 text-emerald-800 dark:text-emerald-300'
-                                : session.type === 'Lab'
+                                : isPracticalType(session.type)
                                 ? 'bg-blue-50/40 dark:bg-blue-950/20 border-blue-200 dark:border-blue-900/40 text-stone-900 dark:text-zinc-100'
                                 : 'bg-white dark:bg-zinc-800/80 border-[#E5E2D9] dark:border-zinc-700/80 hover:border-stone-400 text-stone-900 dark:text-zinc-100 shadow-2xs'
                             }`}
@@ -504,25 +522,23 @@ export function TimetableGridView() {
                                 {course?.code || session.courseId}
                               </span>
                               <span className={`text-[9px] px-1 rounded font-medium ${
-                                session.type === 'Lab'
+                                isPracticalType(session.type)
                                   ? 'bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300'
                                   : session.type === 'Tutorial'
                                   ? 'bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300'
                                   : 'bg-stone-100 dark:bg-zinc-700 text-stone-600 dark:text-zinc-300'
                               }`}>
-                                {session.durationPeriods && session.durationPeriods > 1
-                                  ? `${session.type} (${session.durationPeriods}h)`
-                                  : session.type}
+                                {sessionLabel(session)}
                               </span>
                             </div>
 
                             <div className="text-xs font-semibold text-stone-900 dark:text-zinc-100 line-clamp-1">
-                              {course?.name}
+                              {courseName(course)}
                             </div>
 
                             <div className="text-[11px] text-stone-500 dark:text-zinc-400 mt-1 flex items-center justify-between">
                               <span className="truncate">{filterMode === 'faculty' ? section?.name : faculty?.name?.split(' ').pop()}</span>
-                              <span className="font-mono">{room?.name || '204'}</span>
+                              <span className="font-mono">{room?.name || '—'}</span>
                             </div>
 
                             {isCancelled && (
@@ -558,8 +574,7 @@ export function TimetableGridView() {
                   Session Information
                 </span>
                 <h3 className="text-base font-bold font-serif mt-0.5">
-                  {courses.find(c => c.id === activeSessionDetail.courseId)?.code} ·{' '}
-                  {courses.find(c => c.id === activeSessionDetail.courseId)?.name}
+                  {detailCourse ? courseLabel(detailCourse) : activeSessionDetail.courseId}
                 </h3>
               </div>
               <button
@@ -581,8 +596,7 @@ export function TimetableGridView() {
               <div className="p-3 bg-white dark:bg-zinc-950 rounded-lg border border-[#E5E2D9] dark:border-zinc-800">
                 <span className="text-stone-400 block text-[10px]">Student Section</span>
                 <span className="font-semibold text-stone-800 dark:text-zinc-200 mt-0.5 block">
-                  {sections.find(s => s.id === activeSessionDetail.sectionId)?.name} (
-                  {sections.find(s => s.id === activeSessionDetail.sectionId)?.studentCount} Students)
+                  {[detailSection?.name, detailSubgroup?.name].filter(Boolean).join(' · ')} ({(detailSubgroup ?? detailSection)?.studentCount} Students)
                 </span>
               </div>
 
@@ -596,7 +610,7 @@ export function TimetableGridView() {
               <div className="p-3 bg-white dark:bg-zinc-950 rounded-lg border border-[#E5E2D9] dark:border-zinc-800">
                 <span className="text-stone-400 block text-[10px]">Schedule Window</span>
                 <span className="font-semibold text-stone-800 dark:text-zinc-200 mt-0.5 block">
-                  {activeSessionDetail.day} · {activeSessionDetail.timeSlotId}
+                  {activeSessionDetail.day} · {periodLabel(academicYear, activeSessionDetail.timeSlotId, classBlock(activeSessionDetail, sessions).length)}
                 </span>
               </div>
             </div>
@@ -616,24 +630,26 @@ export function TimetableGridView() {
                 <div className="flex justify-end gap-2 sm:col-span-3"><button type="button" onClick={() => setEditSlot(null)} className="rounded border border-[#E5E2D9] px-3 py-1.5 dark:border-zinc-700">Cancel</button><button type="button" onClick={() => void saveSessionEdit()} disabled={sessionActionBusy} className="rounded bg-[#8C1B2E] px-3 py-1.5 font-semibold text-white disabled:opacity-50">{sessionActionBusy ? 'Saving…' : 'Save Slot'}</button></div>
               </div>}
               {showSwapEditor && <div className="flex flex-wrap gap-2">
-                <select aria-label="Choose class to swap with" value={swapTargetId} onChange={event => setSwapTargetId(event.target.value)} className="min-w-48 rounded border border-[#E5E2D9] bg-white p-2 text-xs dark:border-zinc-700 dark:bg-zinc-950"><option value="">Choose another class to swap…</option>{sessions.filter(session => session.id !== activeSessionDetail.id && session.status !== 'Cancelled').map(session => <option key={session.id} value={session.id}>{courses.find(course => course.id === session.courseId)?.code || session.courseId} · {session.sectionId} · {session.day} {session.timeSlotId}</option>)}</select>
+                <select aria-label="Choose class to swap with" value={swapTargetId} onChange={event => setSwapTargetId(event.target.value)} className="min-w-48 rounded border border-[#E5E2D9] bg-white p-2 text-xs dark:border-zinc-700 dark:bg-zinc-950"><option value="">Choose another class to swap…</option>{sessions.filter(session => session.id !== activeSessionDetail.id && session.status !== 'Cancelled').map(session => <option key={session.id} value={session.id}>{courses.find(course => course.id === session.courseId)?.code || session.courseId} · {sections.find(section => section.id === session.sectionId)?.name ?? session.sectionId} · {session.day} {periodLabel(academicYear, session.timeSlotId)}</option>)}</select>
                 <button type="button" onClick={() => void saveSessionSwap()} disabled={!swapTargetId || sessionActionBusy} className="rounded border border-[#E5E2D9] px-3 py-1.5 text-xs font-semibold disabled:opacity-50 dark:border-zinc-700">{sessionActionBusy ? 'Swapping…' : 'Confirm Swap'}</button>
                 <button type="button" onClick={() => setShowSwapEditor(false)} className="rounded border border-[#E5E2D9] px-3 py-1.5 text-xs dark:border-zinc-700">Cancel</button>
               </div>}
             </div>}
 
             {/* Invariants & Hard Constraint Validation */}
-            <div className="p-3.5 bg-white dark:bg-zinc-950 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 space-y-1.5 text-xs">
+            {canManageSessions && <div className="p-3.5 bg-white dark:bg-zinc-950 rounded-lg border border-[#E5E2D9] dark:border-zinc-800 space-y-1.5 text-xs">
               <span className="text-[11px] font-semibold text-stone-900 dark:text-zinc-100 flex items-center gap-1.5">
-                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+                {detailProblems.length === 0
+                  ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+                  : <AlertCircle className="h-3.5 w-3.5 text-rose-600 dark:text-rose-400" />}
                 Scheduling Rule Verification
               </span>
               <ul className="text-[11px] text-stone-500 dark:text-zinc-400 space-y-0.5 list-disc list-inside">
-                <li>Teacher overlap constraint: Verified</li>
-                <li>Room capacity: Satisfied</li>
-                <li>Lab & equipment requirements: Satisfied</li>
+                {detailProblems.length === 0
+                  ? <li>No teacher, student, room, capacity or lab conflict for this class.</li>
+                  : detailProblems.map(message => <li key={message}>{message}</li>)}
               </ul>
-            </div>
+            </div>}
 
             {/* Actions: Lock, Cancel */}
             <div className="flex flex-col sm:flex-row items-center gap-3 pt-2">
@@ -730,7 +746,7 @@ export function TimetableGridView() {
               <div>
                 <h4 className="text-base font-bold font-serif text-stone-900 dark:text-zinc-100">Schedule Class Session</h4>
                 <p className="text-[11px] text-stone-500 dark:text-zinc-400 mt-0.5">
-                  Target: {scheduleSlotTarget.day} · {TIME_SLOTS.find(t => t.id === scheduleSlotTarget.timeSlotId)?.label}
+                  Target: {scheduleSlotTarget.day} · {academicYear.timeSlots.find(t => t.id === scheduleSlotTarget.timeSlotId)?.label}
                 </p>
               </div>
               <button
@@ -758,7 +774,7 @@ export function TimetableGridView() {
                 >
                   {courses.map(c => (
                     <option key={c.id} value={c.id}>
-                      {c.code}: {c.name}
+                      {courseLabel(c, ': ')}
                     </option>
                   ))}
                 </select>

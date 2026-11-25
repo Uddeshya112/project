@@ -207,7 +207,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     ]);
     setCurrentUserId(user.id);
     setAuthorizedWorkspaces(resolvedWorkspaces);
-    setCurrentWorkspace(current => resolvedWorkspaces.includes(current) ? current : resolvedWorkspaces[0]);
+    const linked = resolvedWorkspaces.find(workspace => workspace.toLowerCase() === window.location.pathname.split('/')[1]);
+    setCurrentWorkspace(current => linked ?? (resolvedWorkspaces.includes(current) ? current : resolvedWorkspaces[0]));
     setIsAuthenticated(true);
     setAuthStatus('AUTHENTICATED');
     return user;
@@ -495,14 +496,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       const data = await resp.json();
       return {
-        success: true,
+        success: resp.ok && data.success !== false,
         message: data.message || 'If an account exists for this email, a password reset link has been sent.',
         resetToken: data.resetToken,
       };
     } catch {
       return {
-        success: true,
-        message: 'If an account exists for this email, a password reset link has been sent.',
+        success: false,
+        message: 'Could not reach the password reset service. Please try again.',
       };
     }
   };
@@ -684,15 +685,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         allSessions,
         passwordResetTokens,
         roster: currentUser ? {
-          rollNumber: currentUser.rollNumber ?? '102303999',
-          sectionId: currentUser.sectionId ?? 'sec-cse-a',
-          subSectionId: currentUser.subSectionId ?? 'sub-sec-cse-a-1',
+          rollNumber: currentUser.rollNumber,
+          sectionId: currentUser.sectionId,
+          subSectionId: currentUser.subSectionId,
           facultyId: currentUser.facultyId,
-        } : {
-          rollNumber: '102303999',
-          sectionId: 'sec-cse-a',
-          subSectionId: 'sub-sec-cse-a-1'
-        },
+        } : null,
       }}
     >
       {children}

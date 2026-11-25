@@ -23,7 +23,7 @@ import {
 } from 'lucide-react';
 
 export function SolverBenchmarkView() {
-  const { courses, sections, facultyMembers, rooms, sessions } = useTimetable();
+  const { courses, sections, facultyMembers, rooms, sessions, academicYear } = useTimetable();
 
   const [benchmarkResult, setBenchmarkResult] = useState<SolverBenchmarkResult | null>(null);
   const [activeSolverType, setActiveSolverType] = useState<'DSATUR' | 'REPAIR' | 'GREEDY'>('REPAIR');
@@ -39,11 +39,11 @@ export function SolverBenchmarkView() {
     setTimeout(() => {
       let res: { benchmark: SolverBenchmarkResult };
       if (type === 'DSATUR') {
-        res = runDSATURSolver(courses, sections, facultyMembers, rooms, sessions);
+        res = runDSATURSolver(courses, sections, facultyMembers, rooms, sessions, academicYear.timeSlots);
       } else if (type === 'REPAIR') {
-        res = runHeuristicRepairSolver(courses, sections, facultyMembers, rooms, sessions);
+        res = runHeuristicRepairSolver(courses, sections, facultyMembers, rooms, sessions, academicYear.timeSlots);
       } else {
-        res = runFastGreedySolver(courses, sections, facultyMembers, rooms);
+        res = runFastGreedySolver(courses, sections, facultyMembers, rooms, academicYear.timeSlots);
       }
 
       setBenchmarkResult(res.benchmark);

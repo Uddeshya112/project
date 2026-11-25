@@ -1,9 +1,11 @@
 import React, { useMemo, useState } from 'react';
 import { useTimetable } from '../../context/TimetableContext';
 import { useAuth } from '../../context/AuthContext';
-import type { DayOfWeek, TimeSlot } from '../../types';
+import type { ClassSession, DayOfWeek, TimeSlot } from '../../types';
 import { api } from '../../lib/api';
 import { facultyTeachingCap, facultyTeachingPeriods } from '../../lib/facultyWorkload';
+import { courseName } from '../../lib/courseLabel';
+import { periodLabel } from '../../lib/recoveryEngine';
 import { PollComposer } from './PollComposer';
 import {
   Calendar,
@@ -14,16 +16,6 @@ import {
   MapPin
 } from 'lucide-react';
 
-/** Length of a period in hours from its "HH:MM" start/end (1 if unparseable). */
-const slotHours = (slot?: TimeSlot) => {
-  if (!slot) return 0;
-  const mins = (t: string) => {
-    const [h, m] = t.split(':').map(Number);
-    return h * 60 + m;
-  };
-  const h = (mins(slot.endTime) - mins(slot.startTime)) / 60;
-  return Number.isFinite(h) && h > 0 ? h : 1;
-};
 const fmtHrs = (h: number) => `${Math.round(h * 10) / 10} hr${h === 1 ? '' : 's'}`;
 const MAX_TAKE_OVER_OPTIONS = 3;
 
@@ -82,6 +74,7 @@ export function FacultyPortalView() {
   const [scheduledClassesOnly, setScheduledClassesOnly] = useState(false);
   const [oppToDecline, setOppToDecline] = useState<string | null>(null);
   const [scheduleChangeFeedback, setScheduleChangeFeedback] = useState('');
+  const [requestedClaims, setRequestedClaims] = useState<string[]>([]);
 
   // Free periods where this teacher, one of their groups and a suitable room are all free.
   const takeOverOptions = useMemo(() => {
@@ -111,7 +104,7 @@ export function FacultyPortalView() {
           const room = rooms.find(r =>
             r.isAvailable &&
             r.capacity >= section.studentCount &&
-            (!course.requiresLab || r.type === 'ComputerLab' || r.type === 'HardwareLab') &&
+            r.type !== 'ComputerLab' && r.type !== 'HardwareLab' &&
             !taken.has(`${k}|r:${r.id}`)
           );
           if (!room) continue;
@@ -169,18 +162,12 @@ export function FacultyPortalView() {
 
   const mySessions = sessions.filter(s => s.facultyId === currentFaculty.id);
   const dailySessions = mySessions.filter(s => s.day === selectedDay);
-  const activeHours = (match: (type: string) => boolean) => {
-    const selected = mySessions.filter((session) => session.status !== 'Cancelled' && match(session.type));
-    const countedLectures = new Set<string>();
-    return selected.reduce((total, session) => {
-      if (session.type === 'Lecture') {
-        const key = `${session.courseId}:${session.day}:${session.timeSlotId}`;
-        if (countedLectures.has(key)) return total;
-        countedLectures.add(key);
-      }
-      return total + slotHours(slotById.get(session.timeSlotId)) * Math.max(1, Number(session.durationPeriods) || 1);
-    }, 0);
+  const groupLabel = (session: ClassSession) => {
+    const section = sections.find(s => s.id === session.sectionId);
+    return [section?.name ?? session.sectionId, section?.subSections?.find(sub => sub.id === session.subSectionId)?.name].filter(Boolean).join(' · ');
   };
+  const activeHours = (match: (type: string) => boolean) =>
+    facultyTeachingPeriods(mySessions.filter((session) => match(session.type)), currentFaculty.id);
   const totalHours = facultyTeachingPeriods(mySessions, currentFaculty.id);
   const teachingCap = facultyTeachingCap(currentFaculty);
   const withinLimit = totalHours <= teachingCap;
@@ -188,10 +175,10 @@ export function FacultyPortalView() {
     { label: 'Lectures', value: fmtHrs(activeHours(t => t === 'Lecture')), note: 'Scheduled' },
     { label: 'Tutorials', value: fmtHrs(activeHours(t => t === 'Tutorial')), note: 'Scheduled' },
     { label: 'Laboratory', value: fmtHrs(activeHours(t => t === 'Lab' || t === 'Practical')), note: 'Lab & practical' },
-    { label: 'Make-up & other', value: fmtHrs(activeHours(t => !['Lecture', 'Tutorial', 'Lab', 'Practical'].includes(t))), note: 'Make-up, seminar, elective' },
+    { label: 'Make-up & other', value: fmtHrs(activeHours(t => !['Lecture', 'Tutorial', 'Lab', 'Practical'].includes(t))), note: 'Make-up, seminar' },
     {
       label: 'Reserved Periods',
-      value: fmtHrs(currentFaculty.preferences.protectedSlots.reduce((n, p) => n + slotHours(slotById.get(p.periodId)), 0)),
+      value: fmtHrs(currentFaculty.preferences.protectedSlots.length),
       note: 'Kept free',
     },
   ];
@@ -214,7 +201,8 @@ export function FacultyPortalView() {
       setSessionToCancel(null);
       setCancellationReason('');
     } else {
-      setScheduleChangeFeedback('Cancellation was not saved. Check your connection and try again.');
+      setSessionToCancel(null);
+      setScheduleChangeFeedback('The class was not cancelled.');
     }
   };
 
@@ -260,7 +248,7 @@ export function FacultyPortalView() {
       </div>
 
       {scheduleChangeFeedback && <p role="status" className="rounded-lg border border-[#E5E2D9] bg-white p-3 text-xs text-stone-700 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">{scheduleChangeFeedback}</p>}
-      <PollComposer sectionIds={[...new Set(mySessions.map((session) => session.sectionId))]} />
+      <PollComposer sectionIds={[...new Set(mySessions.map((session) => session.sectionId))]} taughtBy={currentFaculty.id} />
 
       {/* Workload Summary Card */}
       <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl p-5 space-y-3.5 shadow-xs">
@@ -276,7 +264,7 @@ export function FacultyPortalView() {
           </span>
         </div>
         <p className="text-[11px] text-stone-500 dark:text-zinc-400 leading-relaxed">
-          Computed from the scheduled classes in this timetable (cancelled classes excluded).
+          Computed from the scheduled classes in this timetable (cancelled classes excluded). One period counts as one teaching hour.
           {cancelledCount > 0 && ` ${cancelledCount} class${cancelledCount === 1 ? ' is' : 'es are'} currently cancelled.`}
         </p>
 
@@ -379,9 +367,9 @@ export function FacultyPortalView() {
                           <div>
                             <div className="font-bold text-stone-900 dark:text-zinc-100 flex items-center gap-2">
                               <span className="font-mono text-[#8C1B2E] dark:text-red-400">{course?.code ?? session.courseId}</span>
-                              {course && <span className="text-stone-800 dark:text-zinc-200">({course.name})</span>}
+                              {courseName(course) && <span className="text-stone-800 dark:text-zinc-200">({courseName(course)})</span>}
                               <span className="text-stone-400">·</span>
-                              <span className="text-stone-600 dark:text-zinc-400">{sections.find(s => s.id === session.sectionId)?.name ?? session.sectionId}</span>
+                              <span className="text-stone-600 dark:text-zinc-400">{groupLabel(session)}</span>
                               {session.type !== 'Lecture' && (
                                 <span className="text-[10px] text-stone-500 dark:text-zinc-400">{session.type}</span>
                               )}
@@ -478,7 +466,7 @@ export function FacultyPortalView() {
                         <span className="font-semibold text-emerald-700 dark:text-emerald-400">{option.matchScore}% match</span>
                       </div>
                       <div className="font-bold text-stone-900 dark:text-zinc-100">
-                        {option.targetDay} {slotLabel(option.timeSlotId)} ({rooms.find(r => r.id === option.roomId)?.name ?? option.roomId})
+                        {option.targetDay} {periodLabel(academicYear, option.timeSlotId, option.periods)} ({rooms.find(r => r.id === option.roomId)?.name ?? option.roomId})
                       </div>
                       <p className="text-[11px] text-stone-500 dark:text-zinc-400 leading-relaxed">{option.rationale}</p>
                     </div>
@@ -516,10 +504,10 @@ export function FacultyPortalView() {
             <div className="bg-[#FAF9F5] dark:bg-zinc-900 border border-[#E5E2D9] dark:border-zinc-800 rounded-xl p-4 space-y-3 text-xs shadow-xs">
               <div className="border-b border-[#E5E2D9] dark:border-zinc-800 pb-2">
                 <h4 className="font-bold font-serif text-stone-900 dark:text-zinc-100 text-xs">
-                  Extra classes you can add (optional)
+                  Extra classes you can request (optional)
                 </h4>
                 <p className="text-[11px] text-stone-500 dark:text-zinc-400 mt-0.5">
-                  Free periods where you, your group and a room are all available.
+                  Free periods where you, your group and a room are all available. The coordinator decides.
                 </p>
               </div>
 
@@ -535,11 +523,15 @@ export function FacultyPortalView() {
                     </div>
 
                     <button
-                      onClick={() => runBusy(`claim:${o.key}`, () => claimMarketplaceSlot(o.course.id, o.section.id, o.day, o.slot.id, o.room.id, 'Tutorial'))}
-                      disabled={busy !== null}
+                      onClick={async () => {
+                        if (!await runBusy(`claim:${o.key}`, () => claimMarketplaceSlot(o.course.id, o.section.id, o.day, o.slot.id, o.room.id, 'Tutorial', currentFaculty!.id))) return;
+                        setRequestedClaims(sent => [...sent, o.key]);
+                        setScheduleChangeFeedback(`Request sent to the coordinator: ${o.course.code} for ${o.section.name}, ${o.day} ${o.slot.label}.`);
+                      }}
+                      disabled={busy !== null || requestedClaims.includes(o.key)}
                       className="px-3 py-1.5 bg-[#8C1B2E] hover:bg-[#721525] text-white rounded-lg text-xs font-semibold transition-colors shrink-0 shadow-2xs disabled:opacity-50"
                     >
-                      {busy === `claim:${o.key}` ? 'Adding…' : 'Take this class'}
+                      {busy === `claim:${o.key}` ? 'Requesting…' : requestedClaims.includes(o.key) ? 'Requested' : 'Request this class'}
                     </button>
                   </div>
                 ))}
