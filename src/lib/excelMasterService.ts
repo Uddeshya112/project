@@ -6,7 +6,9 @@ import {
   Room,
   StudentSection,
   CourseAllocation,
-  SessionType
+  SessionType,
+  TimeSlot,
+  DayOfWeek
 } from '../types';
 import type { StudentRecord } from './initialData';
 
@@ -21,6 +23,8 @@ export interface ExcelImportPreview {
     subgroups: number;
     allocations: number;
     students: number;
+    timeSlots: number;
+    timetable: number;
   };
   totalRows: number;
   validRows: number;
@@ -54,6 +58,20 @@ export interface ExcelImportPreview {
       batchYear?: number;
       groupCode: string;
       subgroupName?: string;
+    }>;
+    /** Optional. Replaces the academic year's daily periods. */
+    timeSlots: Array<Pick<TimeSlot, 'periodNumber' | 'startTime' | 'endTime'> & { isBreak: boolean; isLunch: boolean }>;
+    /** Optional. Classes with fixed times; they become the working draft timetable. */
+    timetable: Array<{
+      day: DayOfWeek;
+      periodNumber: number;
+      periods: number;
+      courseCode: string;
+      sessionType: SessionType;
+      groupCode: string;
+      subgroupName?: string;
+      facultyEmail: string;
+      roomName: string;
     }>;
   };
 }
@@ -103,7 +121,9 @@ export async function generateMasterExcelTemplate(currentData?: {
     ['Groups', 'Batch Cohort Groups (e.g. CSE-A, CSE-B ... CSE-T)', 'group_code'],
     ['Subgroups', 'Lab/Tutorial Small Cohorts (e.g. A1, A2, A3, A4)', 'group_code + subgroup_name'],
     ['Course Allocations', 'Curriculum Teaching Assignments to Groups/Subgroups', 'course_code + faculty + group'],
-    ['Students', 'Optional Student Enrollment & Group Assignments', 'student_id']
+    ['Students', 'Optional Student Enrollment & Group Assignments', 'student_id'],
+    ['TimeSlots', 'Optional daily periods: period_no, start, end, is_lunch, is_break. Replaces the current periods', 'period_no'],
+    ['Timetable', 'Optional classes with fixed times: day, period_no, periods, course_code, session_type, group_code, subgroup_code, faculty_email, room_name. Becomes the working draft', 'day + period_no']
   ]);
 
   // 2. Departments Sheet
@@ -277,6 +297,23 @@ const intCell = (row: Record<string, unknown>, fallback: number, ...keys: string
   return Number.isFinite(n) ? n : fallback;
 };
 
+const WEEK: DayOfWeek[] = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const SESSION_TYPES: SessionType[] = ['Lecture', 'Lab', 'Tutorial', 'Practical', 'Makeup', 'Seminar'];
+
+/** "8:00", "08:00:00" or an Excel time fraction -> "08:00"; anything else -> "". */
+const timeCell = (row: Record<string, unknown>, ...keys: string[]) => {
+  const raw = cell(row, ...keys);
+  const fraction = Number(raw);
+  if (raw !== '' && Number.isFinite(fraction) && fraction >= 0 && fraction < 1) {
+    const minutes = Math.round(fraction * 24 * 60);
+    return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+  }
+  const match = /^(\d{1,2}):([0-5]\d)(?::[0-5]\d)?$/.exec(raw);
+  return match && Number(match[1]) < 24 ? `${match[1].padStart(2, '0')}:${match[2]}` : '';
+};
+
+const yesCell = (row: Record<string, unknown>, ...keys: string[]) => /^(y|yes|true|1)$/i.test(cell(row, ...keys));
+
 /**
  * Parses and validates an uploaded Excel workbook, generating a clean validation preview
  */
@@ -289,6 +326,7 @@ export async function parseAndValidateMasterWorkbook(
     facultyMembers: Faculty[];
     rooms: Room[];
     sections: StudentSection[];
+    academicYear?: { workingDays: DayOfWeek[]; timeSlots: TimeSlot[] };
   }
 ): Promise<ExcelImportPreview> {
   const XLSX = await import('xlsx');
@@ -309,6 +347,8 @@ export async function parseAndValidateMasterWorkbook(
       subgroups: 0,
       allocations: 0,
       students: 0,
+      timeSlots: 0,
+      timetable: 0,
     },
     totalRows: 0,
     validRows: 0,
@@ -326,6 +366,8 @@ export async function parseAndValidateMasterWorkbook(
       subgroups: [],
       allocations: [],
       students: [],
+      timeSlots: [],
+      timetable: [],
     },
   };
 
@@ -352,6 +394,43 @@ export async function parseAndValidateMasterWorkbook(
       validSubgroups.add(`${s.name.toUpperCase()}:${sub.name.toUpperCase()}`);
     });
   });
+
+  // --- 0. TIME SLOTS (optional daily periods) ---
+  const slotRows = getSheetRows('TimeSlots');
+  preview.sheetCounts.timeSlots = slotRows.length;
+  slotRows.forEach((row, idx) => {
+    const lineNum = idx + 2;
+    const periodNumber = intCell(row, 0, 'period_no', 'period_number', 'period');
+    const startTime = timeCell(row, 'start', 'start_time');
+    const endTime = timeCell(row, 'end', 'end_time');
+    const isLunch = yesCell(row, 'is_lunch', 'lunch');
+
+    if (periodNumber < 1 || !startTime || !endTime || startTime >= endTime) {
+      errors.push(`Row ${lineNum} · TimeSlots: period_no, start and end are required, and start must be before end (24-hour HH:MM).`);
+      return;
+    }
+    if (preview.parsedData.timeSlots.some(slot => slot.periodNumber === periodNumber)) {
+      errors.push(`Row ${lineNum} · TimeSlots: period_no ${periodNumber} appears more than once.`);
+      return;
+    }
+    preview.parsedData.timeSlots.push({ periodNumber, startTime, endTime, isLunch, isBreak: isLunch || yesCell(row, 'is_break', 'break') });
+  });
+  preview.parsedData.timeSlots.sort((a, b) => a.periodNumber - b.periodNumber);
+  preview.parsedData.timeSlots.forEach((slot, idx, all) => {
+    if (idx > 0 && slot.startTime < all[idx - 1].endTime) {
+      errors.push(`TimeSlots: period ${slot.periodNumber} starts before period ${all[idx - 1].periodNumber} ends.`);
+    }
+  });
+  if (preview.parsedData.timeSlots.filter(slot => slot.isLunch).length > 1) {
+    errors.push('TimeSlots: only one period can be marked is_lunch. Mark the others is_break.');
+  }
+  if (slotRows.length > 0 && !preview.parsedData.timeSlots.some(slot => !slot.isBreak)) {
+    errors.push('TimeSlots: at least one teaching period is required.');
+  }
+  const dailySlots: Array<{ periodNumber: number; isBreak: boolean }> = preview.parsedData.timeSlots.length > 0
+    ? preview.parsedData.timeSlots
+    : (existingState.academicYear?.timeSlots ?? []).map(slot => ({ periodNumber: slot.periodNumber, isBreak: Boolean(slot.isBreak || slot.isLunch) }));
+  const slotByPeriod = new Map(dailySlots.map(slot => [slot.periodNumber, slot]));
 
   // --- 1. DEPARTMENTS ---
   const deptRows = getSheetRows('Departments');
@@ -438,7 +517,9 @@ export async function parseAndValidateMasterWorkbook(
       weeklyHoursLimit: 40,
       preferences: {
         preferredDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
-        preferredPeriods: [1, 2, 3, 4, 6, 7],
+        preferredPeriods: preview.parsedData.timeSlots.length > 0
+          ? preview.parsedData.timeSlots.filter(slot => !slot.isBreak).map(slot => slot.periodNumber)
+          : [1, 2, 3, 4, 6, 7],
         protectedSlots: [],
         maxConsecutivePeriods: 3,
         availableForMakeup: true,
@@ -641,7 +722,7 @@ export async function parseAndValidateMasterWorkbook(
       facultyEmail: fEmail,
       groupCode: gCode,
       subgroupName: subName || undefined,
-      sessionType: ['Lecture', 'Lab', 'Tutorial', 'Practical', 'Elective', 'Makeup', 'Seminar'].includes(sType) ? sType : 'Lecture',
+      sessionType: SESSION_TYPES.includes(sType) ? sType : 'Lecture',
       hoursPerWeek: hours,
       roomName: roomName || undefined
     });
@@ -688,6 +769,54 @@ export async function parseAndValidateMasterWorkbook(
     });
   });
 
+  // --- 10. TIMETABLE (optional classes with fixed times) ---
+  const timetableRows = getSheetRows('Timetable');
+  preview.sheetCounts.timetable = timetableRows.length;
+  const workingDays = existingState.academicYear?.workingDays ?? [];
+  const allocationKeys = new Set(
+    preview.parsedData.allocations.map(a => [a.courseCode, a.groupCode, a.subgroupName ?? '', a.sessionType].join('|'))
+  );
+  let withoutAllocation = 0;
+  timetableRows.forEach((row, idx) => {
+    const fail = (message: string) => { errors.push(`Row ${idx + 2} · Timetable: ${message}`); };
+    const dayText = cell(row, 'day').toLowerCase();
+    const day = WEEK.find(name => name.toLowerCase() === dayText);
+    const periodNumber = intCell(row, 0, 'period_no', 'period_number', 'period');
+    const periods = intCell(row, 1, 'periods', 'duration_periods');
+    const courseCode = cell(row, 'course_code').toUpperCase();
+    const groupCode = cell(row, 'group_code').toUpperCase();
+    const subgroupName = cell(row, 'subgroup_code', 'subgroup').toUpperCase();
+    const facultyEmail = cell(row, 'faculty_email').toLowerCase();
+    const roomName = cell(row, 'room_name', 'room');
+    const sessionType = SESSION_TYPES.find(type => type.toLowerCase() === (cell(row, 'session_type') || 'Lecture').toLowerCase());
+
+    if (!day) return fail(`"${cell(row, 'day')}" is not a day of the week.`);
+    if (workingDays.length > 0 && !workingDays.includes(day)) return fail(`${day} is not a working day.`);
+    if (periods < 1) return fail('periods must be 1 or more.');
+    for (let p = periodNumber; p < periodNumber + periods; p++) {
+      const slot = slotByPeriod.get(p);
+      if (!slot) return fail(`period ${p} does not exist. Add it to the TimeSlots sheet.`);
+      if (slot.isBreak) return fail(`period ${p} is a break.`);
+    }
+    if (!sessionType) return fail(`"${cell(row, 'session_type')}" is not a session type.`);
+    if (!validCourseCodes.has(courseCode)) return fail(`Course "${courseCode}" was not found.`);
+    if (!validGroupCodes.has(groupCode)) return fail(`Group "${groupCode}" was not found.`);
+    if (subgroupName && !validSubgroups.has(`${groupCode}:${subgroupName}`)) return fail(`Subgroup "${subgroupName}" was not found in group "${groupCode}".`);
+    if (!validFacultyEmails.has(facultyEmail)) return fail(`Faculty "${facultyEmail}" was not found.`);
+    if (!validRoomNames.has(roomName.toUpperCase())) return fail(`Room "${roomName}" was not found.`);
+
+    if (!allocationKeys.has([courseCode, groupCode, subgroupName, sessionType].join('|'))) withoutAllocation++;
+    preview.parsedData.timetable.push({
+      day, periodNumber, periods, courseCode, sessionType, groupCode, subgroupName: subgroupName || undefined, facultyEmail, roomName
+    });
+  });
+  if (withoutAllocation > 0) {
+    warnings.push(`Timetable: ${withoutAllocation} class(es) have no matching row in Course Allocations.`);
+  }
+  if (preview.parsedData.timeSlots.length > 0 && timetableRows.length === 0) {
+    warnings.push('TimeSlots: the daily periods will change but there is no Timetable sheet, so existing classes keep their period numbers.');
+  }
+
   // Calculate totals
   const total =
     deptRows.length +
@@ -698,7 +827,9 @@ export async function parseAndValidateMasterWorkbook(
     groupRows.length +
     subRows.length +
     allocRows.length +
-    studentRows.length;
+    studentRows.length +
+    slotRows.length +
+    timetableRows.length;
 
   preview.totalRows = total;
   preview.errorCount = errors.length;

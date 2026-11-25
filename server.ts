@@ -34,8 +34,9 @@ import {
   COURSES,
   INITIAL_CONSTRAINTS,
 } from './src/lib/initialData';
-import { supabaseStore } from './src/server/supabaseStore';
+import { supabaseStore, ImportValidationError } from './src/server/supabaseStore';
 import { timetableJobManager } from './src/server/jobManager';
+import { classBlock, consecutiveSlots } from './src/lib/recoveryEngine';
 import { sendEmail, checkMailerConfiguration, hasMailerConfiguration } from './src/server/mailer';
 import { connectDb, type Db } from './src/server/db';
 import type { DayOfWeek } from './src/types';
@@ -168,6 +169,17 @@ export const supabaseAnon: SupabaseClient | null =
       })
     : null;
 
+/**
+ * Password sign-in needs its own client. supabase-js keeps the last signed-in session in memory, so a shared client
+ * would mix users up, and signing in on the service-role client would drop its service-role access.
+ */
+function createSupabaseSignInClient(): SupabaseClient | null {
+  const key = supabaseAnonKey || supabaseServiceKey;
+  return supabaseUrl && key
+    ? createClient(supabaseUrl, key, { auth: { autoRefreshToken: false, persistSession: false } })
+    : null;
+}
+
 if (supabaseAdmin) {
   console.info('[SUPABASE AUTH] Connected to Supabase Auth Authority at ' + supabaseUrl);
 } else {
@@ -279,6 +291,8 @@ app.use('/api', (req: Request, res: Response, next: NextFunction) => {
     message: 'Cross-origin state-changing request denied.',
   });
 });
+// Master workbooks carry the whole roster; docs/architecture.md sets the body limit at 10 MB for them.
+app.use('/api/academic/import', express.json({ limit: '10mb' }));
 app.use(express.json({ limit: '1mb' }));
 app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
   res.setHeader('Cache-Control', 'no-store');
@@ -287,32 +301,54 @@ app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
 
 // All academic mutations are serialized and committed before a successful response.
 // That keeps the legacy in-memory UI model durable in Postgres and prevents lost updates.
-const PERSISTED_WRITE_PREFIXES = ['/api/academic/', '/api/timetable/', '/api/recovery/', '/api/voting/', '/api/notifications', '/api/demo/reset'];
+const PERSISTED_WRITE_PREFIXES = ['/api/academic/', '/api/timetable/', '/api/timetables/', '/api/recovery/', '/api/voting/', '/api/notifications', '/api/demo/reset'];
+// Generation takes seconds, so it joins the lane only to save its result (see handleGenerateTimetable).
+const LONG_RUNNING_WRITES = new Set(['/api/academic/generate', '/api/timetable/generate', '/api/timetables/generate', '/api/timetable/generate-engine']);
 app.use('/api', async (req: Request, res: Response, next: NextFunction) => {
   const requestPath = req.originalUrl.split('?')[0];
-  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method) || !PERSISTED_WRITE_PREFIXES.some((prefix) => requestPath.startsWith(prefix))) {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method) || LONG_RUNNING_WRITES.has(requestPath) || !PERSISTED_WRITE_PREFIXES.some((prefix) => requestPath.startsWith(prefix))) {
     return next();
   }
+  // Requests without a session are refused by the route. They must not wait in, or hold up, the write queue.
+  if (!(await authenticateRequestAsync(req))) return next();
+  if (await joinWriteLane(res)) next();
+});
 
+/**
+ * Waits for this response's turn to change academic data. From then on a successful answer is saved before it is
+ * sent, and a failed one puts the data back. Resolves to false when the client left while waiting.
+ */
+async function joinWriteLane(res: Response): Promise<boolean> {
   let release = () => {};
   const previousWrite = academicWriteQueue;
   academicWriteQueue = new Promise<void>((resolve) => { release = resolve; });
   await previousWrite;
-  const before = supabaseStore.exportPersistedState();
+  if (res.destroyed) {
+    release();
+    return false;
+  }
+  // A deep copy: handlers change nested objects and arrays in place.
+  const before = structuredClone(supabaseStore.exportPersistedState());
   const originalJson = res.json.bind(res);
-  let responseStarted = false;
+  let released = false;
+  let answered = false;
   let persistencePending = false;
   const releaseOnce = () => {
-    if (responseStarted) return;
-    responseStarted = true;
+    if (released) return;
+    released = true;
     release();
   };
-  res.once('finish', releaseOnce);
-  req.once('aborted', () => { if (!persistencePending) releaseOnce(); });
+  // 'close' also fires when the client disconnects or a handler throws instead of answering.
+  res.once('close', () => {
+    if (persistencePending || released) return;
+    if (!answered) supabaseStore.replaceState(before);
+    releaseOnce();
+  });
   res.json = ((body: any) => {
+    answered = true;
     if (res.statusCode >= 400) {
       if (!(res.statusCode === 409 && body?.error === 'STATE_CONFLICT')) {
-        supabaseStore.restorePersistedState(before);
+        supabaseStore.replaceState(before);
       }
       releaseOnce();
       return originalJson(body);
@@ -322,7 +358,7 @@ app.use('/api', async (req: Request, res: Response, next: NextFunction) => {
       originalJson(body);
       releaseOnce();
     }).catch((error) => {
-      if (!(error instanceof AcademicStateConflictError)) supabaseStore.restorePersistedState(before);
+      if (!(error instanceof AcademicStateConflictError)) supabaseStore.replaceState(before);
       console.error('[ACADEMIC STORE] Could not persist a change:', error instanceof Error ? error.message : 'unknown error');
       if (error instanceof AcademicStateConflictError) {
         res.status(409);
@@ -335,8 +371,8 @@ app.use('/api', async (req: Request, res: Response, next: NextFunction) => {
     });
     return res;
   }) as Response['json'];
-  next();
-});
+  return true;
+}
 
 export type WorkspaceType = 'Student' | 'CR' | 'Faculty' | 'Coordinator' | 'HOD' | 'Admin';
 
@@ -420,7 +456,8 @@ const SEED_USER_PASSWORD =
   (process.env.NODE_ENV === 'production' ? crypto.randomBytes(16).toString('hex') + 'T1!' : 'Thapar@2026Test');
 const isProdEnvironment = process.env.NODE_ENV === 'production';
 
-const PRE_AUTHORIZED_STAFF: Record<string, { roleCode: 'COORDINATOR' | 'FACULTY' | 'HOD' | 'COLLEGE_ADMIN'; roleName: string; department: string }> = {
+// Sample identities for development. In production a role only ever comes from the user database.
+const PRE_AUTHORIZED_STAFF: Record<string, { roleCode: 'COORDINATOR' | 'FACULTY' | 'HOD' | 'COLLEGE_ADMIN'; roleName: string; department: string }> = isProdEnvironment ? {} : {
   'kn.murthy@thapar.edu': { roleCode: 'COORDINATOR', roleName: 'Timetable Coordinator', department: 'Computer Science and Engineering (CSED)' },
   'a.sharma@thapar.edu': { roleCode: 'FACULTY', roleName: 'Faculty (CSED)', department: 'Computer Science and Engineering (CSED)' },
   'p.gupta@thapar.edu': { roleCode: 'FACULTY', roleName: 'Faculty (CSED)', department: 'Computer Science and Engineering (CSED)' },
@@ -993,6 +1030,11 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
     });
   }
 
+  // Earlier versions gave Google accounts a password made from their public Google ID and email.
+  if (password.startsWith('OAuth_Google_')) {
+    return res.status(401).json({ success: false, message: 'Invalid institutional credentials. Please check your email and password.' });
+  }
+
   let user = usersDatabase.get(normalizedEmail);
 
   if (pendingRegistrationsDatabase.has(normalizedEmail)) {
@@ -1085,15 +1127,15 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
         institution: user.institutionName,
         authorizedWorkspaces,
         isDemoUser: Boolean(user.isDemoUser),
-        profile: user.profile || {},
+        profile: linkedProfile(user),
       },
     });
   }
 
   // 1. Authoritative Supabase Auth Verification
-  const authClient = supabaseAnon || supabaseAdmin;
-  if (authClient) {
-    const { data: authData, error: authError } = await authClient.auth.signInWithPassword({
+  const signInClient = createSupabaseSignInClient();
+  if (signInClient) {
+    const { data: authData, error: authError } = await signInClient.auth.signInWithPassword({
       email: normalizedEmail,
       password: String(password),
     });
@@ -1108,7 +1150,8 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
     }
 
     const authUser = authData.user;
-    const sessionToken = authData.session.access_token || ('jwt_live_' + crypto.randomBytes(32).toString('hex'));
+    // Always an opaque app session, so signing out, locking and role changes end it at once.
+    const sessionToken = 'jwt_live_' + crypto.randomBytes(32).toString('hex');
 
     let user = usersDatabase.get(normalizedEmail);
     if (!user) {
@@ -1118,21 +1161,29 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
       let profileDepartment: string | undefined;
       let profileName: string | undefined;
       let profileIsDemo: boolean = false;
+      let profileStatus: StoredUser['status'] = 'ACTIVE';
+      let profileFound = false;
 
       if (supabaseAdmin) {
         try {
           const { data: profile } = await supabaseAdmin.from('profiles').select('*').eq('id', authUser.id).single();
           if (profile) {
+            profileFound = true;
             profileRoleCode = profile.role_code as RoleCode;
             profileRoleName = profile.role_name;
             profileDepartment = profile.department;
             profileName = profile.name;
             profileIsDemo = Boolean(profile.is_demo_user);
+            if (profile.status === 'LOCKED' || profile.status === 'PENDING') profileStatus = profile.status;
           }
         } catch {}
       }
 
       const preAuth = PRE_AUTHORIZED_STAFF[normalizedEmail];
+      // Anyone may be able to sign up in the Supabase project. Only accounts an administrator set up may enter.
+      if (!profileFound && !preAuth) {
+        return res.status(403).json({ success: false, error: 'ACCOUNT_NOT_PROVISIONED', message: 'This account has not been set up in the timetable app. Please register, or contact the administrator.' });
+      }
       const roleCode: RoleCode =
         profileRoleCode ||
         (preAuth ? preAuth.roleCode : 'STUDENT');
@@ -1157,13 +1208,14 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
         institutionId: 'inst-thapar',
         institutionName: 'Thapar Institute of Engineering and Technology',
         department,
-        status: 'ACTIVE',
+        status: profileStatus,
         createdAt: new Date().toISOString(),
         isDemoUser: profileIsDemo,
       };
       usersDatabase.set(normalizedEmail, user);
-    } else {
-      user.id = authUser.id;
+    } else if (user.id !== authUser.id) {
+      // Same email, different Supabase identity: not the account the administrator set up.
+      return res.status(401).json({ success: false, message: 'Invalid institutional credentials. Please check your email and password.' });
     }
 
     if (user.status === 'PENDING') {
@@ -1235,7 +1287,7 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
         institution: user.institutionName,
         authorizedWorkspaces,
         isDemoUser: Boolean(user.isDemoUser),
-        profile: user.profile || {},
+        profile: linkedProfile(user),
       },
     });
   }
@@ -1317,7 +1369,7 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
       institution: user.institutionName,
       authorizedWorkspaces,
       isDemoUser: Boolean(user.isDemoUser),
-      profile: user.profile || {},
+      profile: linkedProfile(user),
     },
   });
 });
@@ -1345,7 +1397,7 @@ app.get('/api/auth/me', async (req: Request, res: Response) => {
       institution: foundUser.institutionName,
       authorizedWorkspaces,
       isDemoUser: Boolean(foundUser.isDemoUser),
-      profile: foundUser.profile || {},
+      profile: linkedProfile(foundUser),
     },
     role: roleKey,
     roleCode: foundUser.roleCode,
@@ -1373,10 +1425,6 @@ app.post('/api/auth/logout', async (req: Request, res: Response) => {
     }
   }
 
-  if (supabaseAnon) {
-    await supabaseAnon.auth.signOut().catch(() => {});
-  }
-
   res.clearCookie('intellischedule_session', { path: '/' });
   return res.json({ success: true, message: 'Logged out successfully.' });
 });
@@ -1396,9 +1444,31 @@ function getAuthenticatedUser(req: Request): StoredUser | null {
   if (!session) return null;
 
   for (const user of usersDatabase.values()) {
-    if (user.id === session.userId) return withDemoFacultyLink(user);
+    if (user.id === session.userId && user.status === 'ACTIVE') return withDemoFacultyLink(user);
   }
   return null;
+}
+
+/** The profile with its roster links checked against the current data, which an import may have replaced. */
+function linkedProfile(user: StoredUser): Record<string, unknown> {
+  const profile: Record<string, unknown> = { ...(user.profile || {}) };
+  if (user.roleCode === 'STUDENT' || user.roleCode === 'CLASS_REPRESENTATIVE') {
+    const student = supabaseStore.findStudentByEmail(user.email);
+    if (student) {
+      profile.sectionId = student.sectionId;
+      profile.subSectionId = student.subSectionId || undefined;
+      profile.rollNumber = student.studentId;
+    }
+    for (const key of ['sectionId', 'crSectionId']) {
+      if (profile[key] && !supabaseStore.hasSection(String(profile[key]))) delete profile[key];
+    }
+    if (!profile.sectionId) delete profile.subSectionId;
+  } else if (['FACULTY', 'HOD', 'COORDINATOR'].includes(user.roleCode)) {
+    const faculty = supabaseStore.findFaculty(typeof profile.facultyId === 'string' ? profile.facultyId : undefined, user.email);
+    if (faculty) profile.facultyId = faculty.id;
+    else delete profile.facultyId;
+  }
+  return profile;
 }
 
 function withDemoFacultyLink(user: StoredUser): StoredUser {
@@ -1455,8 +1525,7 @@ app.get('/api/me', (req: Request, res: Response) => {
   const bootstrap = supabaseStore.getBootstrapState();
 
   if (user.roleCode === 'STUDENT' || user.roleCode === 'CLASS_REPRESENTATIVE') {
-    const students = bootstrap.students || [];
-    studentRecord = students.find((s: any) => s.email?.toLowerCase() === user.email.toLowerCase());
+    studentRecord = supabaseStore.findStudentByEmail(user.email);
   } else if (user.roleCode === 'FACULTY' || user.roleCode === 'COORDINATOR' || user.roleCode === 'HOD') {
     const faculty = bootstrap.facultyMembers || [];
     facultyRecord = faculty.find((f: any) => f.email?.toLowerCase() === user.email.toLowerCase() || f.id === user.profile?.facultyId);
@@ -1493,15 +1562,16 @@ app.get('/api/me/timetable', (req: Request, res: Response) => {
   }
 
   const bootstrap = supabaseStore.getBootstrapState();
-  const scoped = sanitizeAcademicState(bootstrap, user.roleCode, user);
+  const linkedUser = { ...user, profile: linkedProfile(user) };
+  const scoped = sanitizeAcademicState(bootstrap, user.roleCode, linkedUser);
   let filteredSessions: any[] = scoped.sessions || [];
   let userSection = '';
   if (user.roleCode === 'STUDENT' || user.roleCode === 'CLASS_REPRESENTATIVE') {
     filteredSessions = scoped.publishedSessions || [];
     userSection = scoped.sections?.[0]?.name || '';
   } else if (user.roleCode === 'FACULTY') {
-    const facultyRecord = (bootstrap.facultyMembers || []).find((f: any) => f.email?.toLowerCase() === user.email.toLowerCase() || f.id === user.profile?.facultyId);
-    filteredSessions = (scoped.publishedSessions?.length ? scoped.publishedSessions : scoped.sessions || []).filter((s: any) => s.facultyId === facultyRecord?.id);
+    const facultyRecord = supabaseStore.findFaculty(linkedUser.profile.facultyId as string | undefined, user.email);
+    filteredSessions = (scoped.publishedSessions || []).filter((s: any) => s.facultyId === facultyRecord?.id);
   } else if (user.roleCode === 'HOD') {
     filteredSessions = scoped.publishedSessions || [];
   }
@@ -1529,9 +1599,7 @@ app.get('/api/me/timetable', (req: Request, res: Response) => {
       roleCode: user.roleCode,
       section: userSection,
     },
-    schedule: schedule.length > 0 ? schedule : [
-      { day: 'Monday', timeSlot: '08:00 - 09:00', courseCode: 'CS501', courseName: 'Data Structures', room: 'LT101', faculty: 'Prof. Arvind Sharma', status: 'Confirmed' }
-    ],
+    schedule,
   });
 });
 
@@ -1581,7 +1649,7 @@ app.get('/api/demo/status', (_req: Request, res: Response) => {
       email: 'hod.demo@demo.thapar.local',
       name: 'Dr. Sunita Rao',
       department: 'School of Mathematics',
-      description: 'Departmental faculty load balance, syllabus progress & elective management',
+      description: 'Departmental faculty load balance & syllabus progress',
     },
   ];
 
@@ -1642,19 +1710,7 @@ app.post('/api/auth/demo-login', async (req: Request, res: Response) => {
     });
   }
 
-  let sessionToken = 'jwt_demo_' + crypto.randomBytes(32).toString('hex');
-  let authUserId: string | undefined = undefined;
-
-  if (supabaseAnon) {
-    const { data: authData, error: authErr } = await supabaseAnon.auth.signInWithPassword({
-      email: targetEmail,
-      password: DEMO_ACCOUNT_PASSWORD,
-    });
-    if (!authErr && authData?.session?.access_token) {
-      sessionToken = authData.session.access_token;
-      authUserId = authData.user?.id;
-    }
-  }
+  const sessionToken = 'jwt_demo_' + crypto.randomBytes(32).toString('hex');
 
   const user = usersDatabase.get(targetEmail);
   if (!user || !user.isDemoUser) {
@@ -1671,12 +1727,8 @@ app.post('/api/auth/demo-login', async (req: Request, res: Response) => {
     });
   }
 
-  if (authUserId) {
-    user.id = authUserId;
-  }
-
   if (user.roleCode === 'STUDENT') {
-    const seededStudent = supabaseStore.getBootstrapState().students?.find((student: any) => student.email?.toLowerCase() === user.email.toLowerCase());
+    const seededStudent = supabaseStore.findStudentByEmail(user.email);
     if (seededStudent?.name) user.name = seededStudent.name;
   }
 
@@ -1710,7 +1762,7 @@ app.post('/api/auth/demo-login', async (req: Request, res: Response) => {
       institution: user.institutionName,
       authorizedWorkspaces,
       isDemoUser: true,
-      profile: user.profile || {},
+      profile: linkedProfile(user),
     },
   });
 });
@@ -1718,7 +1770,7 @@ app.post('/api/auth/demo-login', async (req: Request, res: Response) => {
 // -------------------------------------------------------------
 // POST /api/demo/reset (Safe Demo Data Reset)
 // -------------------------------------------------------------
-app.post('/api/demo/reset', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+app.post('/api/demo/reset', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN', 'SUPER_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
   if (!req.authenticatedUser?.isDemoUser && process.env.NODE_ENV === 'production') {
     return res.status(403).json({
       success: false,
@@ -1753,6 +1805,13 @@ app.post('/api/demo/reset', requireAuth, (req: AuthenticatedRequest, res: Respon
   });
 });
 
+/** True when an HOD's linked teacher belongs to the same department as the given teacher. */
+function sameDepartment(hod: StoredUser, facultyId: string): boolean {
+  const own = supabaseStore.findFaculty(hod.profile?.facultyId as string | undefined, hod.email);
+  const other = supabaseStore.findFaculty(facultyId);
+  return Boolean(own && other && own.departmentId === other.departmentId);
+}
+
 app.post('/api/academic/faculty/:id/availability', requireAuth, requireRole(['FACULTY', 'HOD', 'COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
   const { day, periodId, reason } = req.body || {};
   const facultyId = String(req.params.id);
@@ -1764,19 +1823,28 @@ app.post('/api/academic/faculty/:id/availability', requireAuth, requireRole(['FA
   if (req.authenticatedUser?.roleCode === 'FACULTY' && ownFacultyId !== facultyId) {
     return res.status(403).json({ success: false, message: 'Faculty may only update their own availability.' });
   }
+  if (req.authenticatedUser?.roleCode === 'HOD' && !sameDepartment(req.authenticatedUser, facultyId)) {
+    return res.status(403).json({ success: false, message: 'HODs may only update availability within their department.' });
+  }
   const state = supabaseStore.getBootstrapState();
   const timeSlots = state.academicYear?.timeSlots || [];
   const periodIndex = timeSlots.findIndex((slot: any) => slot.id === periodId);
-  const overlapsScheduledClass = (state.sessions || []).some((session: any) => {
+  if (periodIndex < 0 || !state.academicYear.workingDays.includes(day as DayOfWeek)) {
+    return res.status(400).json({ success: false, message: 'That day or period is not part of the timetable.' });
+  }
+  const live = supabaseStore.liveSessions();
+  const overlapsScheduledClass = live.some((session) => {
     if (session.facultyId !== facultyId || session.day !== day || session.status === 'Cancelled') return false;
     const startIndex = timeSlots.findIndex((slot: any) => slot.id === session.timeSlotId);
     const duration = Math.max(1, Number(session.durationPeriods) || 1);
-    return periodIndex >= startIndex && periodIndex < startIndex + duration;
+    // A lab is stored either as one session for the block or as one session per period.
+    const rows = classBlock(session, live).length >= duration ? 1 : duration;
+    return periodIndex >= startIndex && periodIndex < startIndex + rows;
   });
   const alreadyProtected = (state.facultyMembers || []).find((item: any) => item.id === facultyId)
     ?.preferences?.protectedSlots?.some((slot: any) => slot.day === day && slot.periodId === periodId);
   if (!alreadyProtected && overlapsScheduledClass) {
-    return res.status(409).json({ success: false, message: 'This period contains a scheduled class and cannot be marked as available.' });
+    return res.status(409).json({ success: false, message: 'You have a class in this period, so it cannot be kept free.' });
   }
   const faculty = supabaseStore.toggleFacultyProtectedSlot(facultyId, day as DayOfWeek, periodId, reason);
   if (!faculty) return res.status(404).json({ success: false, message: 'Faculty record not found.' });
@@ -2111,16 +2179,25 @@ app.get('/api/auth/google/callback', async (req: Request, res: Response) => {
           createdAt: new Date().toISOString(),
         });
       } else {
+        if (pendingRegistrationsDatabase.has(normalizedEmail)) {
+          return returnError(403, 'Waiting for Admin Approval. Your account will be available after an administrator approves your request.', 'ACCOUNT_PENDING_APPROVAL');
+        }
+        // docs/security/threat-model.md: a first Google sign-in needs a roster entry, which also decides the role.
         const preAuth = PRE_AUTHORIZED_STAFF[normalizedEmail];
-        const roleCode = preAuth ? preAuth.roleCode : 'STUDENT';
-        const roleName = preAuth ? preAuth.roleName : 'Student';
+        const onFacultyRoster = Boolean(supabaseStore.findFaculty(undefined, normalizedEmail));
+        if (!preAuth && !onFacultyRoster && !supabaseStore.findStudentByEmail(normalizedEmail)) {
+          return returnError(403, 'This Google account is not on the institution roster. Please register, or contact the administrator.', 'NOT_ON_ROSTER');
+        }
+        const roleCode = preAuth ? preAuth.roleCode : onFacultyRoster ? 'FACULTY' : 'STUDENT';
+        const roleName = preAuth ? preAuth.roleName : ROLE_LABELS[roleCode];
         const department = preAuth ? preAuth.department : 'Computer Science and Engineering (CSED)';
 
         user = {
           id: 'usr_g_' + crypto.randomUUID(),
           name: name ? String(name).trim() : normalizedEmail.split('@')[0].toUpperCase(),
           email: normalizedEmail,
-          passwordHash: hashPasswordBcryptSync('OAuth_Google_' + sub + '_' + normalizedEmail),
+          // No usable password until the user sets one with Forgot Password.
+          passwordHash: hashPasswordBcryptSync(crypto.randomBytes(32).toString('hex')),
           roleId: 'role-' + roleCode.toLowerCase(),
           roleCode,
           roleName,
@@ -2140,6 +2217,10 @@ app.get('/api/auth/google/callback', async (req: Request, res: Response) => {
           createdAt: new Date().toISOString(),
         });
       }
+    }
+
+    if (user.status !== 'ACTIVE') {
+      return returnError(403, 'This account is not active. Contact the administrator.', 'ACCOUNT_NOT_ACTIVE');
     }
 
     user.lastLoginAt = new Date().toISOString();
@@ -2199,20 +2280,17 @@ app.get('/api/auth/google/callback', async (req: Request, res: Response) => {
 // POST /api/auth/forgot-password (Rate limited, anti-enumeration, secure token hash)
 // -------------------------------------------------------------
 async function sendResetEmail(email: string, token: string): Promise<void> {
-  if (process.env.SMTP_URL || process.env.MAILER_SERVICE) {
-    // Custom mailer hook behind environment variable
-    return;
-  }
-  const authClient = supabaseAnon || supabaseAdmin;
-  if (authClient) {
-    try {
-      await authClient.auth.resetPasswordForEmail(email, {
-        redirectTo: `${process.env.APP_URL || 'http://localhost:3000'}/reset-password?token=${token}`,
-      });
-    } catch (err: any) {
-      console.warn('[RESET EMAIL] Supabase resetPasswordForEmail notice:', err?.message || err);
-    }
-  }
+  const appUrl = process.env.APP_URL || (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:3000');
+  if (!appUrl) throw new Error('APP_URL is required to send password reset email in production.');
+  const resetUrl = new URL('/', appUrl);
+  resetUrl.searchParams.set('resetToken', token);
+  const delivered = await sendEmail({
+    to: email,
+    subject: 'Reset your IntelliSchedule password',
+    text: `Use this link to reset your IntelliSchedule password. It expires in 15 minutes:\n\n${resetUrl.toString()}\n\nIf you did not request a reset, you can ignore this email.`,
+    html: `<p>Use the link below to reset your IntelliSchedule password. It expires in 15 minutes.</p><p><a href="${resetUrl.toString()}">Reset password</a></p><p>If you did not request a reset, you can ignore this email.</p>`,
+  });
+  if (!delivered) throw new Error('Password reset email provider did not accept the message.');
 }
 
 const AUTH_TIMING_FLOOR_MS = 20;
@@ -2238,6 +2316,11 @@ const handleForgotPassword = async (req: Request, res: Response) => {
   }
 
   const normalizedEmail = String(email).trim().toLowerCase();
+  // Fail consistently for every address when mail delivery is unavailable. This
+  // avoids both misleading success messages and leaking whether an account exists.
+  if (process.env.NODE_ENV === 'production' && !hasMailerConfiguration()) {
+    return res.status(503).json({ success: false, message: 'Password reset email is temporarily unavailable. Please contact the app administrator.' });
+  }
   const user = usersDatabase.get(normalizedEmail);
 
   let rawToken: string | undefined = undefined;
@@ -2255,8 +2338,13 @@ const handleForgotPassword = async (req: Request, res: Response) => {
       rawToken = undefined;
     }
 
-    // Send token by email
-    if (rawToken) setImmediate(() => { sendResetEmail(normalizedEmail, tokenToSend).catch(() => {}); });
+    // Not awaited: a slower or different answer for known addresses would reveal which ones have accounts.
+    if (rawToken) {
+      void sendResetEmail(normalizedEmail, tokenToSend).catch(async (err) => {
+        console.error('[AUTH] Password reset email could not be delivered:', err instanceof Error ? err.message : 'unknown error');
+        await persistentStore.consumeOneTimeTokenDurably(tokenToSend, 'password_reset').catch(() => undefined);
+      });
+    }
   } else {
     oneTimeTokensDatabase.delete(dummyToken.record.tokenHash);
   }
@@ -2342,35 +2430,31 @@ app.post('/api/auth/reset-password', async (req: Request, res: Response) => {
   }
 
   // Update password in database with modern Bcrypt KDF
-  const previousPasswordHash = user.passwordHash;
-  user.passwordHash = hashPasswordBcryptSync(String(newPassword));
-  usersDatabase.set(record.email, user);
-  try {
-    await persistUserRecord(user);
-  } catch (err) {
-    user.passwordHash = previousPasswordHash;
-    usersDatabase.set(record.email, user);
-    console.error('[AUTH] Could not persist password reset:', err instanceof Error ? err.message : 'unknown error');
-    return res.status(503).json({ success: false, message: 'Password reset could not be saved. Please try again.' });
-  }
-
-  // Sync password with Supabase Auth
-  if (supabaseAdmin) {
+  // An account signs in either with a password kept here or with the one Supabase keeps, never both.
+  let supabaseAccount: Awaited<ReturnType<typeof findSupabaseAccount>> = null;
+  if (user.passwordHash === 'SUPABASE_AUTH_MANAGED') {
     try {
-      const { error } = await supabaseAdmin.auth.admin.updateUserById(user.id, {
-        password: String(newPassword),
-      });
-      if (error) throw error;
+      supabaseAccount = await findSupabaseAccount(user.id);
+      if (supabaseAdmin && supabaseAccount) {
+        const { error } = await supabaseAdmin.auth.admin.updateUserById(user.id, { password: String(newPassword) });
+        if (error) throw error;
+      }
     } catch (err: any) {
+      console.error('[SUPABASE AUTH] Password update failed:', err?.message || 'unknown error');
+      return res.status(503).json({ success: false, message: 'The password could not be changed with the sign-in service. Please request a new reset link.' });
+    }
+  }
+  if (!supabaseAccount) {
+    const previousPasswordHash = user.passwordHash;
+    user.passwordHash = hashPasswordBcryptSync(String(newPassword));
+    usersDatabase.set(record.email, user);
+    try {
+      await persistUserRecord(user);
+    } catch (err) {
       user.passwordHash = previousPasswordHash;
       usersDatabase.set(record.email, user);
-      try {
-        await persistUserRecord(user);
-      } catch (rollbackErr) {
-        console.error('[AUTH] Could not restore application password after Supabase update failure:', rollbackErr instanceof Error ? rollbackErr.message : 'unknown error');
-      }
-      console.error('[SUPABASE AUTH] Password update failed:', err?.message || 'unknown error');
-      return res.status(503).json({ success: false, message: 'Password reset could not be synchronized with the authentication provider. Please request a new reset link.' });
+      console.error('[AUTH] Could not persist password reset:', err instanceof Error ? err.message : 'unknown error');
+      return res.status(503).json({ success: false, message: 'Password reset could not be saved. Please try again.' });
     }
   }
 
@@ -2382,12 +2466,6 @@ app.post('/api/auth/reset-password', async (req: Request, res: Response) => {
   } catch (err) {
     console.error('[AUTH] Could not durably invalidate reset tokens and sessions:', err instanceof Error ? err.message : 'unknown error');
     return res.status(503).json({ success: false, message: 'Password was saved, but existing sessions could not be fully revoked. Please contact the administrator.' });
-  }
-
-  if (supabaseAdmin) {
-    try {
-      await supabaseAdmin.auth.admin.signOut(user.id);
-    } catch {}
   }
 
   return res.json({
@@ -2422,78 +2500,46 @@ export async function authenticateRequestAsync(req: Request): Promise<{ user: St
     }
   }
 
-  // 2. Authoritative Supabase Access Token Verification
+  // 2. Supabase access tokens, for API clients. App sessions are opaque, so only JWT-shaped tokens are looked up.
   const authClient = supabaseAdmin || supabaseAnon;
-  if (authClient) {
+  if (authClient && token.split('.').length === 3) {
     try {
       const { data: authData, error: authError } = await authClient.auth.getUser(token);
       if (!authError && authData?.user) {
         const authUser = authData.user;
         const normalizedEmail = (authUser.email || '').toLowerCase().trim();
 
-        // Retrieve profile from Supabase profiles table using auth.users.id
+        // The app database decides role and status. The identity must match: an email alone proves nothing,
+        // because anyone may be able to sign up in the Supabase project with someone else's address.
+        const known = usersDatabase.get(normalizedEmail);
+        if (known) return known.id === authUser.id && known.status === 'ACTIVE' ? { user: withDemoFacultyLink(known) } : null;
+
         let profile: any = null;
         if (supabaseAdmin) {
-          const { data: p } = await supabaseAdmin
-            .from('profiles')
-            .select('*')
-            .eq('id', authUser.id)
-            .maybeSingle();
-          profile = p;
+          const { data } = await supabaseAdmin.from('profiles').select('*').eq('id', authUser.id).maybeSingle();
+          profile = data;
         }
-
-        // If not found by ID, attempt lookup by email and sync ID
-        if (!profile && supabaseAdmin && normalizedEmail) {
-          const { data: pByEmail } = await supabaseAdmin
-            .from('profiles')
-            .select('*')
-            .eq('email', normalizedEmail)
-            .maybeSingle();
-          if (pByEmail) {
-            profile = pByEmail;
-            await supabaseAdmin.from('profiles').update({ id: authUser.id }).eq('email', normalizedEmail);
-          }
-        }
-
-        const preAuth = PRE_AUTHORIZED_STAFF[normalizedEmail];
-        const roleCode: RoleCode =
-          (profile?.role_code as RoleCode) ||
-          (preAuth ? preAuth.roleCode : 'STUDENT');
-        const roleName =
-          profile?.role_name ||
-          (preAuth ? preAuth.roleName : (roleCode === 'COORDINATOR' ? 'Timetable Coordinator' : roleCode === 'FACULTY' ? 'Faculty Member' : roleCode === 'COLLEGE_ADMIN' ? 'College Admin / Dean' : roleCode === 'HOD' ? 'Head of Department' : 'Student'));
-        const department =
-          profile?.department ||
-          (preAuth ? preAuth.department : 'Computer Science and Engineering (CSED)');
-        const name =
-          profile?.name ||
-          normalizedEmail.split('@')[0].toUpperCase();
-
+        // No app account and no profile set up by an administrator: not a user of this app.
+        if (!profile?.role_code || profile.status === 'PENDING' || profile.status === 'LOCKED') return null;
+        const roleCode = profile.role_code as RoleCode;
         const user: StoredUser = {
           id: authUser.id,
-          name,
+          name: profile.name || normalizedEmail.split('@')[0].toUpperCase(),
           email: normalizedEmail,
           passwordHash: 'SUPABASE_AUTH_MANAGED',
           roleId: 'role-' + roleCode.toLowerCase(),
           roleCode,
-          roleName,
-          institutionId: profile?.institution_id || 'inst-thapar',
+          roleName: profile.role_name || ROLE_LABELS[roleCode],
+          institutionId: profile.institution_id || 'inst-thapar',
           institutionName: 'Thapar Institute of Engineering and Technology',
-          department,
-          status: profile?.status === 'PENDING' ? 'PENDING' : profile?.status === 'LOCKED' ? 'LOCKED' : 'ACTIVE',
+          department: profile.department || 'Computer Science and Engineering (CSED)',
+          status: 'ACTIVE',
           createdAt: authUser.created_at || new Date().toISOString(),
-          authorizedWorkspaces: profile?.authorized_workspaces || (roleCode === 'COORDINATOR' ? ['Coordinator', 'Faculty'] : [roleCode as any]),
-          isDemoUser: Boolean(profile?.is_demo_user),
-          profile: profile?.profile || authUser.user_metadata?.profile || {},
+          authorizedWorkspaces: profile.authorized_workspaces || undefined,
+          isDemoUser: Boolean(profile.is_demo_user),
+          profile: profile.profile || {},
         };
-
-        withDemoFacultyLink(user);
-        if (normalizedEmail) {
-          usersDatabase.set(normalizedEmail, user);
-        }
-
-        if (user.status !== 'ACTIVE') return null;
-
+        usersDatabase.set(normalizedEmail, user);
         return { user };
       }
     } catch (err) {
@@ -2534,7 +2580,7 @@ export async function requireAuth(req: AuthenticatedRequest, res: Response, next
       message: 'Authentication token is missing, invalid, or expired.',
     });
   }
-  req.authenticatedUser = auth.user;
+  req.authenticatedUser = { ...auth.user, profile: linkedProfile(auth.user) };
   req.authenticatedSession = auth.session;
   next();
 }
@@ -2584,7 +2630,7 @@ function sanitizeAcademicState(state: any, roleCode?: string, user?: StoredUser)
       programs: (state.programs || []).filter((item: any) => item.departmentId === departmentId),
       courses: (state.courses || []).filter((item: any) => courseIds.has(item.id)),
       facultyMembers: (state.facultyMembers || []).filter((item: any) => facultyIds.has(item.id)),
-      rooms: (state.rooms || []).filter((item: any) => (state.sessions || []).some((session: any) => session.roomId === item.id && (sectionIds.has(session.sectionId) || facultyIds.has(session.facultyId)))),
+      rooms: (state.rooms || []).filter((item: any) => [...(state.sessions || []), ...(state.publishedSessions || [])].some((session: any) => session.roomId === item.id && (sectionIds.has(session.sectionId) || facultyIds.has(session.facultyId)))),
       sections: (state.sections || []).filter((item: any) => sectionIds.has(item.id)),
       students: (state.students || []).filter((item: any) => sectionIds.has(item.sectionId)),
       studentsCount: (state.sections || []).filter((item: any) => sectionIds.has(item.id)).reduce((total: number, item: any) => total + (Number(item.studentCount) || 0), 0),
@@ -2604,7 +2650,7 @@ function sanitizeAcademicState(state: any, roleCode?: string, user?: StoredUser)
       }),
       auditLogs: (state.auditLogs || []).filter((log: any) =>
         (log.entityType === 'DepartmentTimetable' && String(log.entityId).startsWith(`${departmentId}:`)) ||
-        (log.entityType === 'ClassSession' && (state.sessions || []).some((session: any) => session.id === log.entityId && (sectionIds.has(session.sectionId) || facultyIds.has(session.facultyId)))) ||
+        (log.entityType === 'ClassSession' && [...(state.sessions || []), ...(state.publishedSessions || [])].some((session: any) => session.id === log.entityId && (sectionIds.has(session.sectionId) || facultyIds.has(session.facultyId)))) ||
         (log.entityType === 'Faculty' && facultyIds.has(log.entityId)) ||
         (log.entityType === 'StudentSection' && sectionIds.has(log.entityId)) ||
         (log.entityType === 'Course' && courseIds.has(log.entityId))
@@ -2615,6 +2661,7 @@ function sanitizeAcademicState(state: any, roleCode?: string, user?: StoredUser)
     const faculty = (state.facultyMembers || []).find((item: any) => item.id === user?.profile?.facultyId || item.email?.toLowerCase() === user?.email?.toLowerCase());
     return {
       ...state,
+      sessions: state.publishedSessions || [],
       students: [],
       studentsCount: 0,
       facultyMembers: (state.facultyMembers || []).map((item: any) => ({
@@ -2630,8 +2677,7 @@ function sanitizeAcademicState(state: any, roleCode?: string, user?: StoredUser)
   }
   if (roleCode !== 'STUDENT' && roleCode !== 'CLASS_REPRESENTATIVE') return state;
 
-  const email = user?.email?.toLowerCase();
-  const student = (state.students || []).find((item: any) => item.email?.toLowerCase() === email);
+  const student = supabaseStore.findStudentByEmail(user?.email);
   const sectionId = user?.profile?.sectionId || user?.profile?.crSectionId || student?.sectionId;
   if (!sectionId) return {
     ...state, departments: [], programs: [], courses: [], facultyMembers: [], rooms: [], sections: [], students: [],
@@ -2642,9 +2688,8 @@ function sanitizeAcademicState(state: any, roleCode?: string, user?: StoredUser)
 
   const sections = (state.sections || []).filter((item: any) => item.id === sectionId);
   const sessionsForSection = (sessions: any[]) => (sessions || []).filter((item: any) => item.sectionId === sectionId);
-  const sectionSessions = sessionsForSection(state.sessions);
   const publishedSessions = sessionsForSection(state.publishedSessions);
-  const visibleSessions = [...sectionSessions, ...publishedSessions];
+  const visibleSessions = publishedSessions;
   const courseIds = new Set(visibleSessions.map((item: any) => item.courseId));
   const facultyIds = new Set(visibleSessions.map((item: any) => item.facultyId));
   const roomIds = new Set(visibleSessions.map((item: any) => item.roomId));
@@ -2676,7 +2721,7 @@ function sanitizeAcademicState(state: any, roleCode?: string, user?: StoredUser)
     studentsCount: sections[0]?.studentCount || 0,
     allocations: courseAllocations,
     constraints: [],
-    sessions: sectionSessions,
+    sessions: publishedSessions,
     publishedSessions,
     versions: scopeVersions(state.versions),
     notifications: (state.notifications || []).filter(notificationVisible),
@@ -3073,6 +3118,33 @@ app.delete('/api/academic/groups/:id', requireAuth, requireRole(['COORDINATOR', 
   }
 });
 
+// Academic year and scheduling rules
+app.put('/api/academic/year', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
+  const { yearLabel, semesterType, semesterNumber, workingDays } = req.body || {};
+  const week = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  if (typeof yearLabel !== 'string' || !yearLabel.trim() || yearLabel.length > 60
+    || !['Odd (Autumn)', 'Even (Spring)', 'Summer'].includes(semesterType)
+    || !Number.isInteger(semesterNumber) || semesterNumber < 1 || semesterNumber > 12
+    || !Array.isArray(workingDays) || workingDays.length === 0 || workingDays.some((day: unknown) => !week.includes(String(day)))) {
+    return res.status(400).json({ success: false, message: 'A year, semester and at least one working day are required.' });
+  }
+  const stranded = supabaseStore.liveSessions().filter((session) => session.status !== 'Cancelled' && !workingDays.includes(session.day)).length;
+  if (stranded > 0) {
+    return res.status(409).json({ success: false, message: `The published timetable has ${stranded} class periods on a day you removed. Publish a timetable without that day first.` });
+  }
+  const academicYear = supabaseStore.updateAcademicYear({
+    yearLabel: yearLabel.trim(), semesterType, semesterNumber, workingDays: week.filter((day) => workingDays.includes(day)) as DayOfWeek[],
+  }, req.authenticatedUser?.name);
+  return res.json({ success: true, message: 'Academic year saved.', academicYear });
+});
+
+app.put('/api/academic/constraints/:id', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
+  if (typeof req.body?.isActive !== 'boolean') return res.status(400).json({ success: false, message: 'isActive must be true or false.' });
+  const constraint = supabaseStore.setConstraintActive(String(req.params.id), req.body.isActive, req.authenticatedUser?.name);
+  if (!constraint) return res.status(404).json({ success: false, message: 'Rule not found.' });
+  return res.json({ success: true, constraint });
+});
+
 // Bulk Cohort Generation
 app.post('/api/academic/groups/bulk', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
   const { programName, batchYear, totalStudents, numGroups, namingPattern, numSubgroupsPerGroup, departmentId } = req.body;
@@ -3189,6 +3261,7 @@ app.post('/api/academic/import', requireAuth, requireRole(['COORDINATOR', 'COLLE
     const result = supabaseStore.commitMasterExcelImport(parsedData, mode, req.authenticatedUser?.name);
     return res.json(result);
   } catch (err: any) {
+    if (err instanceof ImportValidationError) return res.status(400).json({ success: false, message: err.message });
     return res.status(500).json({ success: false, message: `Database import error: ${err.message}` });
   }
 });
@@ -3198,9 +3271,19 @@ app.post('/api/academic/import', requireAuth, requireRole(['COORDINATOR', 'COLLE
 // -------------------------------------------------------------
 
 // Timetable Generation (Server-Side Solver + Independent Validator + Supabase Persistence)
-const handleGenerateTimetable = (req: AuthenticatedRequest, res: Response) => {
+const solverBudgetMs = (value: unknown, max: number) => {
+  const ms = Number(value);
+  return Number.isFinite(ms) && ms > 0 ? Math.min(Math.max(50, ms), max) : 5_000;
+};
+const MAX_SYNC_SOLVER_MS = 10_000;
+const MAX_JOB_SOLVER_MS = 30_000;
+
+let generationRunning = false;
+
+const handleGenerateTimetable = async (req: AuthenticatedRequest, res: Response) => {
   const body = req.body || {};
-  const { budgetMode = 'BALANCED', timeBudgetMs = 800, routines, async: isAsync } = body;
+  const { budgetMode = 'BALANCED', routines, async: isAsync } = body;
+  const timeBudgetMs = solverBudgetMs(body.timeBudgetMs, isAsync ? MAX_JOB_SOLVER_MS : MAX_SYNC_SOLVER_MS);
 
   if (isAsync) {
     const state = supabaseStore.getAcademicState();
@@ -3213,7 +3296,7 @@ const handleGenerateTimetable = (req: AuthenticatedRequest, res: Response) => {
       state.sections,
       state.courses,
       state.constraints,
-      { budgetMode, timeBudgetMs: Number(timeBudgetMs) }
+      { budgetMode, timeBudgetMs, fixedSessions: supabaseStore.lockedSessions() }
     );
 
     return res.status(202).json({
@@ -3223,14 +3306,42 @@ const handleGenerateTimetable = (req: AuthenticatedRequest, res: Response) => {
     });
   }
 
-  const result = supabaseStore.generateDualRoutines(
-    {
-      budgetMode,
-      timeBudgetMs: Number(timeBudgetMs),
-      routines: Array.isArray(routines) ? routines : undefined,
-    },
-    req.authenticatedUser?.name
-  );
+  const profiles = ['STUDENT_FOCUSED', 'FACULTY_FOCUSED', 'BALANCED'] as const;
+  const chosen = (Array.isArray(routines) && routines.length > 0 ? routines.slice(0, 2) : [
+    { id: 'student-focused', label: 'Student-focused', optimizationProfile: 'STUDENT_FOCUSED' },
+    { id: 'faculty-focused', label: 'Faculty-focused', optimizationProfile: 'FACULTY_FOCUSED' },
+  ]).map((routine: any) => ({
+    id: String(routine?.id || 'routine').slice(0, 60),
+    label: String(routine?.label || 'Routine').slice(0, 60),
+    optimizationProfile: profiles.find((profile) => profile === routine?.optimizationProfile) ?? 'BALANCED' as const,
+  }));
+  if (generationRunning) return res.status(409).json({ success: false, message: 'A timetable is already being generated. Please wait for it to finish.' });
+  // Solved in worker threads and outside the write lane, so everyone keeps using the app meanwhile.
+  const academic = supabaseStore.getAcademicState();
+  let results;
+  generationRunning = true;
+  try {
+    results = await Promise.all(chosen.map((routine, i) => timetableJobManager.solve({
+      ...academic,
+      facultyMembers: academic.facultyMembers,
+      options: {
+        budgetMode, timeBudgetMs, optimizationProfile: routine.optimizationProfile,
+        seed: i === 0 ? 1337 : 9999, maxCandidates: 1, fixedSessions: supabaseStore.lockedSessions(),
+      },
+    }, timeBudgetMs + 20_000)));
+  } catch (err) {
+    console.error('[SOLVER]', err instanceof Error ? err.message : 'unknown error');
+    return res.status(503).json({ success: false, message: 'The timetable could not be generated. The current draft was kept. Please try again.' });
+  } finally {
+    generationRunning = false;
+  }
+  // The result is checked again against the data as it is now.
+  if (!(await joinWriteLane(res))) return;
+  const result = supabaseStore.generateDualRoutines({ budgetMode, timeBudgetMs, routines: chosen, results }, req.authenticatedUser?.name);
+
+  if (!result.success) {
+    return res.status(422).json({ ...result, error: result.message });
+  }
 
   const jobId = `job_sync_${crypto.randomUUID()}`;
 
@@ -3249,7 +3360,8 @@ app.post('/api/timetable/generate-engine', requireAuth, requireRole(['COORDINATO
 // Job API Endpoints
 app.post('/api/timetable/jobs', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
   const body = req.body || {};
-  const { budgetMode = 'BALANCED', timeBudgetMs = 800, optimizationProfile = 'BALANCED', seed } = body;
+  const { budgetMode = 'BALANCED', optimizationProfile = 'BALANCED', seed } = body;
+  const timeBudgetMs = solverBudgetMs(body.timeBudgetMs, MAX_JOB_SOLVER_MS);
 
   const state = supabaseStore.getAcademicState();
 
@@ -3261,7 +3373,7 @@ app.post('/api/timetable/jobs', requireAuth, requireRole(['COORDINATOR', 'COLLEG
     state.sections,
     state.courses,
     state.constraints,
-    { budgetMode, timeBudgetMs: Number(timeBudgetMs), optimizationProfile, seed }
+    { budgetMode, timeBudgetMs, optimizationProfile, seed, fixedSessions: supabaseStore.lockedSessions() }
   );
 
   return res.status(202).json({
@@ -3339,6 +3451,7 @@ app.post('/api/timetable/sessions', requireAuth, requireRole(['COORDINATOR', 'CO
 });
 
 app.delete('/api/timetable/sessions/:id', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
+  if (supabaseStore.isSessionLocked(req.params.id as string)) return res.status(409).json({ success: false, message: 'This class is locked. Unlock it before removing it.' });
   const deleted = supabaseStore.deleteClassSession(req.params.id as string, req.authenticatedUser?.name);
   if (!deleted) return res.status(404).json({ success: false, message: 'Session not found.' });
   return res.json({ success: true, message: 'Session removed from the working draft.' });
@@ -3405,6 +3518,22 @@ app.post('/api/timetable/swap', requireAuth, requireRole(['COORDINATOR', 'COLLEG
   });
 });
 
+// The coordinator hands a complete draft to an administrator for approval.
+app.post('/api/timetable/submit', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN', 'SUPER_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
+  const validation = supabaseStore.validateCurrentTimetable();
+  if (!validation.canPublish) {
+    return res.status(422).json({
+      success: false,
+      message: `Cannot submit: ${validation.hardViolationsCount} hard conflicts and ${Math.max(0, validation.requiredSessionsCount - validation.scheduledSessionsCount)} unscheduled hours.`,
+    });
+  }
+  if (supabaseStore.getAcademicState().academicYear.publishStatus === 'Published') {
+    return res.status(409).json({ success: false, message: 'This timetable is already published. Make a change first.' });
+  }
+  supabaseStore.submitForApproval(req.authenticatedUser?.name);
+  return res.json({ success: true, message: 'Submitted for approval.' });
+});
+
 // Final timetable approval remains an Admin responsibility.
 app.post('/api/timetable/approve', requireAuth, requireRole(['COLLEGE_ADMIN', 'SUPER_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
   const { versionId } = req.body;
@@ -3436,10 +3565,10 @@ const handlePublishTimetable = (req: AuthenticatedRequest, res: Response) => {
       message: `Cannot publish: ${validation.hardViolationsCount} hard conflicts and ${Math.max(0, validation.requiredSessionsCount - validation.scheduledSessionsCount)} unscheduled hours.`,
     });
   }
-  supabaseStore.publishTimetable(versionId || 'V1.0', req.authenticatedUser?.name);
+  const published = supabaseStore.publishTimetable(versionId, req.authenticatedUser?.name);
   return res.json({
     success: true,
-    message: `Timetable version ${versionId || 'V1.0'} is now officially published for institutional access.`,
+    message: `Timetable version ${published.versionLabel} is now officially published for institutional access.`,
     publishedBy: req.authenticatedUser?.name,
     timestamp: new Date().toISOString(),
   });
@@ -3456,11 +3585,11 @@ app.get('/api/timetable/versions', requireAuth, requireRole(['SUPER_ADMIN', 'COL
 
 app.post('/api/timetable/versions/:versionNumber/restore', requireAuth, requireRole(['COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
   const verNum = Number(req.params.versionNumber);
-  const restored = supabaseStore.restoreVersion(verNum, req.authenticatedUser?.name);
+  const { version: restored, error } = supabaseStore.restoreVersion(verNum, req.authenticatedUser?.name);
   if (!restored) {
-    return res.status(404).json({ success: false, message: `Version ${verNum} not found.` });
+    return res.status(error?.includes('not found') ? 404 : 409).json({ success: false, message: error });
   }
-  return res.json({ success: true, message: `Restored timetable to ${restored.versionLabel}`, version: restored });
+  return res.json({ success: true, message: `Loaded ${restored.versionLabel} as the working draft. Publish it to make it live.`, version: restored });
 });
 
 // Timetable Benchmark Endpoint
@@ -3524,14 +3653,15 @@ app.post('/api/recovery/cancel-class', requireAuth, requireRole(['FACULTY', 'COO
 
   const user = req.authenticatedUser;
   const state = supabaseStore.getBootstrapState();
-  const session = (state.sessions || []).find((s: any) => s.id === sessionId);
+  const session = supabaseStore.liveSessions().find((s) => s.id === sessionId);
   if (!session) {
-    return res.status(404).json({ success: false, message: 'Session not found.' });
+    return (state.sessions || []).some((s: any) => s.id === sessionId)
+      ? res.status(409).json({ success: false, message: 'This class is in a draft that is not published, so there is nothing to cancel. Remove or move it instead.' })
+      : res.status(404).json({ success: false, message: 'Class not found. Refresh to see the current timetable.' });
   }
 
   if (user?.roleCode === 'FACULTY') {
-    const faculty = (state.facultyMembers || []).find((f: any) => f.email.toLowerCase() === user.email.toLowerCase() || f.id === (user as any).facultyId);
-    if (!faculty || session.facultyId !== faculty.id) {
+    if (session.facultyId !== user.profile?.facultyId) {
       return res.status(403).json({ success: false, message: 'Forbidden: Faculty can only cancel classes they teach.' });
     }
   } else if (user?.roleCode === 'HOD') {
@@ -3543,13 +3673,17 @@ app.post('/api/recovery/cancel-class', requireAuth, requireRole(['FACULTY', 'COO
     }
   }
 
-  const result = supabaseStore.cancelClassSession(sessionId, reason || 'Unforeseen conflict', user?.name);
+  if (session.status === 'Cancelled') {
+    return res.status(409).json({ success: false, message: 'This class is already cancelled.' });
+  }
+
+  const result = supabaseStore.cancelClassSession(sessionId, String(reason || 'Unforeseen conflict').slice(0, 500), user?.name);
   if (!result.success) {
     return res.status(404).json({ success: false, message: 'Session not found.' });
   }
   return res.json({
     success: true,
-    message: `Class session ${sessionId} was cancelled and makeup options are being prepared.`,
+    message: 'The class was cancelled. Make-up options are ready for review.',
     task: result.task,
     cancelledBy: req.authenticatedUser?.name,
   });
@@ -3559,24 +3693,46 @@ app.post('/api/recovery/undo-cancel', requireAuth, requireRole(['FACULTY', 'COOR
   const sessionId = String(req.body?.sessionId || '');
   const user = req.authenticatedUser;
   const state = supabaseStore.getBootstrapState();
-  const session = (state.sessions || []).find((item: any) => item.id === sessionId && item.status === 'Cancelled');
+  const session = supabaseStore.liveSessions().find((item) => item.id === sessionId && item.status === 'Cancelled');
   if (!session) return res.status(404).json({ success: false, message: 'Cancelled class was not found.' });
   if (user?.roleCode === 'FACULTY') {
     const faculty = (state.facultyMembers || []).find((item: any) => item.email?.toLowerCase() === user.email.toLowerCase() || item.id === user.profile?.facultyId);
     if (!faculty || session.facultyId !== faculty.id) return res.status(403).json({ success: false, message: 'Faculty may only undo cancellations for their own classes.' });
   }
-  const success = supabaseStore.undoClassCancellation(sessionId, user?.name);
-  return success ? res.json({ success: true }) : res.status(409).json({ success: false, message: 'Cancellation could not be reversed.' });
+  if (user?.roleCode === 'HOD' && !sameDepartment(user, session.facultyId)) {
+    return res.status(403).json({ success: false, message: 'HODs may only undo cancellations within their department.' });
+  }
+  const { success, error } = supabaseStore.undoClassCancellation(sessionId, user?.name);
+  return success ? res.json({ success: true }) : res.status(409).json({ success: false, message: error });
 });
 
-app.post('/api/recovery/request-change', requireAuth, requireRole(['FACULTY', 'HOD']), (req: AuthenticatedRequest, res: Response) => {
+// A class representative, or a student acting as one, asks the coordinator for a make-up.
+app.post('/api/recovery/student-request', requireAuth, requireRole(['CLASS_REPRESENTATIVE', 'STUDENT']), (req: AuthenticatedRequest, res: Response) => {
+  const { courseId, sectionId } = req.body || {};
+  const user = req.authenticatedUser!;
+  if (user.roleCode === 'STUDENT' && !resolveWorkspacesForUser(user).includes('CR')) {
+    return res.status(403).json({ success: false, message: 'Only class representatives may request make-up classes.' });
+  }
+  if (![user.profile?.sectionId, user.profile?.crSectionId].includes(sectionId)) {
+    return res.status(403).json({ success: false, message: 'You may only request make-up classes for your own class.' });
+  }
+  if (!supabaseStore.getBootstrapState().allocations.some((item: any) => item.sectionId === sectionId && item.courseId === courseId)) {
+    return res.status(400).json({ success: false, message: 'That course is not taught to this class.' });
+  }
+  if (!supabaseStore.requestStudentMakeup(courseId, sectionId, user.name)) {
+    return res.status(409).json({ success: false, message: 'This request is already waiting for the coordinator.' });
+  }
+  return res.status(201).json({ success: true, message: 'The coordinator has been asked for a make-up class.' });
+});
+
+app.post('/api/recovery/request-change', requireAuth, requireRole(['FACULTY', 'HOD', 'COORDINATOR', 'COLLEGE_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
   const sessionId = String(req.body?.sessionId || '');
   const details = String(req.body?.details || '').trim();
   if (!sessionId || details.length < 5 || details.length > 500) {
     return res.status(400).json({ success: false, message: 'Choose a class and provide a request of 5–500 characters.' });
   }
   const state = supabaseStore.getBootstrapState();
-  const session = state.sessions.find((item: any) => item.id === sessionId);
+  const session = supabaseStore.liveSessions().find((item) => item.id === sessionId);
   if (!session) return res.status(404).json({ success: false, message: 'Class session not found.' });
   const user = req.authenticatedUser;
   const linkedFaculty = state.facultyMembers.find((faculty: any) => faculty.email.toLowerCase() === user?.email.toLowerCase() || faculty.id === user?.profile?.facultyId);
@@ -3621,49 +3777,49 @@ app.post('/api/recovery/schedule-makeup', requireAuth, requireRole(['FACULTY', '
     return res.status(400).json({ success: false, message: 'Referenced cancellation task not found.' });
   }
 
-  // Validate target room, faculty, time slot, and date/day are present
-  const roomId = req.body.roomId || opp.roomId;
-  const facultyId = req.body.facultyId || opp.facultyId;
-  const timeSlotId = req.body.timeSlotId || opp.timeSlotId;
-  const targetDay = req.body.targetDay || req.body.date || opp.targetDay;
-
-  if (!roomId || !facultyId || !timeSlotId || !targetDay) {
-    return res.status(400).json({
-      success: false,
-      message: 'Target room, faculty, time slot, and date are required to schedule makeup session.',
-    });
+  if (makeupTask.status === 'Scheduled') {
+    return res.status(409).json({ success: false, message: 'A make-up class is already booked for this cancellation.' });
+  }
+  if (req.authenticatedUser?.roleCode === 'FACULTY' && req.authenticatedUser.profile?.facultyId !== opp.facultyId) {
+    return res.status(403).json({ success: false, message: 'Faculty may only book make-up classes for their own teaching.' });
   }
 
+  // The class is booked exactly as offered, so that is what gets checked.
+  const { roomId, facultyId, timeSlotId, targetDay } = opp;
+  const offered = new Set(consecutiveSlots(state.academicYear, timeSlotId, opp.periods ?? 1));
+
   // Verify no conflicts in schedule before creating the makeup class
-  const activeSessions = (state.sessions || []).filter((s: any) => s.status !== 'Cancelled');
+  const activeSessions = supabaseStore.liveSessions().filter((s) => s.status !== 'Cancelled');
 
   const facultyConflict = activeSessions.find(
-    (s: any) => s.facultyId === facultyId && s.day === targetDay && s.timeSlotId === timeSlotId
+    (s: any) => s.facultyId === facultyId && s.day === targetDay && offered.has(s.timeSlotId)
   );
   if (facultyConflict) {
     return res.status(409).json({
       success: false,
-      message: `Faculty collision: Faculty member is already scheduled for session ${facultyConflict.id} at ${targetDay} ${timeSlotId}.`,
+      message: 'The teacher already has a class at this time. Choose another option.',
     });
   }
 
   const roomConflict = activeSessions.find(
-    (s: any) => s.roomId === roomId && s.day === targetDay && s.timeSlotId === timeSlotId
+    (s: any) => s.roomId === roomId && s.day === targetDay && offered.has(s.timeSlotId)
   );
   if (roomConflict) {
     return res.status(409).json({
       success: false,
-      message: `Room collision: Room ${roomId} is already occupied by session ${roomConflict.id} at ${targetDay} ${timeSlotId}.`,
+      message: 'The room is already taken at this time. Choose another option.',
     });
   }
 
+  const subSectionId = supabaseStore.liveSessions().find((s) => s.id === makeupTask.cancelledSessionId)?.subSectionId;
   const sectionConflict = activeSessions.find(
-    (s: any) => s.sectionId === makeupTask.sectionId && s.day === targetDay && s.timeSlotId === timeSlotId
+    (s: any) => s.sectionId === makeupTask.sectionId && s.day === targetDay && offered.has(s.timeSlotId)
+      && (!subSectionId || !s.subSectionId || s.subSectionId === subSectionId)
   );
   if (sectionConflict) {
     return res.status(409).json({
       success: false,
-      message: `Section collision: Student section ${makeupTask.sectionId} is already in session ${sectionConflict.id} at ${targetDay} ${timeSlotId}.`,
+      message: 'The students already have a class at this time. Choose another option.',
     });
   }
 
@@ -3675,8 +3831,17 @@ app.post('/api/recovery/schedule-makeup', requireAuth, requireRole(['FACULTY', '
 });
 
 // Decline Opportunity
-app.post('/api/recovery/decline', requireAuth, (req: AuthenticatedRequest, res: Response) => {
-  const { opportunityId } = req.body;
+app.post('/api/recovery/decline', requireAuth, requireRole(['FACULTY', 'HOD', 'COORDINATOR', 'COLLEGE_ADMIN', 'SUPER_ADMIN']), (req: AuthenticatedRequest, res: Response) => {
+  const { opportunityId } = req.body || {};
+  const opportunity = supabaseStore.getBootstrapState().recoveryOpportunities.find((item: any) => item.id === opportunityId);
+  if (!opportunity) return res.status(404).json({ success: false, message: 'Recovery opportunity not found.' });
+  const user = req.authenticatedUser!;
+  if (user.roleCode === 'FACULTY' && user.profile?.facultyId !== opportunity.facultyId) {
+    return res.status(403).json({ success: false, message: 'Faculty may only decline options for their own classes.' });
+  }
+  if (user.roleCode === 'HOD' && !sameDepartment(user, opportunity.facultyId)) {
+    return res.status(403).json({ success: false, message: 'HODs may only decline options within their department.' });
+  }
   supabaseStore.declineOpportunity(opportunityId, req.authenticatedUser?.name);
   return res.json({ success: true, message: 'Opportunity marked declined.' });
 });
@@ -3694,7 +3859,7 @@ app.post('/api/voting/polls', requireAuth, requireRole(['CLASS_REPRESENTATIVE', 
   const linkedFacultyId = typeof req.authenticatedUser?.profile?.facultyId === 'string'
     ? req.authenticatedUser.profile.facultyId
     : state.facultyMembers.find((faculty: any) => faculty.email.toLowerCase() === req.authenticatedUser?.email.toLowerCase())?.id;
-  if (req.authenticatedUser?.roleCode === 'FACULTY' && !state.sessions.some((session: any) => session.facultyId === linkedFacultyId && session.sectionId === sectionId && (!courseId || session.courseId === courseId))) {
+  if (req.authenticatedUser?.roleCode === 'FACULTY' && !supabaseStore.liveSessions().some((session) => session.facultyId === linkedFacultyId && session.sectionId === sectionId && (!courseId || session.courseId === courseId))) {
     return res.status(403).json({ success: false, message: 'Faculty may only create polls for a course and section they teach.' });
   }
   if (req.authenticatedUser?.roleCode === 'HOD') {
@@ -3733,7 +3898,7 @@ app.post('/api/voting/polls/:id/close', requireAuth, requireRole(['CLASS_REPRESE
   const linkedFacultyId = typeof req.authenticatedUser?.profile?.facultyId === 'string'
     ? req.authenticatedUser.profile.facultyId
     : state.facultyMembers.find((faculty: any) => faculty.email.toLowerCase() === req.authenticatedUser?.email.toLowerCase())?.id;
-  if (req.authenticatedUser?.roleCode === 'FACULTY' && !state.sessions.some((session: any) => session.facultyId === linkedFacultyId && session.sectionId === poll.sectionId && (!poll.courseId || session.courseId === poll.courseId))) {
+  if (req.authenticatedUser?.roleCode === 'FACULTY' && !supabaseStore.liveSessions().some((session) => session.facultyId === linkedFacultyId && session.sectionId === poll.sectionId && (!poll.courseId || session.courseId === poll.courseId))) {
     return res.status(403).json({ success: false, message: 'Faculty may only close polls for a course and section they teach.' });
   }
   if (req.authenticatedUser?.roleCode === 'HOD') {
@@ -4033,11 +4198,18 @@ app.get('/api/admin/users', requireAuth, requireRole(ADMIN_ROLES), async (req: A
   }
 
   const matches = [...byEmail.values()]
-    .filter((user) => !/^(Adversary User|Audit Faculty)$/i.test(user.name.trim()))
     .filter((user) => !search || user.email.toLowerCase().includes(search) || user.name.toLowerCase().includes(search))
     .sort((a, b) => Number(a.isDemoUser) - Number(b.isDemoUser) || a.roleCode.localeCompare(b.roleCode) || a.name.localeCompare(b.name));
   return res.json({ success: true, total: matches.length, page, limit, users: matches.slice((page - 1) * limit, page * limit) });
 });
+
+/** The Supabase account behind an app account, if there is one; both use the same id. */
+async function findSupabaseAccount(id: string) {
+  if (!supabaseAdmin || !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id)) return null;
+  const { data, error } = await supabaseAdmin.auth.admin.getUserById(id);
+  if (error && error.status !== 404) throw error;
+  return data?.user ?? null;
+}
 
 app.post('/api/admin/users', requireAuth, requireRole(ADMIN_ROLES), async (req: AuthenticatedRequest, res: Response) => {
   const email = String(req.body?.email ?? '').trim().toLowerCase();
@@ -4110,11 +4282,11 @@ app.patch('/api/admin/users/:id', requireAuth, requireRole(ADMIN_ROLES), async (
   if (req.body?.roleCode !== undefined && !VALID_ROLE_CODES.includes(req.body.roleCode)) return res.status(400).json({ success: false, message: 'Unknown role.' });
   if (req.body?.status !== undefined && !['ACTIVE', 'LOCKED'].includes(req.body.status)) return res.status(400).json({ success: false, message: 'Unknown status.' });
   const targetId = String(req.params.id);
-  let authUser: any = null;
-  if (supabaseAdmin && !user) {
-    const result = await supabaseAdmin.auth.admin.getUserById(targetId);
-    authUser = result.data.user;
-    if (result.error || !authUser) return res.status(404).json({ success: false, message: 'User not found.' });
+  let authUser: any;
+  try {
+    authUser = await findSupabaseAccount(targetId);
+  } catch {
+    return res.status(503).json({ success: false, message: 'The sign-in service could not be reached. Please retry.' });
   }
   if (!user && !authUser) return res.status(404).json({ success: false, message: 'User not found.' });
 
@@ -4132,12 +4304,13 @@ app.patch('/api/admin/users/:id', requireAuth, requireRole(ADMIN_ROLES), async (
   if (!nextName) return res.status(400).json({ success: false, message: 'Name cannot be empty.' });
   const profile = { ...(target.profile || {}), ...(req.body?.profile && typeof req.body.profile === 'object' ? req.body.profile : {}) };
   const nextStatus = (req.body?.status || target.status) as 'ACTIVE' | 'LOCKED';
-  if (supabaseAdmin) {
+  if (req.body?.password && !evaluatePasswordPolicy(String(req.body.password)).isValid) {
+    return res.status(400).json({ success: false, message: `Password needs: ${evaluatePasswordPolicy(String(req.body.password)).errors.join(', ')}.` });
+  }
+  // Self-registered and Google accounts live only in this app.
+  if (supabaseAdmin && authUser) {
     const authChanges: Record<string, unknown> = { user_metadata: { ...(authUser?.user_metadata || {}), name: nextName, profile } };
-    if (req.body?.password) {
-      if (!evaluatePasswordPolicy(String(req.body.password)).isValid) return res.status(400).json({ success: false, message: `Password needs: ${evaluatePasswordPolicy(String(req.body.password)).errors.join(', ')}.` });
-      authChanges.password = String(req.body.password);
-    }
+    if (req.body?.password) authChanges.password = String(req.body.password);
     const { error: authError } = await supabaseAdmin.auth.admin.updateUserById(targetId, authChanges as any);
     if (authError) return res.status(400).json({ success: false, message: 'Could not update the Supabase account.' });
     const { error: profileError } = await supabaseAdmin.from('profiles').upsert({
@@ -4152,7 +4325,8 @@ app.patch('/api/admin/users/:id', requireAuth, requireRole(ADMIN_ROLES), async (
   const updated: StoredUser = {
     ...target, name: nextName, department: req.body?.department ?? target.department, roleCode: nextRole,
     roleId: `role-${nextRole.toLowerCase()}`, roleName: ROLE_LABELS[nextRole], status: nextStatus,
-    passwordHash: req.body?.password ? 'SUPABASE_AUTH_MANAGED' : target.passwordHash,
+    // A password kept here is replaced even when Supabase has one too, so the old one stops working everywhere.
+    passwordHash: req.body?.password && !(authUser && target.passwordHash === 'SUPABASE_AUTH_MANAGED') ? hashPasswordBcryptSync(String(req.body.password)) : target.passwordHash,
     authorizedWorkspaces: undefined, profile,
   };
   try {
@@ -4177,10 +4351,19 @@ app.delete('/api/admin/users/:id', requireAuth, requireRole(ADMIN_ROLES), async 
   const targetId = String(req.params.id);
   if (targetId === req.authenticatedUser?.id) return res.status(400).json({ success: false, message: 'You cannot delete your own account.' });
   const entry = [...usersDatabase.entries()].find(([, user]) => user.id === targetId);
-  if (!entry && !supabaseAdmin) return res.status(404).json({ success: false, message: 'User not found.' });
-  if (supabaseAdmin) {
-    const { error } = await supabaseAdmin.auth.admin.deleteUser(targetId);
-    if (error) return res.status(404).json({ success: false, message: 'User could not be deleted.' });
+  try {
+    // Otherwise the person could sign in through Supabase and the account would come back with its old role.
+    const supabaseAccount = await findSupabaseAccount(targetId);
+    if (!entry && !supabaseAccount) return res.status(404).json({ success: false, message: 'User not found.' });
+    if (supabaseAdmin && supabaseAccount) {
+      const { error: profileError } = await supabaseAdmin.from('profiles').delete().eq('id', targetId);
+      if (profileError) throw profileError;
+      const { error } = await supabaseAdmin.auth.admin.deleteUser(targetId);
+      if (error) throw error;
+    }
+  } catch (err) {
+    console.error('[ADMIN] Could not delete the Supabase account:', err instanceof Error ? err.message : 'unknown error');
+    return res.status(503).json({ success: false, message: 'The sign-in account could not be deleted. Please retry.' });
   }
   try {
     await deletePersistedUser(targetId);
