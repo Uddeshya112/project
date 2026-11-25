@@ -106,7 +106,8 @@ export function checkHardConstraints(
 
   // 5. Equipment suitability
   const course = courses.find(c => c.id === candidateSession.courseId);
-  if (course && room && course.requiresLab && room.type !== 'ComputerLab' && room.type !== 'HardwareLab') {
+  const isLabClass = candidateSession.type === 'Lab' || candidateSession.type === 'Practical' || (!candidateSession.type && course?.requiresLab);
+  if (course && room && isLabClass && room.type !== 'ComputerLab' && room.type !== 'HardwareLab') {
     violations.push(`Room mismatch: Course requires a specialized laboratory, but selected room is a ${room.type}.`);
   }
 
@@ -148,6 +149,56 @@ const DEFAULT_CALENDAR: TeachingCalendar = {
 
 const teachingSlotsOf = (cal: TeachingCalendar) =>
   cal.timeSlots.filter(t => !t.isBreak && !t.isLunch && t.id !== cal.lunchPeriodId);
+
+/** The ids of `count` consecutive teaching periods from `startId`, or fewer when a break or the end of the day comes first. */
+export function consecutiveSlots(cal: TeachingCalendar, startId: string, count: number): string[] {
+  const teaching = new Set(teachingSlotsOf(cal).map(t => t.id));
+  const start = cal.timeSlots.findIndex(t => t.id === startId);
+  const run: string[] = [];
+  for (let i = start; start >= 0 && i < cal.timeSlots.length && run.length < count && teaching.has(cal.timeSlots[i].id); i++) run.push(cal.timeSlots[i].id);
+  return run;
+}
+
+/** "09:40 - 11:20": the clock time of one or more consecutive periods. */
+export function periodLabel(calendar: TeachingCalendar, timeSlotId: string, periods = 1): string {
+  const slots = consecutiveSlots(calendar, timeSlotId, periods).map(id => calendar.timeSlots.find(slot => slot.id === id)!);
+  return slots.length > 0 ? `${slots[0].startTime} - ${slots[slots.length - 1].endTime}` : timeSlotId;
+}
+
+/**
+ * A class of several periods is stored as one session per period; this returns all of them. Two blocks of the same
+ * class on one day are told apart by their length, because a block's periods are stored one after another.
+ */
+export function classBlock(session: ClassSession, sessions: ClassSession[]): ClassSession[] {
+  const isMakeup = session.type === 'Makeup';
+  const length = Number(session.durationPeriods) || 1;
+  if (!isMakeup && session.type !== 'Lab' && session.type !== 'Practical' && length < 2) return [session];
+  const periods = sessions.filter(s => s.type === session.type && s.courseId === session.courseId && s.sectionId === session.sectionId
+    && s.subSectionId === session.subSectionId && s.day === session.day && s.roomId === session.roomId && s.facultyId === session.facultyId
+    && (!isMakeup || (Boolean(s.originalSessionId) && s.originalSessionId === session.originalSessionId)));
+  if (isMakeup || length < 2 || periods.length <= length) return periods.length > 0 ? periods : [session];
+  const start = Math.floor(periods.findIndex(s => s.id === session.id) / length) * length;
+  return start < 0 ? [session] : periods.slice(start, start + length);
+}
+
+/** Two classes at the same time that share a teacher, a room or students. */
+export function sessionsClash(a: ClassSession, b: ClassSession): boolean {
+  return a.day === b.day && a.timeSlotId === b.timeSlotId
+    && (a.facultyId === b.facultyId || a.roomId === b.roomId
+      || (a.sectionId === b.sectionId && (!a.subSectionId || !b.subSectionId || a.subSectionId === b.subSectionId)));
+}
+
+export type ClassPlace = Pick<ClassSession, 'day' | 'timeSlotId' | 'roomId'>;
+
+/** Where every period of a class goes when `session` moves to `to`, or undefined when the class does not fit there. */
+export function movedBlock(session: ClassSession, sessions: ClassSession[], calendar: TeachingCalendar, to: ClassPlace): Map<string, ClassPlace> | undefined {
+  const periodOf = (id: string) => calendar.timeSlots.findIndex(slot => slot.id === id);
+  const block = classBlock(session, sessions).sort((a, b) => periodOf(a.timeSlotId) - periodOf(b.timeSlotId));
+  const start = calendar.timeSlots[periodOf(to.timeSlotId) - block.findIndex(item => item.id === session.id)];
+  const run = start ? consecutiveSlots(calendar, start.id, block.length) : [];
+  if (run.length < block.length) return undefined;
+  return new Map(block.map((item, i) => [item.id, { day: to.day, timeSlotId: run[i], roomId: to.roomId }]));
+}
 
 /**
  * Timetable health, every figure computed from the sessions:
@@ -283,37 +334,40 @@ export function findSelfHealingRecoverySlots(
 
   if (!targetFaculty || !targetCourse || !targetSection) return [];
 
+  const cancelled = sessions.find(s => s.id === makeupTask.cancelledSessionId);
+  // A make-up needs the same kind of room as the class it replaces.
+  const original = cancelled?.type === 'Makeup' ? sessions.find(s => s.id === cancelled.originalSessionId) ?? cancelled : cancelled;
+  const needsLab = original ? original.type === 'Lab' || original.type === 'Practical' : targetCourse.requiresLab;
+  const subSectionId = cancelled?.subSectionId;
+  const periods = cancelled ? Math.max(1, classBlock(cancelled, sessions).length) : 1;
+  const audience = targetSection.subSections?.find(sub => sub.id === subSectionId)?.studentCount ?? targetSection.studentCount;
+
   for (const day of candidateDays) {
     for (const slot of eligibleSlots) {
-      // Never propose the slot that was just cancelled.
-      if (day === makeupTask.cancelledDay && slot.id === makeupTask.cancelledTimeSlot) continue;
+      const run = consecutiveSlots(calendar, slot.id, periods);
+      if (run.length < periods) continue;
+      const inRun = (s: ClassSession) => s.day === day && run.includes(s.timeSlotId);
+      // Not while the teacher has another class, nor when the teacher has cancelled one: they are away then.
+      if (sessions.some(s => inRun(s) && s.facultyId === makeupTask.facultyId)) continue;
+      // Nor in a period the teacher keeps free.
+      if (targetFaculty.preferences.protectedSlots.some(ps => ps.day === day && run.includes(ps.periodId))) continue;
       // Students are free when none of the section's sessions (whole class or any subgroup) is running.
       const sectionSessions = sessions.filter(
-        s => s.day === day && s.timeSlotId === slot.id && s.sectionId === makeupTask.sectionId
+        s => inRun(s) && s.sectionId === makeupTask.sectionId
+          && (!subSectionId || !s.subSectionId || s.subSectionId === subSectionId)
       );
       if (sectionSessions.some(s => s.status !== 'Cancelled')) continue;
       const studentSession = sectionSessions.find(s => s.status === 'Cancelled');
       const isCrossCancellation = Boolean(studentSession);
 
-      // Check if faculty is free in this slot
-      const facultySession = sessions.find(
-        s => s.day === day && s.timeSlotId === slot.id && s.facultyId === makeupTask.facultyId && s.status !== 'Cancelled'
-      );
-      if (facultySession) continue; // Faculty already teaching elsewhere
-
-      // Check protected faculty slots
-      const isProtected = targetFaculty.preferences.protectedSlots.some(
-        ps => ps.day === day && ps.periodId === slot.id
-      );
-
       // Find suitable rooms (smallest that fits first)
       const availableRooms = rooms.filter(r => {
         if (!r.isAvailable) return false;
-        if (r.capacity < targetSection.studentCount) return false;
-        if (targetCourse.requiresLab && r.type !== 'ComputerLab' && r.type !== 'HardwareLab') return false;
+        if (r.capacity < audience) return false;
+        if (needsLab !== (r.type === 'ComputerLab' || r.type === 'HardwareLab')) return false;
         // Check if room occupied
         const roomOccupied = sessions.some(
-          s => s.day === day && s.timeSlotId === slot.id && s.roomId === r.id && s.status !== 'Cancelled'
+          s => inRun(s) && s.roomId === r.id && s.status !== 'Cancelled'
         );
         return !roomOccupied;
       });
@@ -323,7 +377,7 @@ export function findSelfHealingRecoverySlots(
       const selectedRoom = availableRooms.sort((a, b) => a.capacity - b.capacity)[0];
 
       // Calculate formula factors (Section 59)
-      const teacherAvailability = isProtected ? 80 : 100;
+      const teacherAvailability = 100;
       const studentAvailability = isCrossCancellation ? 98 : 95;
       const roomSuitability = 100;
       const syllabusUrgency = Math.min(100, Math.round((makeupTask.priorityScore * 1.05)));
@@ -354,6 +408,7 @@ export function findSelfHealingRecoverySlots(
         makeupTaskId: makeupTask.id,
         targetDay: day,
         timeSlotId: slot.id,
+        periods,
         roomId: selectedRoom.id,
         facultyId: targetFaculty.id,
         matchScore,

@@ -1,6 +1,8 @@
-import { ClassSession, Course, Faculty, Room, StudentSection, DayOfWeek, SystemHealthMetrics } from '../types';
+import { ClassSession, Course, Faculty, Room, StudentSection, DayOfWeek, SystemHealthMetrics, TimeSlot } from '../types';
 import { TIME_SLOTS } from './initialData';
 import { checkHardConstraints, calculateHealthScore } from './recoveryEngine';
+
+const teachingSlots = (timeSlots: TimeSlot[]) => timeSlots.filter(ts => !ts.isBreak && !ts.isLunch);
 
 export interface ConflictNode {
   id: string; // e.g. "CS501-CSE-A"
@@ -148,7 +150,8 @@ export function runDSATURSolver(
   sections: StudentSection[],
   facultyMembers: Faculty[],
   rooms: Room[],
-  existingSessions: ClassSession[]
+  existingSessions: ClassSession[],
+  timeSlots: TimeSlot[] = TIME_SLOTS
 ): { sessions: ClassSession[]; benchmark: SolverBenchmarkResult } {
   const startTime = performance.now();
   const logs: string[] = [];
@@ -160,7 +163,7 @@ export function runDSATURSolver(
 
   const unassigned = [...graph.nodes].sort((a, b) => b.degree - a.degree);
   const days: DayOfWeek[] = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
-  const slots = TIME_SLOTS.filter(ts => ts.id !== 'ts-5'); // No lunch
+  const slots = teachingSlots(timeSlots);
 
   const scheduledSessions: ClassSession[] = [];
   let iterations = 0;
@@ -282,7 +285,8 @@ export function runHeuristicRepairSolver(
   sections: StudentSection[],
   facultyMembers: Faculty[],
   rooms: Room[],
-  baselineSessions: ClassSession[]
+  baselineSessions: ClassSession[],
+  timeSlots: TimeSlot[] = TIME_SLOTS
 ): { sessions: ClassSession[]; benchmark: SolverBenchmarkResult } {
   const startTime = performance.now();
   const logs: string[] = [];
@@ -290,7 +294,7 @@ export function runHeuristicRepairSolver(
   logs.push(`[HeuristicRepair] Input baseline contains ${baselineSessions.length} sessions.`);
 
   const days: DayOfWeek[] = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
-  const slots = TIME_SLOTS.filter(ts => ts.id !== 'ts-5'); // Exclude lunch break
+  const slots = teachingSlots(timeSlots);
   let iterations = 0;
   let repairedCount = 0;
 
@@ -384,7 +388,8 @@ export function runFastGreedySolver(
   courses: Course[],
   sections: StudentSection[],
   facultyMembers: Faculty[],
-  rooms: Room[]
+  rooms: Room[],
+  timeSlots: TimeSlot[] = TIME_SLOTS
 ): { sessions: ClassSession[]; benchmark: SolverBenchmarkResult } {
   const startTime = performance.now();
   const logs: string[] = [];
@@ -393,7 +398,7 @@ export function runFastGreedySolver(
   logs.push('[FastGreedy] Greedily packing first free slots...');
 
   const days: DayOfWeek[] = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
-  const slots = TIME_SLOTS.filter(ts => ts.id !== 'ts-5');
+  const slots = teachingSlots(timeSlots);
   const sessions: ClassSession[] = [];
 
   sections.forEach(sec => {

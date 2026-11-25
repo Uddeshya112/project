@@ -134,7 +134,6 @@ interface InternalAllocation {
   pinnedSlotIdx?: number;
   pinnedRoomIdx?: number;
   fixedSlots?: { slotIdx: number; roomIdx: number }[];
-  electiveGroupId?: string;
   candidateRooms: number[]; // roomIdx array
   feasibleSlotIndices: number[]; // slotIdx array where faculty & room prerequisites allow assignment
   feasibleSlotMask: bigint;
@@ -392,7 +391,6 @@ export function compileSchedulingProblem(
       isPinned,
       pinnedSlotIdx,
       pinnedRoomIdx,
-      electiveGroupId: alloc.electiveGroupId,
       candidateRooms: candidateRoomsIndices,
       feasibleSlotIndices,
       feasibleSlotMask: feasibleSlotIndices.reduce((mask, slotIdx) => mask | (1n << BigInt(slotIdx)), 0n),
@@ -430,7 +428,7 @@ export function compileSchedulingProblem(
   }
 
   // Verify total required laboratory hours vs available lab room slot capacity
-  const labAllocations = compiledAllocations.filter(ca => ca.sessionType === 'Lab');
+  const labAllocations = compiledAllocations.filter(ca => ca.sessionType === 'Lab' || ca.sessionType === 'Practical');
   let totalRequiredLabHours = 0;
   labAllocations.forEach(ca => { totalRequiredLabHours += ca.requiredHours; });
 
@@ -708,344 +706,187 @@ export function executeOptimizationEngine(
 
   const candidatesFound: GeneratedCandidate[] = [];
 
-  function solvePhaseA(allocOrderIdx: number, activeAllocIdx?: number): boolean {
-    if (performance.now() - startTime > timeBudgetMs) {
-      return false; // Time limit
+  const slotBits = Array.from({ length: totalSlots }, (_, i) => 1n << BigInt(i));
+  const maskOf = (slotIdxs: readonly number[]): bigint => {
+    let mask = 0n;
+    for (let i = 0; i < slotIdxs.length; i++) mask |= slotBits[slotIdxs[i]];
+    return mask;
+  };
+
+  const swapOrder = (a: number, b: number) => {
+    const held = searchAllocOrder[a];
+    searchAllocOrder[a] = searchAllocOrder[b];
+    searchAllocOrder[b] = held;
+  };
+
+  const shuffled = <T,>(items: readonly T[]): T[] => {
+    const copy = [...items];
+    for (let i = copy.length - 1; i > 0; i--) {
+      const j = Math.floor(prng.next() * (i + 1));
+      const held = copy[i];
+      copy[i] = copy[j];
+      copy[j] = held;
     }
+    return copy;
+  };
 
-    if (allocOrderIdx >= searchAllocOrder.length) {
-      // Complete Feasible Assignment Reached!
-      candidatesEvaluated++;
-      const candidate = buildCandidateFromState(
-        candidatesFound.length + 1,
-        prng.range(1000, 9999),
-        problem,
-        allocAssignedSlots,
-        options.optimizationProfile || 'BALANCED'
-      );
-      candidatesFound.push(candidate);
-
-      if (mode === 'FAST' || candidatesFound.length >= maxCandidates) {
-        return true; // Stop Phase A
-      }
-      return false; // Continue search for additional distinct candidates
-    }
-
-    let reordered = false;
-    let selectedIndex = allocOrderIdx;
-    if (activeAllocIdx === undefined && dynamicMRVWindow > 0) {
-      // Recompute MRV after each allocation is placed. Static sorting misses
-      // domains that shrink as faculty, sections, and rooms become occupied.
-      let bestRatio = Number.POSITIVE_INFINITY;
-      let bestDegree = -1;
-      const windowEnd = Math.min(searchAllocOrder.length, allocOrderIdx + dynamicMRVWindow);
-      for (let index = allocOrderIdx; index < windowEnd; index++) {
-        const candidate = searchAllocOrder[index];
-        const remaining = Math.max(1, candidate.requiredHours - allocHoursAssigned[candidate.allocIdx]);
-        const ratio = currentDomainSize(candidate, false) / remaining;
-        const degree = allocationDegree.get(candidate.allocIdx) || 0;
-        if (ratio < bestRatio || (ratio === bestRatio && degree > bestDegree)) {
-          selectedIndex = index;
-          bestRatio = ratio;
-          bestDegree = degree;
-        }
-      }
-      if (selectedIndex !== allocOrderIdx) {
-        [searchAllocOrder[allocOrderIdx], searchAllocOrder[selectedIndex]] = [searchAllocOrder[selectedIndex], searchAllocOrder[allocOrderIdx]];
-        reordered = true;
+  // Recompute MRV after each allocation is placed. Static sorting misses
+  // domains that shrink as faculty, sections, and rooms become occupied.
+  const mostConstrained = (from: number): number => {
+    let selected = from;
+    let bestRatio = Number.POSITIVE_INFINITY;
+    let bestDegree = -1;
+    const windowEnd = Math.min(searchAllocOrder.length, from + dynamicMRVWindow);
+    for (let index = from; index < windowEnd; index++) {
+      const candidate = searchAllocOrder[index];
+      const remaining = Math.max(1, candidate.requiredHours - allocHoursAssigned[candidate.allocIdx]);
+      const ratio = currentDomainSize(candidate, false) / remaining;
+      const degree = allocationDegree.get(candidate.allocIdx) || 0;
+      if (ratio < bestRatio || (ratio === bestRatio && degree > bestDegree)) {
+        selected = index;
+        bestRatio = ratio;
+        bestDegree = degree;
       }
     }
+    return selected;
+  };
 
-    const currentAlloc = activeAllocIdx === undefined
-      ? searchAllocOrder[allocOrderIdx]
-      : problem.allocations[activeAllocIdx];
-    const hoursNeeded = currentAlloc.requiredHours - allocHoursAssigned[currentAlloc.allocIdx];
+  const recordCandidate = (): boolean => {
+    candidatesEvaluated++;
+    candidatesFound.push(buildCandidateFromState(
+      candidatesFound.length + 1,
+      prng.range(1000, 9999),
+      problem,
+      allocAssignedSlots,
+      options.optimizationProfile || 'BALANCED'
+    ));
+    // Stop Phase A, or keep searching for additional distinct candidates.
+    return mode === 'FAST' || candidatesFound.length >= maxCandidates;
+  };
 
-    if (hoursNeeded === 0) {
-      const success = solvePhaseA(allocOrderIdx + 1);
-      if (!success && reordered && activeAllocIdx === undefined) {
-        [searchAllocOrder[allocOrderIdx], searchAllocOrder[selectedIndex]] = [searchAllocOrder[selectedIndex], searchAllocOrder[allocOrderIdx]];
-      }
-      return success;
+  /** The periods to try for an allocation, best first: whole blocks for labs, single periods otherwise. */
+  const placementsFor = (alloc: InternalAllocation): number[][] => {
+    if (alloc.durationPeriods > 1 && alloc.feasibleBlocks && alloc.feasibleBlocks.length > 0) {
+      return shuffled(alloc.feasibleBlocks);
     }
 
-    const facIdx = currentAlloc.facultyIdx;
-    const secIdx = currentAlloc.sectionIdx;
-    const isSubgroupAlloc = currentAlloc.subSectionIdx !== undefined;
+    const candidateSlots = shuffled(alloc.feasibleSlotIndices);
+    const assignedPeriods = new Map<number, number[]>();
+    for (const item of allocAssignedSlots[alloc.allocIdx]) {
+      const ref = problem.slots[item.slotIdx];
+      assignedPeriods.set(ref.dayIdx, [...(assignedPeriods.get(ref.dayIdx) ?? []), ref.periodIdx]);
+    }
 
-    const isMultiPeriod =
-      currentAlloc.durationPeriods > 1 &&
-      Boolean(currentAlloc.feasibleBlocks && currentAlloc.feasibleBlocks.length > 0);
-
-    if (isMultiPeriod) {
-      // Branch 1: Atomic Multi-Period Block Scheduling (2 or 3 hours)
-      const candidateBlocks = [...currentAlloc.feasibleBlocks!];
-      for (let i = candidateBlocks.length - 1; i > 0; i--) {
-        const j = Math.floor(prng.next() * (i + 1));
-        [candidateBlocks[i], candidateBlocks[j]] = [candidateBlocks[j], candidateBlocks[i]];
+    // Profile-guided ordering: prefer slots next to the section's (or teacher's) existing classes that day.
+    const profile = options.optimizationProfile || 'BALANCED';
+    if (profile === 'STUDENT_FOCUSED' || profile === 'FACULTY_FOCUSED') {
+      const occupied = profile === 'STUDENT_FOCUSED' ? sectionWholeOccupancy[alloc.sectionIdx] : facultyOccupancy[alloc.facultyIdx];
+      const busyPeriods: number[][] = Array.from({ length: problem.numDays }, () => []);
+      for (let s = 0; s < totalSlots; s++) {
+        if ((occupied & slotBits[s]) !== 0n) busyPeriods[problem.slots[s].dayIdx].push(problem.slots[s].periodIdx);
       }
-
-      const dur = currentAlloc.durationPeriods;
-      for (const block of candidateBlocks) {
-        let blockBit = 0n;
-        for (const s of block) {
-          blockBit |= (1n << BigInt(s));
-        }
-        constraintChecksCount += dur;
-
-        // 1. Bitwise Hard Constraint Check: Faculty Busy?
-        if ((facultyOccupancy[facIdx] & blockBit) !== 0n) {
-          candidatesPruned++;
-          continue;
-        }
-
-        // 2. Bitwise Hard Constraint Check: Student Cohort / Subgroup Busy?
-        if (isSubgroupAlloc) {
-          const subSecIdx = currentAlloc.subSectionIdx!;
-          if ((sectionWholeOccupancy[secIdx] & blockBit) !== 0n || (subSectionOccupancy[subSecIdx] & blockBit) !== 0n) {
-            candidatesPruned++;
-            continue;
-          }
-        } else {
-          let hasSubgroupCollision = false;
-          for (const s of block) {
-            if (sectionSubgroupCounts[secIdx][s] > 0) {
-              hasSubgroupCollision = true;
-              break;
-            }
-          }
-          if ((sectionWholeOccupancy[secIdx] & blockBit) !== 0n || hasSubgroupCollision) {
-            candidatesPruned++;
-            continue;
-          }
-        }
-
-        // 3. Find Available Compatible Room for all periods of the block
-        let chosenRoomIdx = -1;
-        for (const rIdx of currentAlloc.candidateRooms) {
-          constraintChecksCount += dur;
-          if ((roomOccupancy[rIdx] & blockBit) === 0n) {
-            chosenRoomIdx = rIdx;
-            break;
-          }
-        }
-
-        if (chosenRoomIdx === -1) {
-          candidatesPruned++;
-          continue;
-        }
-
-        // Apply multi-period assignment
-        facultyOccupancy[facIdx] |= blockBit;
-        roomOccupancy[chosenRoomIdx] |= blockBit;
-        if (isSubgroupAlloc) {
-          subSectionOccupancy[currentAlloc.subSectionIdx!] |= blockBit;
-          for (const s of block) {
-            sectionSubgroupCounts[secIdx][s]++;
-          }
-        } else {
-          sectionWholeOccupancy[secIdx] |= blockBit;
-        }
-
-        allocHoursAssigned[currentAlloc.allocIdx] += dur;
-        for (const s of block) {
-          allocAssignedSlots[currentAlloc.allocIdx].push({ slotIdx: s, roomIdx: chosenRoomIdx });
-        }
-
-        const nextOrderIdx = allocHoursAssigned[currentAlloc.allocIdx] >= currentAlloc.requiredHours ? allocOrderIdx + 1 : allocOrderIdx;
-        const allocationComplete = allocHoursAssigned[currentAlloc.allocIdx] >= currentAlloc.requiredHours;
-        const success = solvePhaseA(nextOrderIdx, allocationComplete ? undefined : currentAlloc.allocIdx);
-        if (success) return true;
-
-        // Backtrack
-        backtracksCount++;
-        facultyOccupancy[facIdx] &= ~blockBit;
-        roomOccupancy[chosenRoomIdx] &= ~blockBit;
-        if (isSubgroupAlloc) {
-          subSectionOccupancy[currentAlloc.subSectionIdx!] &= ~blockBit;
-          for (const s of block) {
-            sectionSubgroupCounts[secIdx][s]--;
-            if (sectionSubgroupCounts[secIdx][s] === 0) sectionSubgroupOccupancy[secIdx] &= ~(1n << BigInt(s));
-          }
-        } else {
-          sectionWholeOccupancy[secIdx] &= ~blockBit;
-        }
-
-        allocHoursAssigned[currentAlloc.allocIdx] -= dur;
-        for (let k = 0; k < dur; k++) {
-          allocAssignedSlots[currentAlloc.allocIdx].pop();
-        }
-      }
-
-      if (reordered && activeAllocIdx === undefined) {
-        [searchAllocOrder[allocOrderIdx], searchAllocOrder[selectedIndex]] = [searchAllocOrder[selectedIndex], searchAllocOrder[allocOrderIdx]];
-      }
-      return false;
-    } else {
-      // Branch 2: Single-Hour Lecture / Tutorial Scheduling (with 1-lecture/day/course distribution)
-      let candidateSlots = [...currentAlloc.feasibleSlotIndices];
-      for (let i = candidateSlots.length - 1; i > 0; i--) {
-        const j = Math.floor(prng.next() * (i + 1));
-        [candidateSlots[i], candidateSlots[j]] = [candidateSlots[j], candidateSlots[i]];
-      }
-
-      // Track days already assigned for this allocation
-      const assignedDays = new Set<number>();
-      for (const item of allocAssignedSlots[currentAlloc.allocIdx]) {
-        assignedDays.add(problem.slots[item.slotIdx].dayIdx);
-      }
-
-      // Profile-guided heuristic slot ordering
-      const activeProfile = options.optimizationProfile || 'BALANCED';
-      if (activeProfile === 'STUDENT_FOCUSED') {
-        candidateSlots.sort((a, b) => {
-          const refA = problem.slots[a];
-          const refB = problem.slots[b];
-          const dayAAssigned = assignedDays.has(refA.dayIdx) ? 1 : 0;
-          const dayBAssigned = assignedDays.has(refB.dayIdx) ? 1 : 0;
-          if (dayAAssigned !== dayBAssigned) return dayAAssigned - dayBAssigned;
-
-          // Adjacency to section's existing slots on that day
-          let minDistA = 99;
-          let minDistB = 99;
-          for (let sIdx = 0; sIdx < totalSlots; sIdx++) {
-            if ((sectionWholeOccupancy[secIdx] & (1n << BigInt(sIdx))) !== 0n) {
-              const sRef = problem.slots[sIdx];
-              if (sRef.dayIdx === refA.dayIdx) {
-                minDistA = Math.min(minDistA, Math.abs(sRef.periodIdx - refA.periodIdx));
-              }
-              if (sRef.dayIdx === refB.dayIdx) {
-                minDistB = Math.min(minDistB, Math.abs(sRef.periodIdx - refB.periodIdx));
-              }
-            }
-          }
-          const scoreA = minDistA === 1 ? 0 : minDistA === 99 ? 2 : minDistA + 1;
-          const scoreB = minDistB === 1 ? 0 : minDistB === 99 ? 2 : minDistB + 1;
-          return scoreA - scoreB;
-        });
-      } else if (activeProfile === 'FACULTY_FOCUSED') {
-        candidateSlots.sort((a, b) => {
-          const refA = problem.slots[a];
-          const refB = problem.slots[b];
-
-          // Adjacency to faculty's existing slots on that day
-          let minDistA = 99;
-          let minDistB = 99;
-          for (let sIdx = 0; sIdx < totalSlots; sIdx++) {
-            if ((facultyOccupancy[facIdx] & (1n << BigInt(sIdx))) !== 0n) {
-              const sRef = problem.slots[sIdx];
-              if (sRef.dayIdx === refA.dayIdx) {
-                minDistA = Math.min(minDistA, Math.abs(sRef.periodIdx - refA.periodIdx));
-              }
-              if (sRef.dayIdx === refB.dayIdx) {
-                minDistB = Math.min(minDistB, Math.abs(sRef.periodIdx - refB.periodIdx));
-              }
-            }
-          }
-          const scoreA = minDistA === 1 ? 0 : minDistA === 99 ? 2 : minDistA + 1;
-          const scoreB = minDistB === 1 ? 0 : minDistB === 99 ? 2 : minDistB + 1;
-          return scoreA - scoreB;
-        });
-      }
-
+      const rank = new Map<number, number>();
       for (const slotIdx of candidateSlots) {
-        const slotRef = problem.slots[slotIdx];
-        const dayIdx = slotRef.dayIdx;
-
-        // Rule: Max 1 lecture of the same course on the same day (unless required hours > numDays)
-        if (assignedDays.has(dayIdx) && currentAlloc.requiredHours <= problem.numDays) {
-          continue;
-        }
-
-        // Rule: If multiple lectures of the same course must happen on the same day, they cannot be consecutive!
-        if (assignedDays.has(dayIdx)) {
-          const prevAssignedPeriods = allocAssignedSlots[currentAlloc.allocIdx]
-            .map(item => problem.slots[item.slotIdx])
-            .filter(s => s.dayIdx === dayIdx)
-            .map(s => s.periodIdx);
-          if (prevAssignedPeriods.some(p => Math.abs(p - slotRef.periodIdx) === 1)) {
-            continue;
-          }
-        }
-
-        const slotBit = 1n << BigInt(slotIdx);
-        constraintChecksCount++;
-
-        // 1. Bitwise Hard Constraint Check: Faculty Busy?
-        if ((facultyOccupancy[facIdx] & slotBit) !== 0n) {
-          candidatesPruned++;
-          continue;
-        }
-
-        // 2. Bitwise Hard Constraint Check: Student Cohort / Subgroup Busy?
-        if (isSubgroupAlloc) {
-          const subSecIdx = currentAlloc.subSectionIdx!;
-          if ((sectionWholeOccupancy[secIdx] & slotBit) !== 0n || (subSectionOccupancy[subSecIdx] & slotBit) !== 0n) {
-            candidatesPruned++;
-            continue;
-          }
-        } else {
-          if ((sectionWholeOccupancy[secIdx] & slotBit) !== 0n || sectionSubgroupCounts[secIdx][slotIdx] > 0) {
-            candidatesPruned++;
-            continue;
-          }
-        }
-
-        // 3. Find Available Compatible Room
-        let chosenRoomIdx = -1;
-        for (const rIdx of currentAlloc.candidateRooms) {
-          constraintChecksCount++;
-          if ((roomOccupancy[rIdx] & slotBit) === 0n) {
-            chosenRoomIdx = rIdx;
-            break;
-          }
-        }
-
-        if (chosenRoomIdx === -1) {
-          candidatesPruned++;
-          continue;
-        }
-
-        // Apply Assignment
-        facultyOccupancy[facIdx] |= slotBit;
-        roomOccupancy[chosenRoomIdx] |= slotBit;
-        if (isSubgroupAlloc) {
-          subSectionOccupancy[currentAlloc.subSectionIdx!] |= slotBit;
-          sectionSubgroupCounts[secIdx][slotIdx]++;
-          sectionSubgroupOccupancy[secIdx] |= slotBit;
-        } else {
-          sectionWholeOccupancy[secIdx] |= slotBit;
-        }
-
-        allocHoursAssigned[currentAlloc.allocIdx]++;
-        allocAssignedSlots[currentAlloc.allocIdx].push({ slotIdx, roomIdx: chosenRoomIdx });
-
-        const nextOrderIdx = allocHoursAssigned[currentAlloc.allocIdx] >= currentAlloc.requiredHours ? allocOrderIdx + 1 : allocOrderIdx;
-        const allocationComplete = allocHoursAssigned[currentAlloc.allocIdx] >= currentAlloc.requiredHours;
-        const success = solvePhaseA(nextOrderIdx, allocationComplete ? undefined : currentAlloc.allocIdx);
-        if (success) return true;
-
-        // Backtrack
-        backtracksCount++;
-        facultyOccupancy[facIdx] &= ~slotBit;
-        roomOccupancy[chosenRoomIdx] &= ~slotBit;
-        if (isSubgroupAlloc) {
-          subSectionOccupancy[currentAlloc.subSectionIdx!] &= ~slotBit;
-          sectionSubgroupCounts[secIdx][slotIdx]--;
-          if (sectionSubgroupCounts[secIdx][slotIdx] === 0) sectionSubgroupOccupancy[secIdx] &= ~slotBit;
-        } else {
-          sectionWholeOccupancy[secIdx] &= ~slotBit;
-        }
-
-        allocHoursAssigned[currentAlloc.allocIdx]--;
-        allocAssignedSlots[currentAlloc.allocIdx].pop();
+        const ref = problem.slots[slotIdx];
+        let minDist = 99;
+        for (const period of busyPeriods[ref.dayIdx]) minDist = Math.min(minDist, Math.abs(period - ref.periodIdx));
+        const adjacency = minDist === 1 ? 0 : minDist === 99 ? 2 : minDist + 1;
+        rank.set(slotIdx, adjacency + (profile === 'STUDENT_FOCUSED' && assignedPeriods.has(ref.dayIdx) ? 1000 : 0));
       }
-
-      if (reordered && activeAllocIdx === undefined) {
-        [searchAllocOrder[allocOrderIdx], searchAllocOrder[selectedIndex]] = [searchAllocOrder[selectedIndex], searchAllocOrder[allocOrderIdx]];
-      }
-      return false;
+      candidateSlots.sort((a, b) => rank.get(a)! - rank.get(b)!);
     }
+
+    return candidateSlots
+      .filter(slotIdx => {
+        const ref = problem.slots[slotIdx];
+        const sameDay = assignedPeriods.get(ref.dayIdx);
+        if (!sameDay) return true;
+        // Rule: at most one lecture of a course per day unless it needs more hours than there are days,
+        // and never two in consecutive periods.
+        return alloc.requiredHours > problem.numDays && !sameDay.some(period => Math.abs(period - ref.periodIdx) === 1);
+      })
+      .map(slotIdx => [slotIdx]);
+  };
+
+  /** A room in which the class fits these periods, or -1 when the teacher, the students or every room is busy. */
+  const roomFor = (alloc: InternalAllocation, slotIdxs: readonly number[]): number => {
+    const mask = maskOf(slotIdxs);
+    constraintChecksCount += slotIdxs.length;
+    let busy = (facultyOccupancy[alloc.facultyIdx] & mask) !== 0n || (sectionWholeOccupancy[alloc.sectionIdx] & mask) !== 0n;
+    if (!busy) {
+      busy = alloc.subSectionIdx !== undefined
+        ? (subSectionOccupancy[alloc.subSectionIdx] & mask) !== 0n
+        : slotIdxs.some(s => sectionSubgroupCounts[alloc.sectionIdx][s] > 0);
+    }
+    if (!busy) {
+      for (const rIdx of alloc.candidateRooms) {
+        constraintChecksCount += slotIdxs.length;
+        if ((roomOccupancy[rIdx] & mask) === 0n) return rIdx;
+      }
+    }
+    candidatesPruned++;
+    return -1;
+  };
+
+  const place = (alloc: InternalAllocation, slotIdxs: readonly number[], roomIdx: number) => {
+    const mask = maskOf(slotIdxs);
+    facultyOccupancy[alloc.facultyIdx] |= mask;
+    roomOccupancy[roomIdx] |= mask;
+    if (alloc.subSectionIdx !== undefined) {
+      subSectionOccupancy[alloc.subSectionIdx] |= mask;
+      sectionSubgroupOccupancy[alloc.sectionIdx] |= mask;
+      for (const s of slotIdxs) sectionSubgroupCounts[alloc.sectionIdx][s]++;
+    } else {
+      sectionWholeOccupancy[alloc.sectionIdx] |= mask;
+    }
+    allocHoursAssigned[alloc.allocIdx] += slotIdxs.length;
+    for (const s of slotIdxs) allocAssignedSlots[alloc.allocIdx].push({ slotIdx: s, roomIdx });
+  };
+
+  const unplace = (alloc: InternalAllocation, slotIdxs: readonly number[], roomIdx: number) => {
+    const mask = maskOf(slotIdxs);
+    backtracksCount++;
+    facultyOccupancy[alloc.facultyIdx] &= ~mask;
+    roomOccupancy[roomIdx] &= ~mask;
+    if (alloc.subSectionIdx !== undefined) {
+      subSectionOccupancy[alloc.subSectionIdx] &= ~mask;
+      for (const s of slotIdxs) {
+        if (--sectionSubgroupCounts[alloc.sectionIdx][s] === 0) sectionSubgroupOccupancy[alloc.sectionIdx] &= ~slotBits[s];
+      }
+    } else {
+      sectionWholeOccupancy[alloc.sectionIdx] &= ~mask;
+    }
+    allocHoursAssigned[alloc.allocIdx] -= slotIdxs.length;
+    allocAssignedSlots[alloc.allocIdx].length -= slotIdxs.length;
+  };
+
+  // This recurses once per placed class, so it keeps few locals: the work is in the helpers above.
+  function solvePhaseA(allocOrderIdx: number, activeAllocIdx?: number): boolean {
+    if (performance.now() - startTime > timeBudgetMs) return false;
+    if (allocOrderIdx >= searchAllocOrder.length) return recordCandidate();
+
+    const selectedIndex = activeAllocIdx === undefined ? mostConstrained(allocOrderIdx) : allocOrderIdx;
+    if (selectedIndex !== allocOrderIdx) swapOrder(allocOrderIdx, selectedIndex);
+    const alloc = activeAllocIdx === undefined ? searchAllocOrder[allocOrderIdx] : problem.allocations[activeAllocIdx];
+
+    let success = false;
+    if (allocHoursAssigned[alloc.allocIdx] >= alloc.requiredHours) {
+      success = solvePhaseA(allocOrderIdx + 1);
+    } else {
+      const placements = placementsFor(alloc);
+      for (let i = 0; i < placements.length && !success; i++) {
+        const roomIdx = roomFor(alloc, placements[i]);
+        if (roomIdx === -1) continue;
+        place(alloc, placements[i], roomIdx);
+        success = allocHoursAssigned[alloc.allocIdx] >= alloc.requiredHours
+          ? solvePhaseA(allocOrderIdx + 1)
+          : solvePhaseA(allocOrderIdx, alloc.allocIdx);
+        if (!success) unplace(alloc, placements[i], roomIdx);
+      }
+    }
+
+    if (!success && selectedIndex !== allocOrderIdx) swapOrder(allocOrderIdx, selectedIndex);
+    return success;
   }
 
   // Execute Phase A Feasibility Search

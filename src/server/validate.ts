@@ -109,7 +109,7 @@ export const SPECS = {
     facultyId: str(100),
     sectionId: str(100),
     subSectionId: str(100),
-    sessionType: { t: 'enum', values: ['Lecture', 'Lab', 'Tutorial', 'Practical', 'Elective', 'Makeup', 'Seminar'] },
+    sessionType: { t: 'enum', values: ['Lecture', 'Lab', 'Tutorial', 'Practical', 'Makeup', 'Seminar'] },
     hoursPerWeek: num(1, 40),
     preferredRoomId: str(100),
     status: { t: 'enum', values: ['Allocated', 'Pending', 'Conflict'] },

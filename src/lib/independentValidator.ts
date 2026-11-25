@@ -11,6 +11,7 @@ import {
   AcademicConstraint
 } from '../types';
 import { facultyTeachingCap, facultyTeachingPeriods } from './facultyWorkload';
+import { classBlock, movedBlock, type ClassPlace } from './recoveryEngine';
 
 export type ViolationCode =
   | 'FACULTY_COLLISION'
@@ -24,11 +25,11 @@ export type ViolationCode =
   | 'ROOM_UNAVAILABLE'
   | 'BREAK_PERIOD_VIOLATION'
   | 'NON_WORKING_DAY'
+  | 'MISSING_RECORD'
   | 'DISCONTINUOUS_BLOCK'
   | 'MISSING_REQUIRED_SESSIONS'
   | 'LAB_DURATION_VIOLATION'
   | 'PINNED_SESSION_VIOLATION'
-  | 'ELECTIVE_GROUP_MISMATCH'
   | 'SAME_COURSE_SAME_DAY'
   | 'SAME_COURSE_CONSECUTIVE'
   | 'EXCESSIVE_STUDENT_GAPS'
@@ -110,10 +111,20 @@ export function validateTimetableIndependently(
   } = context;
 
   const violations: ViolationDetail[] = [];
+  const periodName = (id: string) => (academicYear.timeSlots || []).find(slot => slot.id === id)?.label ?? id;
   const workingDays = new Set(academicYear.workingDays || ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']);
   const lunchSlotIds = new Set(
     (academicYear.timeSlots || []).filter(ts => ts.isLunch || ts.id === academicYear.lunchPeriodId).map(ts => ts.id)
   );
+  const periodIds = new Set((academicYear.timeSlots || []).map(ts => ts.id));
+  const breakSlotIds = new Set((academicYear.timeSlots || []).filter(ts => ts.isBreak || lunchSlotIds.has(ts.id)).map(ts => ts.id));
+  // Lunch and breaks come from the configured periods, so a day with no lunch period has none.
+  const breakPeriods = (academicYear.timeSlots || [])
+    .filter(ts => ts.isBreak || lunchSlotIds.has(ts.id))
+    .map(ts => ts.periodNumber);
+  const breaksBetween = (from: number, to: number) => breakPeriods.filter(p => p > from && p < to).length;
+  const teachingPeriodsPerWeek =
+    workingDays.size * ((academicYear.timeSlots || []).length - breakPeriods.length) || 35;
 
   // Fast entity lookup maps
   const facultyMap = new Map<string, Faculty>();
@@ -160,8 +171,24 @@ export function validateTimetableIndependently(
       });
     }
 
+    // A class whose period, room, teacher, course or group no longer exists cannot be shown to anyone.
+    const missing = [!periodIds.has(session.timeSlotId) && 'period', !room && 'room', !faculty && 'teacher', !course && 'course', !section && 'group'].filter(Boolean);
+    if (missing.length > 0) {
+      violations.push({
+        id: `viol-missing-${session.id}`,
+        code: 'MISSING_RECORD',
+        severity: 'CRITICAL',
+        sessionIds: [session.id],
+        entityName: missing.join(', '),
+        day: session.day,
+        timeSlotId: session.timeSlotId,
+        message: `A class for ${course?.code || session.courseId} on ${session.day} uses a ${missing.join(' and ')} that no longer exists.`,
+        recommendation: `Edit or remove this class.`
+      });
+    }
+
     // Check B: Protected lunch / break period
-    if (lunchSlotIds.has(session.timeSlotId)) {
+    if (breakSlotIds.has(session.timeSlotId)) {
       violations.push({
         id: `viol-lunch-${session.id}`,
         code: 'BREAK_PERIOD_VIOLATION',
@@ -170,7 +197,7 @@ export function validateTimetableIndependently(
         entityName: 'Campus Lunch Break',
         day: session.day,
         timeSlotId: session.timeSlotId,
-        message: `Class for ${course?.code || session.courseId} conflicts with the protected campus lunch/break period (${session.timeSlotId}).`,
+        message: `Class for ${course?.code || session.courseId} conflicts with the protected campus lunch/break period (${periodName(session.timeSlotId)}).`,
         recommendation: `Reschedule to an active teaching period.`
       });
     }
@@ -290,7 +317,7 @@ export function validateTimetableIndependently(
             entityName: faculty.name,
             day: session.day,
             timeSlotId: session.timeSlotId,
-            message: `Instructor ${faculty.name} has a designated protected slot on ${session.day} at ${session.timeSlotId}.`,
+            message: `Instructor ${faculty.name} has a designated protected slot on ${session.day} at ${periodName(session.timeSlotId)}.`,
             recommendation: `Move session to an open period for ${faculty.name}.`
           });
         }
@@ -330,7 +357,7 @@ export function validateTimetableIndependently(
         entityName: faculty?.name || facId,
         day,
         timeSlotId,
-        message: `Faculty collision: ${faculty?.name || 'Instructor'} is double-booked across ${matchedSessions.length} courses (${courseCodes}) on ${day} at ${timeSlotId}.`,
+        message: `Faculty collision: ${faculty?.name || 'Instructor'} is double-booked across ${matchedSessions.length} courses (${courseCodes}) on ${day} at ${periodName(timeSlotId)}.`,
         recommendation: `Reschedule one of the conflicting sessions to a free slot.`
       });
     }
@@ -352,7 +379,7 @@ export function validateTimetableIndependently(
         entityName: room?.name || roomId,
         day,
         timeSlotId,
-        message: `Facility collision: Room ${room?.name || 'Room'} is double-booked with ${matchedSessions.length} concurrent classes (${coursesInRoom}) on ${day} at ${timeSlotId}.`,
+        message: `Facility collision: Room ${room?.name || 'Room'} is double-booked with ${matchedSessions.length} concurrent classes (${coursesInRoom}) on ${day} at ${periodName(timeSlotId)}.`,
         recommendation: `Assign distinct rooms or move to non-conflicting time slots.`
       });
     }
@@ -383,7 +410,7 @@ export function validateTimetableIndependently(
         entityName: section?.name || secId,
         day,
         timeSlotId,
-        message: `Cohort collision: Section ${section?.name} has ${wholeSectionSessions.length} overlapping whole-class sessions (${coursesList}) on ${day} at ${timeSlotId}.`,
+        message: `Cohort collision: Section ${section?.name} has ${wholeSectionSessions.length} overlapping whole-class sessions (${coursesList}) on ${day} at ${periodName(timeSlotId)}.`,
         recommendation: `Stagger lectures across different periods.`
       });
     }
@@ -406,7 +433,7 @@ export function validateTimetableIndependently(
         entityName: section?.name || secId,
         day,
         timeSlotId,
-        message: `Cross-cohort collision: Section ${section?.name} has a whole-class lecture (${lectureCourse}) while subgroups (${subNames}) are scheduled for separate sessions on ${day} at ${timeSlotId}.`,
+        message: `Cross-cohort collision: Section ${section?.name} has a whole-class lecture (${lectureCourse}) while subgroups (${subNames}) are scheduled for separate sessions on ${day} at ${periodName(timeSlotId)}.`,
         recommendation: `Lectures require full student attendance and cannot overlap with laboratory subgroups.`
       });
     }
@@ -431,7 +458,7 @@ export function validateTimetableIndependently(
           entityName: `${section?.name}/${subObj?.name || 'Subgroup'}`,
           day,
           timeSlotId,
-          message: `Subgroup collision: Subgroup ${section?.name}/${subObj?.name} has ${subSessions.length} overlapping classes (${subCourses}) on ${day} at ${timeSlotId}.`,
+          message: `Subgroup collision: Subgroup ${section?.name}/${subObj?.name} has ${subSessions.length} overlapping classes (${subCourses}) on ${day} at ${periodName(timeSlotId)}.`,
           recommendation: `Schedule subgroup sessions at distinct non-overlapping times.`
         });
       }
@@ -444,7 +471,8 @@ export function validateTimetableIndependently(
     totalRequiredHours += a.hoursPerWeek;
   });
 
-  const scheduledHours = activeSessions.length;
+  // A one-off cancellation does not remove the class from the weekly timetable, and a make-up does not add one.
+  const scheduledHours = sessions.filter(s => s.type !== 'Makeup').length;
   if (scheduledHours < totalRequiredHours) {
     const missingHours = totalRequiredHours - scheduledHours;
     violations.push({
@@ -561,7 +589,7 @@ export function validateTimetableIndependently(
           const sCurr = block[j];
           const pCurr = parseInt(sCurr.timeSlotId.replace('ts-', ''), 10) || 1;
 
-          if (lunchSlotIds.has(sCurr.timeSlotId) || pCurr === 5) {
+          if (lunchSlotIds.has(sCurr.timeSlotId)) {
             violations.push({
               id: `viol-lab-lunch-${labKey}-${i}-${j}`,
               code: 'LAB_DURATION_VIOLATION',
@@ -570,7 +598,7 @@ export function validateTimetableIndependently(
               entityName: cohortName,
               day,
               timeSlotId: sCurr.timeSlotId,
-              message: `Laboratory block for ${course?.code || courseId} (${cohortName}) overlaps with campus lunch break at ${sCurr.timeSlotId}.`,
+              message: `Laboratory block for ${course?.code || courseId} (${cohortName}) overlaps with campus lunch break at ${periodName(sCurr.timeSlotId)}.`,
               recommendation: `Schedule lab entirely before or after lunch break.`,
             });
           }
@@ -665,7 +693,7 @@ export function validateTimetableIndependently(
           entityName: `Pinned Session (${alloc.courseId})`,
           day: alloc.pinnedDay,
           timeSlotId: alloc.pinnedTimeSlotId,
-          message: `Pinned session for course ${alloc.courseId} was not scheduled at its fixed slot (${alloc.pinnedDay} ${alloc.pinnedTimeSlotId}).`,
+          message: `Pinned session for course ${courses.find(c => c.id === alloc.courseId)?.code ?? alloc.courseId} was not scheduled at its fixed slot (${alloc.pinnedDay} ${periodName(alloc.pinnedTimeSlotId)}).`,
           recommendation: `Ensure pinned session is fixed in place by solver.`
         });
       } else if (alloc.pinnedRoomId && matchingSession.roomId !== alloc.pinnedRoomId) {
@@ -681,49 +709,6 @@ export function validateTimetableIndependently(
           recommendation: `Assign exact pinned room.`
         });
       }
-    }
-  });
-
-  // Check Elective Group Synchronous Parallel Slots
-  const electiveGroupMap = new Map<string, CourseAllocation[]>();
-  allocations.forEach(alloc => {
-    if (alloc.electiveGroupId) {
-      if (!electiveGroupMap.has(alloc.electiveGroupId)) electiveGroupMap.set(alloc.electiveGroupId, []);
-      electiveGroupMap.get(alloc.electiveGroupId)!.push(alloc);
-    }
-  });
-
-  electiveGroupMap.forEach((groupAllocs, grpId) => {
-    if (groupAllocs.length > 1) {
-      // For each day and session, verify that allocations in the same elective group are scheduled in the same time slot
-      const allocSessionMap = new Map<string, ClassSession[]>();
-      groupAllocs.forEach(a => {
-        const sess = activeSessions.filter(s => s.allocationId === a.id || (s.courseId === a.courseId && s.sectionId === a.sectionId));
-        allocSessionMap.set(a.id, sess);
-      });
-
-      const firstAllocsSessions = allocSessionMap.get(groupAllocs[0].id) || [];
-      firstAllocsSessions.forEach((baseSess, idx) => {
-        for (let k = 1; k < groupAllocs.length; k++) {
-          const otherAllocsSessions = allocSessionMap.get(groupAllocs[k].id) || [];
-          const matchedSlot = otherAllocsSessions.some(
-            os => os.day === baseSess.day && os.timeSlotId === baseSess.timeSlotId
-          );
-          if (otherAllocsSessions.length > 0 && !matchedSlot) {
-            violations.push({
-              id: `viol-elective-${grpId}-${idx}-${k}`,
-              code: 'ELECTIVE_GROUP_MISMATCH',
-              severity: 'CRITICAL',
-              sessionIds: [baseSess.id],
-              entityName: `Elective Group ${grpId}`,
-              day: baseSess.day,
-              timeSlotId: baseSess.timeSlotId,
-              message: `Elective group ${grpId} sessions must be held in the same time slot across sections for concurrent student selection.`,
-              recommendation: `Align elective course slots concurrently.`
-            });
-          }
-        }
-      });
     }
   });
 
@@ -782,8 +767,7 @@ export function validateTimetableIndependently(
     if (periods.length > 1) {
       let gapCount = 0;
       for (let i = 0; i < periods.length - 1; i++) {
-        let diff = periods[i + 1] - periods[i] - 1;
-        if (periods[i] < 5 && periods[i + 1] > 5) diff -= 1; // exclude lunch
+        const diff = periods[i + 1] - periods[i] - 1 - breaksBetween(periods[i], periods[i + 1]);
         if (diff > 0) gapCount += diff;
       }
       totalStudentGaps += gapCount;
@@ -810,8 +794,7 @@ export function validateTimetableIndependently(
     if (periods.length > 1) {
       let gapCount = 0;
       for (let i = 0; i < periods.length - 1; i++) {
-        let diff = periods[i + 1] - periods[i] - 1;
-        if (periods[i] < 5 && periods[i + 1] > 5) diff -= 1; // exclude lunch
+        const diff = periods[i + 1] - periods[i] - 1 - breaksBetween(periods[i], periods[i + 1]);
         if (diff > 0) gapCount += diff;
       }
       totalFacultyGaps += gapCount;
@@ -880,8 +863,8 @@ export function validateTimetableIndependently(
     completionRate: Math.min(100, Math.round((scheduledHours / Math.max(1, totalRequiredHours)) * 100)),
     metrics: {
       facultyConflictFreeRate,
-      roomUtilizationRate: Math.min(100, Math.round((activeSessions.length / Math.max(1, rooms.length * 35)) * 100)),
-      labUtilizationRate: Math.min(100, Math.round((labSessionsCount / Math.max(1, labRoomsCount * 35)) * 100)),
+      roomUtilizationRate: Math.min(100, Math.round((activeSessions.length / Math.max(1, rooms.length * teachingPeriodsPerWeek)) * 100)),
+      labUtilizationRate: Math.min(100, Math.round((labSessionsCount / Math.max(1, labRoomsCount * teachingPeriodsPerWeek)) * 100)),
       capacityComplianceRate,
       subgroupParallelEfficiency: 96,
       sameCourseSameDayCount,
@@ -909,36 +892,35 @@ export function validateProposedSessionMove(
   targetTimeSlotId: string,
   targetRoomId: string,
   context: ValidationContext
-): { allowed: boolean; blockingReason?: string; hypotheticalReport: IndependentValidationReport } {
-  // Create simulated copy of sessions with the modification applied
-  const simulatedSessions = currentSessions.map(s => {
-    if (s.id !== sessionId) return s;
-    return {
-      ...s,
-      day: targetDay,
-      timeSlotId: targetTimeSlotId,
-      roomId: targetRoomId
-    };
-  });
-
-  const report = validateTimetableIndependently(simulatedSessions, context);
-
-  // Check if this specific session has any violations in the simulation
-  const sessionViolations = report.violations.filter(v => v.sessionIds.includes(sessionId));
-
-  if (sessionViolations.length > 0) {
+): ProposedChange {
+  const session = currentSessions.find(s => s.id === sessionId);
+  const places = session && movedBlock(session, currentSessions, context.academicYear, { day: targetDay, timeSlotId: targetTimeSlotId, roomId: targetRoomId });
+  if (!places) {
     return {
       allowed: false,
-      blockingReason: sessionViolations[0].message,
-      hypotheticalReport: report
+      blockingReason: session ? 'The class does not fit there: its periods must follow one another without a break.' : 'The class could not be found.',
+      hypotheticalReport: validateTimetableIndependently(currentSessions, context)
     };
   }
+  return checkPlaces(currentSessions, places, context);
+}
 
-  return {
-    allowed: report.isValid,
-    blockingReason: report.isValid ? undefined : report.violations[0]?.message,
-    hypotheticalReport: report
-  };
+export interface ProposedChange {
+  allowed: boolean;
+  blockingReason?: string;
+  hypotheticalReport: IndependentValidationReport;
+  /** The new place of every session that changes. */
+  places?: Map<string, ClassPlace>;
+}
+
+function checkPlaces(currentSessions: ClassSession[], places: Map<string, ClassPlace>, context: ValidationContext): ProposedChange {
+  const problem = (v: ViolationDetail) => `${v.code}|${v.message}`;
+  const before = new Set(validateTimetableIndependently(currentSessions, context).violations.map(problem));
+  const report = validateTimetableIndependently(currentSessions.map(s => ({ ...s, ...places.get(s.id) })), context);
+  // Problems that were there before do not stand in the way: otherwise a draft with several could never be repaired.
+  const added = report.violations.filter(v => v.severity === 'CRITICAL' && !before.has(problem(v)));
+  const reason = added.find(v => v.sessionIds.some(id => places.has(id))) ?? added[0];
+  return { allowed: !reason, blockingReason: reason?.message, hypotheticalReport: report, places };
 }
 
 /**
@@ -949,56 +931,22 @@ export function validateProposedSessionSwap(
   sessionAId: string,
   sessionBId: string,
   context: ValidationContext
-): { allowed: boolean; blockingReason?: string; hypotheticalReport: IndependentValidationReport } {
+): ProposedChange {
   const sessionA = currentSessions.find(s => s.id === sessionAId);
   const sessionB = currentSessions.find(s => s.id === sessionBId);
+  const refuse = (blockingReason: string): ProposedChange =>
+    ({ allowed: false, blockingReason, hypotheticalReport: validateTimetableIndependently(currentSessions, context) });
+  if (!sessionA || !sessionB) return refuse('One or both classes to swap could not be found.');
 
-  if (!sessionA || !sessionB) {
-    return {
-      allowed: false,
-      blockingReason: 'One or both sessions to swap could not be found.',
-      hypotheticalReport: validateTimetableIndependently(currentSessions, context)
-    };
-  }
-
-  // Swap day, timeSlotId, and roomId between A and B
-  const simulatedSessions = currentSessions.map(s => {
-    if (s.id === sessionAId) {
-      return {
-        ...s,
-        day: sessionB.day,
-        timeSlotId: sessionB.timeSlotId,
-        roomId: sessionB.roomId
-      };
-    }
-    if (s.id === sessionBId) {
-      return {
-        ...s,
-        day: sessionA.day,
-        timeSlotId: sessionA.timeSlotId,
-        roomId: sessionA.roomId
-      };
-    }
-    return s;
-  });
-
-  const report = validateTimetableIndependently(simulatedSessions, context);
-
-  const swapViolations = report.violations.filter(
-    v => v.sessionIds.includes(sessionAId) || v.sessionIds.includes(sessionBId)
-  );
-
-  if (swapViolations.length > 0) {
-    return {
-      allowed: false,
-      blockingReason: swapViolations[0].message,
-      hypotheticalReport: report
-    };
-  }
-
-  return {
-    allowed: report.isValid,
-    blockingReason: report.isValid ? undefined : report.violations[0]?.message,
-    hypotheticalReport: report
-  };
+  const periodOf = (s: ClassSession) => (context.academicYear.timeSlots || []).findIndex(slot => slot.id === s.timeSlotId);
+  const blockOf = (s: ClassSession) => classBlock(s, currentSessions).sort((a, b) => periodOf(a) - periodOf(b));
+  const blockA = blockOf(sessionA);
+  const blockB = blockOf(sessionB);
+  if (blockA.some(s => s.id === sessionBId)) return refuse('Both periods belong to the same class.');
+  if (blockA.length !== blockB.length) return refuse('Only classes of the same length can be swapped.');
+  const placeOf = ({ day, timeSlotId, roomId }: ClassSession): ClassPlace => ({ day, timeSlotId, roomId });
+  return checkPlaces(currentSessions, new Map([
+    ...blockA.map((s, k): [string, ClassPlace] => [s.id, placeOf(blockB[k])]),
+    ...blockB.map((s, k): [string, ClassPlace] => [s.id, placeOf(blockA[k])]),
+  ]), context);
 }

@@ -85,7 +85,7 @@ export const ROLES: Role[] = [
     id: 'role-hod',
     code: 'HOD',
     name: 'Head of Department',
-    description: 'Departmental syllabus progress tracking, faculty load balance, and elective assignments',
+    description: 'Departmental syllabus progress tracking, and faculty load balance',
   },
   {
     id: 'role-faculty',

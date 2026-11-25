@@ -10,7 +10,7 @@ export interface TimeSlot {
   isLunch?: boolean;
 }
 
-export type SessionType = 'Lecture' | 'Lab' | 'Tutorial' | 'Practical' | 'Elective' | 'Makeup' | 'Seminar';
+export type SessionType = 'Lecture' | 'Lab' | 'Tutorial' | 'Practical' | 'Makeup' | 'Seminar';
 
 export type SessionStatus = 'Planned' | 'Confirmed' | 'Published' | 'Cancelled' | 'Rescheduled' | 'Completed';
 
@@ -146,7 +146,6 @@ export interface CourseAllocation {
   hoursPerWeek: number;
   durationPeriods?: number; // 1 for Lecture/Tutorial, 2 or 3 for Lab blocks
   preferredRoomId?: string;
-  electiveGroupId?: string;
   isPinned?: boolean;
   pinnedDay?: DayOfWeek;
   pinnedTimeSlotId?: string;
@@ -199,7 +198,6 @@ export interface ClassSession {
   isLocked?: boolean;
   lockReason?: string;
   isPinned?: boolean;
-  electiveGroupId?: string;
   cancellationReason?: string;
   cancellationTimestamp?: string;
   statusBeforeCancellation?: SessionStatus;
@@ -265,6 +263,8 @@ export interface RecoveryOpportunity {
     preferenceScore: number;
     stabilityImpact: number;
   };
+  /** Consecutive periods booked, starting at timeSlotId. */
+  periods?: number;
   rationale: string;
   conflictCheckPassed: boolean;
   status: 'Proposed' | 'Accepted' | 'Rejected' | 'Approved';

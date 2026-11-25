@@ -1,6 +1,6 @@
 import { Worker } from 'node:worker_threads';
 import type { EngineResult } from '../lib/optimizationEngine';
-import { AcademicYearConfig, CourseAllocation, Faculty, Room, StudentSection, Course, AcademicConstraint } from '../types';
+import { AcademicYearConfig, CourseAllocation, Faculty, Room, StudentSection, Course, AcademicConstraint, ClassSession } from '../types';
 
 export interface TimetableJobRequest {
   jobId: string;
@@ -17,6 +17,7 @@ export interface TimetableJobRequest {
     timeBudgetMs?: number;
     seed?: number;
     maxCandidates?: number;
+    fixedSessions?: ClassSession[];
   };
 }
 
@@ -34,7 +35,26 @@ export interface TimetableJobState {
   worker?: Worker;
 }
 
+/** The search goes one call deeper per placed class, so large timetables need more than the default 4 MB of stack. */
+const startSolverWorker = (request: TimetableJobRequest) => new Worker(new URL('./solverWorker.ts', import.meta.url), {
+  workerData: request,
+  execArgv: process.execArgv.filter((arg) => !arg.startsWith('--input-type')),
+  resourceLimits: { stackSizeMb: 32 },
+});
+
 class TimetableJobManager {
+  /** Solve without blocking other requests. */
+  public solve(request: Omit<TimetableJobRequest, 'jobId'>, timeoutMs: number): Promise<EngineResult> {
+    return new Promise((resolve, reject) => {
+      const worker = startSolverWorker({ ...request, jobId: 'sync' });
+      const finish = (action: () => void) => { clearTimeout(timer); action(); void worker.terminate(); };
+      const timer = setTimeout(() => finish(() => reject(new Error('The solver did not finish in time.'))), timeoutMs);
+      worker.once('message', (message: { result?: EngineResult; error?: string }) =>
+        finish(() => message.result ? resolve(message.result) : reject(new Error(message.error || 'The solver returned no result.'))));
+      worker.once('error', (error) => finish(() => reject(error)));
+    });
+  }
+
   private jobs = new Map<string, TimetableJobState>();
 
   public createJob(
@@ -47,6 +67,9 @@ class TimetableJobManager {
     constraints: AcademicConstraint[],
     options: any = {}
   ): string {
+    // Finished jobs hold whole timetables, so only recent ones are kept.
+    const finished = [...this.jobs.values()].filter((job) => !['PENDING', 'RUNNING'].includes(job.status));
+    for (const job of finished.slice(0, Math.max(0, finished.length - 9))) this.jobs.delete(job.jobId);
     const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const jobState: TimetableJobState = {
       jobId,
@@ -63,10 +86,7 @@ class TimetableJobManager {
       job.status = 'RUNNING';
       job.startedAt = new Date().toISOString();
       job.progress = 10;
-      const worker = new Worker(new URL('./solverWorker.ts', import.meta.url), {
-        workerData: { jobId, academicYear, allocations, facultyMembers, rooms, sections, courses, constraints, options },
-        execArgv: process.execArgv.filter((arg) => !arg.startsWith('--input-type')),
-      });
+      const worker = startSolverWorker({ jobId, academicYear, allocations, facultyMembers, rooms, sections, courses, constraints, options });
       job.worker = worker;
       worker.on('message', (message: { result?: EngineResult; error?: string }) => {
         const active = this.jobs.get(jobId);

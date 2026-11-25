@@ -1240,7 +1240,7 @@ export class TimetableStore {
     const staff = STAFF_ROLES.includes(viewer.roleCode);
     const facultyId = staff ? String(b.facultyId ?? '') : this.facultyIdFor(viewer);
     if (!facultyId) throw new HttpError(403, 'Your account is not linked to a faculty record.');
-    const types = ['Lecture', 'Lab', 'Tutorial', 'Practical', 'Elective', 'Makeup', 'Seminar'];
+    const types = ['Lecture', 'Lab', 'Tutorial', 'Practical', 'Makeup', 'Seminar'];
     const candidate = {
       courseId: String(b.courseId ?? ''),
       facultyId,
