@@ -564,3 +564,40 @@
 - **LIVE CHECKS (READ-ONLY):** Existing presentation Vercel/Render health endpoints responded successfully and Supabase was active. Render logs showed absent `DATABASE_SSL_CA` and mail delivery configuration. The public demo shares its database and role powers; use synthetic records only.
 - **PRODUCTION RELEASE BLOCKERS:** The separate paid app/database have not been provisioned; real login and read/write persistence have not been exercised in that environment; database migration/RLS, backup restore, and target-scale load testing remain unverified. The legacy app is single-instance and stores its academic snapshot in one JSONB record.
 - The production-readiness changes were committed locally as `c4b269a` before integration with newer remote feature-branch commits. This audit did not deploy or modify production data; the final branch push and CI status are tracked by GitHub separately.
+
+## 30. Configurable Periods, Fixed-Time Import and Student Import (2026-11-26)
+
+- **REQUESTED SCOPE:** daily periods and lunch come from the academic year instead of a fixed 8-period day with lunch at period 5 (`independentValidator`, `solvers`, `SolverBenchmarkView`, `TimetableGridView`, health score and recovery calls). The master workbook accepts optional `TimeSlots` and `Timetable` sheets, and the server now saves `Students`. Imported classes load as a working draft; publishing still requires validation.
+- **NECESSARY SUPPORTING SCOPE:**
+  - The server validates periods, classes and students before changing anything and returns 400 with row messages (`ImportValidationError`). The import screen waits for the server and reloads the saved data; it previously reported success without checking the response.
+  - Student lookups use the full roster (`findStudentByEmail`); they previously searched only the first 100 students.
+  - `facultyTeachingPeriods` counts a multi-period block once. Generated labs were counted twice, so valid generated timetables were rejected for exceeding teaching limits.
+  - Demo reset restores the sample periods. The selected group, teacher and room fall back to existing records after an import.
+- **BEHAVIOUR CHANGE:** Clean Replace with a Students sheet deletes the existing roster, as its confirmation text already stated.
+- **SUPERSEDED BY SECTION 31:** the verification results, the failing solver suite and the elective limit that were listed here.
+
+## 31. Electives Removed and Deployment/Demo Readiness (2026-11-26)
+
+Nothing in sections 30 and 31 has been committed, pushed or deployed.
+
+- **REQUESTED SCOPE:** remove the concept of electives; check that the app is ready to deploy and to demo, through testing.
+- **ELECTIVES:** the `Elective` class type and elective groups are gone from types, validation, solver, import, screens and server. A workbook row with the type Elective is refused.
+- **ACCOUNTS AND ACCESS:**
+  - The accounts listed in the source (`PRE_AUTHORIZED_STAFF`) are not honoured in production. A first Google sign-in needs an active roster entry. A Supabase sign-in needs an account an administrator created, and keeps its locked or pending status.
+  - Deleting or changing an account also changes its Supabase account and profile. Every sign-in uses an opaque app session, so locking, role changes and deletion end it at once. Password-reset mail is sent after the answer, so it does not reveal which addresses have accounts.
+  - Students and teachers receive only the published timetable. Demo reset is limited to coordinators and administrators.
+- **SAVING:** changes are saved one at a time and rolled back when saving fails. Generation runs in worker threads outside that queue, one run at a time; someone leaving during a run affects no one else. The browser shows a change as saved only after the server confirms it.
+- **TIMETABLE RULES:**
+  - Cancellations, make-ups and change requests act on the published timetable, also while a newer draft exists. Undoing a cancellation is refused when the time has been booked since. Publishing a draft keeps cancellations and make-ups of classes it has not moved.
+  - Classes of several periods are cancelled, moved, swapped, locked, removed and made up as a whole.
+  - A move is refused only for conflicts it adds, so a draft with several conflicts can be repaired step by step. A class whose period, room, teacher, course or group is missing is a conflict. Generation refuses to drop a locked class.
+  - Draft -> Review -> Approved -> Published is kept on the server; any edit returns to Draft. Restoring a version loads a draft. Publishing records the version the draft came from, or a new one. Thirty versions are kept.
+  - Records used by classes, allocations or students cannot be deleted. Names that differ only in punctuation get separate records.
+- **IMPORT:** merging keeps existing subgroups, reserved periods and class representatives, and refuses periods that would strand published classes. Clean Replace also drops versions, requests and polls that refer to removed records.
+- **SOLVER:** search recursion rewritten with small stack frames; the solver suite passes to 1,100 allocations. Routine quality is the same 0-100 health score as everywhere else.
+- **SCREENS:** lab and practical blocks are merged correctly in the grids and hide nothing after them; dark mode, printing, the sidebar, dialogs, phone layouts and the sign-in page were repaired; placeholder people, rooms and "verified" texts were replaced by data or removed; a page reload keeps the workspace.
+- **PACKAGING:** `Dockerfile` runs `server.ts` through tsx with production dependencies. Not built here (no Docker).
+- **VERIFIED LOCALLY:** `npm run lint`; `npm run build`; `npm test` 84/84 unit/integration (`tests/readiness.test.ts` is new) and 55/55 E2E; adversarial 21/21; demo audit passed; `npm run test:solver` passed. With scripts outside the repository: 101/101 multi-role scenarios on the imported third-year timetable, and 67/67 production-mode checks with production-only dependencies against a Postgres-protocol database. Every page of the five demo roles was opened at desktop and phone width, and import, approval, publishing, generation, cancellation, make-up, poll and lab moves were done through the screens. Two independent reviews of the change reported 24 issues; all were fixed except the limits below.
+- **NOT VERIFIED:** hosted Supabase/Postgres, the Docker image, real mail delivery, real Google sign-in, and `npm run test:auth` (needs Supabase credentials). Supabase account handling was checked against a stub.
+- **NEEDS A PERSON BEFORE DEPLOYING:** set `DATABASE_SSL_CA` (TLS is verified now, so Supabase connections fail without it), `TRUST_PROXY` and a mail provider; rotate any password that was ever in the source; check sign-up and row-level security in the Supabase project.
+- **KNOWN LIMITS:** a cancellation is for a weekday, not a date; an administrator can publish without the approval step; "read" on a notification is shared by everyone who sees it; `xlsx` 0.18.5 has published advisories and workbooks are parsed in the uploader's browser.

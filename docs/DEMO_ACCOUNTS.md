@@ -29,4 +29,4 @@ Both flags must be true for public demo access in a production-mode deployment. 
 
 ## Reset
 
-An authenticated demo account may call `POST /api/demo/reset`. It restores the academic sample dataset and restores the five demo accounts' password/status fields. It is a presentation reset, not a production recovery or tenant-isolation mechanism.
+A Coordinator or Admin account may call `POST /api/demo/reset` (Presentation controls -> Reset Demo). It **replaces all academic data, including an imported timetable, with the built-in sample** and restores the five demo accounts' password/status fields. It is a presentation reset, not a production recovery or tenant-isolation mechanism. To demo an imported dataset, do not reset; import the workbook again with Clean Replace instead.

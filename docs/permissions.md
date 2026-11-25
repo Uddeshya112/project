@@ -20,7 +20,9 @@ Y = allowed, - = refused (403). "own" = restricted by the server to the user's o
 | Student roster, audit log, version details, solver benchmark | Y | Y | Y | - | - | - |
 | Academic data create/update/delete, bulk groups, subgroups, academic year, Excel import, toggle soft constraints | Y | Y | - | - | - | - |
 | Generate, select routine, move, swap, lock/unlock, restore version, set Draft/Review | Y | Y | - | - | - | - |
+| Submit a complete draft for approval (`/api/timetable/submit`) | Y | Y | - | - | - | - |
 | Final approval / publish (`/api/timetable/approve`, `/api/timetable/publish`) | Y | Y (publish) | - | - | - | - |
+| Replace all academic data with the sample (`/api/demo/reset`) | Y | Y | - | - | - | - |
 | Department sign-off (`/api/timetable/department-approval`) | - | - | own department | - | - | - |
 | Add a class (`POST /api/timetable/sessions`) | Y (draft) | Y (draft) | Y (draft) | own (live) | - | - |
 | Cancel a class, accept or decline a make-up option | Y | Y | Y | own | - | - |

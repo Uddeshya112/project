@@ -24,11 +24,12 @@ Set environment variables through Render's secret/config interface. Never commit
 | `APP_URL` | New Render service URL (or its production domain) |
 | `TRUST_PROXY` | `1` when Render is the single trusted reverse proxy |
 | `DATABASE_URL` | New Supabase project's transaction-pooler URI |
-| `DATABASE_SSL_CA` | Supabase CA certificate; required to verify the database TLS peer |
+| `DATABASE_SSL_CA` | **Required with Supabase**: the CA certificate from Database settings -> SSL. Certificates are always verified and Supabase's CA is not in the default trust store, so the service does not start without it. Optional only for a provider whose certificate a public authority signed |
 | `SUPABASE_URL` | New Supabase project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | New project's server-only secret key; never put in Vercel or browser variables |
 | `SUPABASE_PUBLISHABLE_KEY` | New project's publishable key if Supabase Auth client calls are used |
 | `ALLOWED_EMAIL_DOMAINS` | Institutional domains only, e.g. `thapar.edu` |
+| `SMTP_URL`, `RESEND_API_KEY`, or `MAILER_SERVICE_URL` | Configure one provider if password-reset links or other email actions are required; keep provider credentials in Render secrets. Set `SMTP_FROM` or `RESEND_FROM` to a verified sender as required by the provider. |
 | `PUBLIC_DEMO_ENABLED` | `false` |
 | `ALLOW_DEMO_IN_PRODUCTION` | `false` |
 | `SEED_DEMO_DATA` | `false` |
@@ -43,15 +44,15 @@ On the first start against the empty production database, the service creates no
 
 1. Confirm `/api/health/live` and `/api/health/ready` return HTTP 200. Readiness now performs `SELECT 1` against the application database.
 2. Sign in with the bootstrap admin and verify access to Admin and Coordinator workspaces.
-3. Import the institution's approved academic dataset and validate it before publishing. The empty production setup has no demo students, faculty, courses, rooms, or timetable.
-4. Configure a mail provider if the institution needs email delivery. Signup requests remain `PENDING`; admin approval does not prove email ownership, so verify institutional identity out of band.
+3. Import the institution's approved academic dataset and validate it before publishing. Import the Students and Faculty sheets before announcing Google sign-in: a first Google sign-in is accepted only for an address on the roster, and a Supabase sign-in only for an account created in Users & Roles. The empty production setup has no demo students, faculty, courses, rooms, or timetable.
+4. Configure a mail provider and a public `APP_URL` before launch. Password-reset requests fail clearly when production email delivery is unavailable; signup requests remain `PENDING`, and Admin approval does not prove email ownership, so verify institutional identity out of band.
 5. Confirm Supabase daily backups/PITR for the selected plan and perform an isolated restore drill before storing real student records.
 
 ## Release limits to resolve before broad institutional use
 
 - The legacy server keeps the whole academic dataset in one JSONB row and one in-memory working copy; it requires a single instance and is not a multi-tenant 10,000-user architecture.
 - The solver has local hard-constraint tests through 1,100 allocations, but no production load test for 10,000 concurrent students or the full target dataset.
-- The current live Render deployment logged that `DATABASE_SSL_CA` was absent. Set it on the new service and verify the warning is gone.
+- Database TLS certificate verification must remain enabled; see `DATABASE_SSL_CA` above.
 - The Supabase Auth leaked-password protection setting is disabled on the currently connected project. Review/enable it in the new project if Supabase Auth password sign-in is used.
 - Backups and restore have not been verified by an actual restore drill.
 - Email delivery is not configured on the current presentation service.

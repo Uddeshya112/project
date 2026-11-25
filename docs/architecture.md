@@ -51,7 +51,7 @@ Because of the in-memory copy, run exactly one instance. See [ADR 0001](decision
 - `src/context/TimetableContext.tsx`: loads `/api/academic/bootstrap` and calls the API for every change.
 - Views per workspace (Admin, Coordinator, Faculty, Student, CR). Which workspaces a user gets is decided by the server from the role.
 
-The Excel master workbook is parsed in the browser (`src/lib/excelMasterService.ts`, `xlsx`) and sent to `POST /api/academic/import` as JSON rows.
+The Excel master workbook is parsed in the browser (`src/lib/excelMasterService.ts`, `xlsx`) and sent to `POST /api/academic/import` as JSON rows. Optional `TimeSlots` and `Timetable` sheets replace the daily periods and load fixed-time classes as a draft; the server validates every row before changing anything. Academic writes are serialized and persisted one at a time; solving runs in worker threads and joins that queue only to save its result.
 
 ## Build and packaging
 
