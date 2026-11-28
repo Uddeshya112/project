@@ -1,0 +1,340 @@
+/* ==========================================================================
+   TIET IntelliSchedule — Motion & UI/UX Design System
+   Implements the 10 Principles of Animation + 10 Principles of UI/UX Design.
+   GPU-composited (transform & opacity only), zero external dependencies,
+   and fully compliant with prefers-reduced-motion.
+   ========================================================================== */
+
+:root {
+  /* Part 4: Motion Timing Tokens (Snappy Timing + Slow In, Slow Out) */
+  --dur-micro: 120ms;
+  --dur-component: 180ms;
+  --dur-reveal: 220ms;
+  --dur-cinematic: 560ms;
+  --stagger-step: 30ms;
+
+  /* Natural Easing Curves */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-expo: cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-in-out-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-spring-overshoot: cubic-bezier(0.34, 1.45, 0.64, 1);
+  --ease-anticipation: cubic-bezier(0.36, -0.22, 0.25, 1.12);
+
+  /* Solid Drawing in 3D — Layered Elevation Tokens */
+  --shadow-elev-1: 0 1px 2px rgba(38, 28, 28, 0.05), 0 4px 12px rgba(38, 28, 28, 0.04);
+  --shadow-elev-2: 0 4px 10px rgba(38, 28, 28, 0.07), 0 14px 32px rgba(38, 28, 28, 0.07);
+  --shadow-elev-3: 0 12px 28px rgba(38, 28, 28, 0.14), 0 28px 64px rgba(38, 28, 28, 0.12);
+  --focus-ring-crimson: 0 0 0 3px rgba(140, 27, 46, 0.24);
+}
+
+html.dark {
+  --shadow-elev-1: 0 1px 2px rgba(0, 0, 0, 0.35), 0 4px 12px rgba(0, 0, 0, 0.25);
+  --shadow-elev-2: 0 6px 16px rgba(0, 0, 0, 0.45), 0 16px 36px rgba(0, 0, 0, 0.35);
+  --shadow-elev-3: 0 14px 32px rgba(0, 0, 0, 0.6), 0 28px 64px rgba(0, 0, 0, 0.5);
+  --focus-ring-crimson: 0 0 0 3px rgba(248, 113, 113, 0.32);
+}
+
+/* Prevent accidental horizontal overflow across all viewports */
+html, body {
+  overflow-x: clip;
+}
+
+/* ==========================================================================
+   POSE TO POSE & MOVING IN ARCS — Keyframe Vocabulary
+   ========================================================================== */
+
+/* Page / view enter with subtle anticipation & smooth deceleration */
+@keyframes motion-page-enter {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0) scale(0.994);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+/* Staging the focus: staggered child entrance */
+@keyframes motion-stagger-in {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 14px, 0) scale(0.985);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+/* Follow through: dropdowns & popovers settle with natural overshoot */
+@keyframes motion-dropdown-in {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, -6px, 0) scale(0.96);
+  }
+  70% {
+    opacity: 1;
+    transform: translate3d(0, 1.5px, 0) scale(1.008);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+/* Curved arc modal entrance (Moving in Arcs + Pose to Pose) */
+@keyframes motion-modal-in {
+  0% {
+    opacity: 0;
+    transform: translate3d(-4px, 18px, 0) scale(0.955);
+  }
+  65% {
+    opacity: 1;
+    transform: translate3d(1px, -2px, 0) scale(1.006);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes motion-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Mobile drawer slide-in with follow-through */
+@keyframes motion-drawer-in {
+  0% {
+    opacity: 0.4;
+    transform: translate3d(-100%, 0, 0);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+/* Curved orbital arc float for Hero 3D course cards (Moving in Arcs) */
+@keyframes study-arc-float {
+  0%   { transform: translate3d(0, 0, 0) rotate(var(--card-rot, -4deg)); }
+  25%  { transform: translate3d(3px, -7px, 0) rotate(calc(var(--card-rot, -4deg) + 0.9deg)); }
+  50%  { transform: translate3d(0, -10px, 0) rotate(var(--card-rot, -4deg)); }
+  75%  { transform: translate3d(-3px, -5px, 0) rotate(calc(var(--card-rot, -4deg) - 0.8deg)); }
+  100% { transform: translate3d(0, 0, 0) rotate(var(--card-rot, -4deg)); }
+}
+
+/* Exaggerated Feedback: subtle pop for alerts, status pills & toasts */
+@keyframes motion-feedback-pop {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, -6px, 0) scale(0.97);
+  }
+  60% {
+    opacity: 1;
+    transform: translate3d(0, 1px, 0) scale(1.012);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+/* Live indicator pulse (Staging the Focus) */
+@keyframes motion-live-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(181, 54, 67, 0.35); }
+  50% { box-shadow: 0 0 0 7px rgba(181, 54, 67, 0); }
+}
+
+/* Doherty Threshold: smooth skeleton loader shimmer */
+@keyframes motion-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* ==========================================================================
+   UTILITY CLASSES & INTERACTION PRIMITIVES
+   ========================================================================== */
+
+.motion-page-enter {
+  animation: motion-page-enter var(--dur-reveal) var(--ease-out-expo) both;
+}
+
+.motion-dropdown-in {
+  transform-origin: top right;
+  animation: motion-dropdown-in var(--dur-component) var(--ease-spring-overshoot) both;
+}
+
+.motion-modal-in {
+  animation: motion-modal-in var(--dur-component) var(--ease-spring-overshoot) both;
+}
+
+.motion-backdrop-in {
+  animation: motion-backdrop-in var(--dur-micro) var(--ease-out-expo) both;
+}
+
+.motion-drawer-in {
+  animation: motion-drawer-in var(--dur-component) var(--ease-out-expo) both;
+}
+
+.motion-feedback-pop {
+  animation: motion-feedback-pop var(--dur-component) var(--ease-spring-overshoot) both;
+}
+
+/* Staggered Entrance (Staging the Focus + Miller's Law grouping) */
+.motion-stagger > * {
+  animation: motion-stagger-in var(--dur-reveal) var(--ease-out-expo) both;
+}
+.motion-stagger > *:nth-child(1) { animation-delay: calc(var(--stagger-step) * 0); }
+.motion-stagger > *:nth-child(2) { animation-delay: calc(var(--stagger-step) * 1); }
+.motion-stagger > *:nth-child(3) { animation-delay: calc(var(--stagger-step) * 2); }
+.motion-stagger > *:nth-child(4) { animation-delay: calc(var(--stagger-step) * 3); }
+.motion-stagger > *:nth-child(5) { animation-delay: calc(var(--stagger-step) * 4); }
+.motion-stagger > *:nth-child(6) { animation-delay: calc(var(--stagger-step) * 5); }
+.motion-stagger > *:nth-child(7) { animation-delay: calc(var(--stagger-step) * 6); }
+.motion-stagger > *:nth-child(8) { animation-delay: calc(var(--stagger-step) * 7); }
+
+/* Squash & Stretch + Anticipation on interactive buttons */
+.study-content button:not(:disabled),
+.study-login-card button:not(:disabled),
+.study-topbar button:not(:disabled) {
+  transition:
+    transform var(--dur-micro) var(--ease-spring-overshoot),
+    box-shadow var(--dur-micro) var(--ease-out-expo),
+    background-color var(--dur-micro) var(--ease-in-out-smooth),
+    border-color var(--dur-micro) var(--ease-in-out-smooth),
+    color var(--dur-micro) var(--ease-in-out-smooth);
+}
+
+.study-content button:not(:disabled):hover,
+.study-login-card button[type="submit"]:not(:disabled):hover {
+  transform: translate3d(0, -1px, 0);
+}
+
+.study-content button:not(:disabled):active,
+.study-login-card button:not(:disabled):active,
+.study-topbar button:not(:disabled):active {
+  transform: translate3d(0, 0.5px, 0) scale(0.97, 0.985);
+}
+
+/* Secondary Action: arrows & icons glide subtly on parent hover */
+.motion-arrow {
+  transition: transform var(--dur-micro) var(--ease-spring-overshoot);
+}
+.group:hover .motion-arrow,
+button:hover > .motion-arrow {
+  transform: translate3d(4px, 0, 0);
+}
+
+.study-sidebar button svg {
+  transition: transform var(--dur-micro) var(--ease-spring-overshoot), opacity var(--dur-micro) ease;
+}
+.study-sidebar button:hover svg {
+  transform: translate3d(2px, 0, 0) scale(1.08);
+}
+
+/* Solid Drawing in 3D: Elevated cards with crisp depth on hover */
+.motion-card {
+  box-shadow: var(--shadow-elev-1);
+  transition:
+    transform var(--dur-component) var(--ease-out-expo),
+    box-shadow var(--dur-component) var(--ease-out-expo),
+    border-color var(--dur-micro) var(--ease-in-out-smooth);
+}
+.motion-card:hover {
+  transform: translate3d(0, -2.5px, 0);
+  box-shadow: var(--shadow-elev-2);
+}
+.motion-card:active {
+  transform: translate3d(0, 0, 0) scale(0.992);
+}
+
+/* Hero 3D Course Cards — Moving in Arcs + Solid Drawing in 3D */
+.study-live-dot {
+  animation: motion-live-pulse 2.6s var(--ease-in-out-smooth) infinite;
+}
+.study-course-one { --card-rot: -5deg; }
+.study-course-two { --card-rot: 5deg; }
+.study-course-three { --card-rot: -2deg; }
+.study-course-card {
+  animation: study-arc-float 7.5s var(--ease-in-out-smooth) infinite;
+  transition:
+    transform var(--dur-component) var(--ease-spring-overshoot),
+    box-shadow var(--dur-component) var(--ease-out-expo);
+  will-change: transform;
+}
+.study-course-card:hover {
+  animation-play-state: paused;
+  z-index: 10;
+  transform: translate3d(0, -10px, 24px) rotate(0deg) scale(1.035);
+  box-shadow: var(--shadow-elev-3);
+}
+
+/* Exaggerated Feedback + Postel's Law: clear focus states on inputs & interactive controls */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring-crimson);
+}
+
+/* Bigger Hit Areas (Fitts's Law & Touch Targets) */
+.study-sidebar button {
+  min-height: 40px;
+}
+@media (max-width: 768px) {
+  .study-sidebar button,
+  .study-topbar button,
+  .study-login-card button[type="submit"] {
+    min-height: 44px;
+  }
+}
+
+/* Doherty Threshold: Skeleton Loader Surface */
+.motion-skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(229, 226, 217, 0.55) 25%,
+    rgba(250, 249, 245, 0.9) 50%,
+    rgba(229, 226, 217, 0.55) 75%
+  );
+  background-size: 200% 100%;
+  animation: motion-shimmer 1.35s linear infinite;
+}
+html.dark .motion-skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(39, 39, 42, 0.65) 25%,
+    rgba(63, 63, 70, 0.85) 50%,
+    rgba(39, 39, 42, 0.65) 75%
+  );
+  background-size: 200% 100%;
+}
+
+/* Strict Accessibility: Respect prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  .motion-page-enter,
+  .motion-dropdown-in,
+  .motion-modal-in,
+  .motion-backdrop-in,
+  .motion-drawer-in,
+  .motion-feedback-pop,
+  .motion-stagger > *,
+  .study-course-card,
+  .study-live-dot,
+  .motion-skeleton {
+    animation: none !important;
+    transition: none !important;
+    transform: none !important;
+  }
+  .motion-card:hover,
+  .study-content button:hover,
+  .study-content button:active,
+  .study-sidebar button:hover svg,
+  .group:hover .motion-arrow {
+    transform: none !important;
+  }
+}
